@@ -1,3 +1,4 @@
+import json
 import serial, struct
 from time import sleep, time
 
@@ -36,12 +37,15 @@ class Serial_connector(Connector):
             if self.debug:
                 print("Serial Connector configure: serial_port: {}, baud: {}, timeout: {}".format(self.serial_port, self.baud, self.timeout))
     
-    def send_command(self, command):
+    def send_command(self, command, focus_time=None):
+        if focus_time is None:
+            focus_time = self.timeout
         # Send command and wait for response
         try:
             self.serial.write(command)
             # Wait for ack response
-            response = self.serial_receive(self.timeout)
+            print("Command sent: ", command, "timeout: ", self.timeout)
+            response = self.serial_receive(focus_time)
             if response is None:  # Check if no response was received
                 if self.debug:
                     print("No response received (timeout).")
@@ -99,9 +103,10 @@ class Serial_connector(Connector):
                 print("Reset recently triggered, waiting...")
 
     def send_and_wait_response(self, packet: Packet):
-        content = packet.get_content()
-        command = b"S&W:" + content + b"<<END>>\n"  # Append the custom end phrase to the command
-        packet_size_sent = len(content)
+        binary_payload = packet.get_content()
+        encoded_payload = binary_payload.hex().encode()  # Hex seguro para transporte
+        command = b"S&W:" + encoded_payload + b"<<END>>\n"  # Append the custom end phrase to the command
+        packet_size_sent = len(binary_payload)
 
         try:
             response = self.send_command(command)
@@ -165,7 +170,8 @@ class Serial_connector(Connector):
             }, packet_size_sent, 0, 0
 
     def send(self, packet: Packet):
-        command = b"Send:" + packet.get_content() + b"<<END>>\n"  # Append the custom end phrase to the command
+        packet_content = packet.get_content()
+        command = b"Send:" + packet_content.hex().encode() + b"<<END>>\n"  # Append the custom end phrase to the command
         ack_response = self.send_command(command)  # Use send_command to transmit
         if ack_response and b"OK" in ack_response:  # Check if the response contains "OK"
             return True
@@ -174,12 +180,14 @@ class Serial_connector(Connector):
                 print("Send command not acknowledged or error occurred.")
             return False
 
-    def recv(self, focus_time=12):
+    def recv(self, focus_time=12): 
         command = b"Listen:" + str(focus_time).encode() + b"<<END>>\n"
-        ack_response = self.send_command(command)
+        ack_response = self.send_command(command, focus_time=focus_time + 0.5)
         if ack_response and b"OK" in ack_response:
             # Wait for the actual response
-            received_data = self.serial_receive(focus_time)
+            if self.debug:
+                print("Listen command acknowledged, waiting for data for {} seconds...".format(focus_time + 0.5))
+            received_data = self.serial_receive(focus_time + 0.5)
             if received_data:
                 if self.debug:
                     print("Received data: ", received_data)
@@ -237,6 +245,34 @@ class Serial_connector(Connector):
             if self.debug:
                 print(f"Error getting RF config: {response.decode('utf-8', errors='ignore')}")
         return []
+    
+    def request_mac(self, retries=5, delay=1):
+        command = b"GET_MAC:<<END>>\n"
+        
+        for attempt in range(retries):
+            response = self.send_command(command)
+            if response:
+                try:
+                    decoded_mac = response.decode().strip()
+                    # Validamos formato simple: 8 caracteres hex
+                    if len(decoded_mac) == 8 and all(c in "0123456789abcdef" for c in decoded_mac.lower()):
+                        self.MAC = decoded_mac
+                        if self.debug:
+                            print("MAC set to:", self.MAC)
+                        return self.MAC
+                    else:
+                        if self.debug:
+                            print("Received MAC not valid:", decoded_mac)
+                except Exception as e:
+                    if self.debug:
+                        print("Failed to decode MAC:", e)
+            if self.debug:
+                print(f"MAC attempt {attempt+1}/{retries} failed. Retrying in {delay} sec...")
+            sleep(delay)
+
+        if self.debug:
+            print("Failed to get MAC after retries.")
+        return "00000000"
             
 
     def parse_error_message(self, error_data):

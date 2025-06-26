@@ -1,3 +1,4 @@
+import json
 import utime
 from machine import UART
 import struct
@@ -33,18 +34,21 @@ class Serial_Interface(Interface):
                 print("Serial Interface configure: uartid: {}, baud: {}, tx: {}, rx: {}, bits: {}, parity: {}, stop: {}".format(self.uartid, 
                                                                                                                                 self.baud, self.tx, self.rx, self.bits, self.parity, self.stop))
         utime.sleep(1)
-
+    
     def listen_command(self, end_phrase=b"<<END>>\n"):
         buffer = bytearray()
         while True:
             if self.uart.any():
-                buffer += self.uart.read(self.uart.any())
+                new_bytes = self.uart.read(self.uart.any())
+                for b in new_bytes:
+                    # Filter out non-printable characters
+                    if 32 <= b <= 126 or b in [10, 13]:  # Include newline and carriage return
+                        buffer.append(b)
                 if buffer.endswith(end_phrase):
                     return buffer[:-len(end_phrase)]
             else:
                 utime.sleep(0.01)
         return None
-
 
     def client_API(self):
         """
@@ -52,7 +56,8 @@ class Serial_Interface(Interface):
         Delegates commands to their respective handler methods.
         """
         command = self.listen_command()
-        
+        if self.debug:
+            print("Received command: ", command)
         if command.startswith(b"S&W:"):
             return self.handle_send_and_wait(command)
         elif command.startswith(b"Send:"):
@@ -63,13 +68,16 @@ class Serial_Interface(Interface):
             return self.handle_change_rf_config(command)
         elif command.startswith(b"GET_RFC:"):
             return self.handle_get_rf_config(command)
+        elif command.startswith(b"GET_MAC:"):
+            return self.handle_get_mac(command)
         else:
             return self.handle_invalid_command(command)
 
     def handle_send_and_wait(self, command):
-        packet_from_rpi = Packet(self.connector.mesh_mode, self.connector.short_mac)
+        packet_from_node = Packet(self.connector.mesh_mode, self.connector.short_mac)
         data = command.split(b"S&W:")[-1]
-        check = packet_from_rpi.load(data)
+        raw_bytes = bytes.fromhex(data.decode())
+        check = packet_from_node.load(raw_bytes)
 
         if check:
             ack = b"ACK:" + str(self.connector.adaptive_timeout).encode() + b"<<END>>\n"
@@ -80,8 +88,9 @@ class Serial_Interface(Interface):
         self.uart.write(ack)
 
         try:
-            packet_from_rpi.replace_source(self.connector.get_mac())
-            response_packet, packet_size_sent, packet_size_received, time_pr = self.connector.send_and_wait_response(packet_from_rpi)
+            if self.debug:
+                print("Packet loaded from Serial Source: ", packet_from_node.get_content())
+            response_packet, packet_size_sent, packet_size_received, time_pr = self.connector.send_and_wait_response(packet_from_node)
 
             if isinstance(response_packet, dict):  # Handle errors
                 error_message = (
@@ -115,48 +124,90 @@ class Serial_Interface(Interface):
             self.uart.write(error_message)
             return False
     
+    # def handle_source_mode(self, command):
+    #     packet_from_source = Packet(self.connector.mesh_mode, self.connector.short_mac)
+    #     # Send ACK to say that I will send it
+    #     ack = b"OK"
+    #     self.uart.write(ack)
+    #     try:
+    #         packet_from_source.load(command[5:])
+    #         packet_from_source.replace_source(self.connector.get_mac())
+    #         success = self.connector.send(packet_from_source)
+    #         if success:
+    #             return True
+    #     except Exception as e:
+    #         if self.debug:
+    #             print("Error loading packet: ", e)
+    #         return False
+
     def handle_source_mode(self, command):
-        packet_from_source = Packet(self.connector.mesh_mode, self.connector.short_mac)
-        # Send ACK to say that I will send it
-        ack = b"OK"
-        self.uart.write(ack)
         try:
-            packet_from_source.load(command[5:])
-            packet_from_source.replace_source(self.connector.get_mac())
-            success = self.connector.send(packet_from_source)
-            if success:
+            print("Handling source mode command:", command)
+            command_content = command[5:].split(b"<<END>>")[0]
+            raw_bytes = bytes.fromhex(command_content.decode())
+
+            packet = Packet(mesh_mode=self.connector.mesh_mode, short_mac=self.connector.short_mac)
+            if packet.load(raw_bytes):
+                result = self.connector.send(packet)
+
+            if result:
+                self.uart.write(b"OK\n")
                 return True
+            else:
+                self.uart.write(b"ERROR:SEND_FAIL<<END>>\n")
+                return False
         except Exception as e:
             if self.debug:
-                print("Error loading packet: ", e)
+                print("Error in handle_sender_mode:", e)
+            self.uart.write(b"ERROR:BAD_SEND_COMMAND<<END>>\n")
             return False
 
     def handle_requester_mode(self, command):
-        focus_time = int(command[7:])
-        ack = b"OK"
-        self.uart.write(ack)
-        if self.debug:
-            print("Listening for: ", focus_time)
         packet = Packet(mesh_mode=self.connector.mesh_mode, short_mac=self.connector.short_mac)
-        data = self.connector.recv(focus_time)
-        if data:
+        try:
+            focus_time_str = command[7:].split(b"<<END>>")[0]
+            focus_time = float(focus_time_str)
+        except Exception as e:
             if self.debug:
-                print("Received data: ", data)
+                print("Error parsing focus_time: ", command, "->", e)
+            return False
+
+        try:
+            self.uart.write(b"OK<<END>>\n")
+            # if self.debug:
+            #     print("ACK sent over UART: OK")
+        except Exception as e:
+            print("UART write failed:", e)
+
+        # if self.debug:
+        #     print("Listening for: ", focus_time)
+
+
+        data = self.connector.recv(focus_time)
+        print(data)
+        if data:
             try:
-                packet.load(data)
-                response = packet.get_content()
-                response += b"<<END>>\n"
-                if self.debug:
-                    print("Sending serial: ", len(response), " -> {}".format(response))
-                self.uart.write(response)
+                if packet.load(data):
+                    response = packet.get_content() + b"<<END>>\n"
+                    if self.debug:
+                        print("Sending serial: ", len(response), " -> {}".format(response))
+                    self.uart.write(response)
+                    return True
+                
+                else:
+                    error_message = b"ERROR:CORRUPTED_PACKET<<END>>\n"
+                    self.uart.write(error_message)
+                    return False
             except Exception as e:
                 if self.debug:
-                    print("Error loading: ", data, " -> ", e)
-                self.uart.write(b'Error')
+                    print("Exception loading packet: ", e)
+                self.uart.write(b"ERROR:PACKET_LOAD_FAIL<<END>>\n")
+                return False
         else:
             if self.debug:
-                print("No data received")
-            self.uart.write(b'No data' + b"<<END>>\n")
+                print("No data received at all")
+            self.uart.write(b"No data<<END>>\n")
+            return False
 
     def handle_change_rf_config(self, command):
         """
@@ -238,6 +289,10 @@ class Serial_Interface(Interface):
             if self.debug:
                 print("Error getting RF config: ", e)
             self.uart.write(error_message)
+
+    def handle_get_mac(self, command):
+        mac = self.connector.get_mac().encode()
+        self.uart.write(mac + b"<<END>>\n")
                 
     def handle_invalid_command(self, command):
         """
