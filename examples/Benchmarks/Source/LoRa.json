@@ -1,0 +1,15 @@
+{
+    "name": "BenchSrc",
+    "chunk_size": 243,
+    "mesh_mode": false,
+    "short_mac": true,
+    "debug": false,
+    "connector": {
+        "sf": 7,
+        "freq": 868,
+        "bandwidth": 125,
+        "coding_rate": 1,
+        "tx_power": 14,
+        "debug": false
+    }
+}
