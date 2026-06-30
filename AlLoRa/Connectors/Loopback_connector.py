@@ -1,4 +1,5 @@
 import queue
+import random
 
 from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.utils.debug_utils import print
@@ -14,25 +15,38 @@ class Loopback_connector(Connector):
     transfer in a test — the proof that the seam is clean.
 
     Build a connected pair with `Loopback_connector.create_pair(mac_a, mac_b)`:
-    whatever one end `send`s, the other end `recv`s. The link is lossless and
-    in-order; loss/reorder injection (for the retransmission and role-swap gates)
-    is a later, deliberate extension.
+    whatever one end `send`s, the other end `recv`s. The link is in-order; pass a
+    per-direction `loss` probability + a `seed` to drop frames deterministically and
+    exercise the retransmission / coordinated-transition gates (lost-packet injection).
+
+    CPython-only (uses `queue` / `random` / threads) — it never freezes to firmware.
     """
 
-    def __init__(self, mac, inbox=None, outbox=None):
+    def __init__(self, mac, inbox=None, outbox=None, loss=0.0, rng=None):
         super().__init__()
         self.MAC = mac
         # inbox: bytes this connector receives; outbox: bytes it transmits to the peer.
         self.inbox = inbox if inbox is not None else queue.Queue()
         self.outbox = outbox if outbox is not None else queue.Queue()
+        self.loss = loss          # probability a transmitted frame is lost in the channel
+        self._rng = rng           # a random.Random driving the loss decisions, or None
+        self.dropped = 0          # frames this end transmitted but the channel dropped
 
     @staticmethod
-    def create_pair(mac_a, mac_b):
-        """Return two connectors wired back-to-back: a's outbox is b's inbox."""
+    def create_pair(mac_a, mac_b, loss_a_to_b=0.0, loss_b_to_a=0.0, seed=None):
+        """Return two connectors wired back-to-back: a's outbox is b's inbox.
+
+        `loss_a_to_b` / `loss_b_to_a` drop that fraction of frames in that direction.
+        Each direction gets its own `random.Random(seed)` so its drop sequence is
+        deterministic as long as one thread drives that end's `send` (the usual case:
+        one node per connector).
+        """
         a_to_b = queue.Queue()
         b_to_a = queue.Queue()
-        a = Loopback_connector(mac_a, inbox=b_to_a, outbox=a_to_b)
-        b = Loopback_connector(mac_b, inbox=a_to_b, outbox=b_to_a)
+        rng_a = random.Random(seed) if (seed is not None and loss_a_to_b) else None
+        rng_b = random.Random(seed) if (seed is not None and loss_b_to_a) else None
+        a = Loopback_connector(mac_a, inbox=b_to_a, outbox=a_to_b, loss=loss_a_to_b, rng=rng_a)
+        b = Loopback_connector(mac_b, inbox=a_to_b, outbox=b_to_a, loss=loss_b_to_a, rng=rng_b)
         return a, b
 
     def get_mac(self):
@@ -40,6 +54,12 @@ class Loopback_connector(Connector):
 
     def send(self, packet):
         # The wire carries the framed bytes, exactly as a radio would put on air.
+        if self.loss and self._rng is not None and self._rng.random() < self.loss:
+            # Lost in the channel: the transmitter still "sent" fine (returns True),
+            # the receiver simply never sees it — its recv will time out and the
+            # protocol retransmits.
+            self.dropped += 1
+            return True
         self.outbox.put(packet.get_content())
         return True
 
