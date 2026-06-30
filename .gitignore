@@ -1,9 +1,7 @@
 /trials
 .DS_Store
 *.pyc
-<<<<<<< Updated upstream
-.vscode
-=======
-.vscode/settings.json
->>>>>>> Stashed changes
+__pycache__/
+.pytest_cache/
+.vscode/
 manifest.py
