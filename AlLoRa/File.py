@@ -14,14 +14,20 @@ gc.enable()
 
 class OnDemandFileWriter:
     def __init__(self, filename):
-        try: 
-            self.file = open(filename, 'wb')
+        try:
+            # 'wb+' (not 'wb') so chunks can be placed at arbitrary offsets via seek().
+            self.file = open(filename, 'wb+')
         except Exception as e:
             print("Error opening file: ", filename, ": ", e)
 
+    def seek(self, position):
+        self.file.seek(position)
 
     def write(self, data):
         self.file.write(data)
+
+    def flush(self):
+        self.file.flush()
 
     def close(self):
         self.file.close()
@@ -49,6 +55,10 @@ class AlLoRa_File:
             self.assembly_needed = True
             self.length = length
             self.chunk_counter = length
+            # The receiver needs the sender's chunk_size to place each chunk at its
+            # absolute offset (positioned writes). In a matched deployment this is the
+            # node's own configured chunk_size, threaded in by the Collector.
+            self.chunk_size = chunk_size
             self.path = path
             # Check if Temp folder exists
             try:
@@ -69,6 +79,12 @@ class AlLoRa_File:
 
     def get_content(self):
         if self.assembly_needed:
+            # Flush positioned writes still buffered in the open writer before the
+            # separate read handle reads them back (no-op once finalize() closed it).
+            try:
+                self.file_writer.flush()
+            except Exception:
+                pass
             with open(self.temp_file_path, "rb") as f:
                 self.content = f.read()
             return self.content
@@ -79,11 +95,16 @@ class AlLoRa_File:
         return self.missing_chunks
 
     def add_chunk(self, order: int, chunk: bytes):
+        # Positioned + idempotent: place the chunk at its absolute offset, so
+        # out-of-order arrival reassembles correctly and a duplicate just
+        # overwrites the same bytes (no append, no double-count). v2 appended in
+        # arrival order and ignored `order` -- the silent-corruption bug.
         try:
+            self.file_writer.seek(order * self.chunk_size)
             self.file_writer.write(chunk)
-            self.received_chunks += 1
             if order in self.missing_chunks:
                 self.missing_chunks.remove(order)
+                self.received_chunks += 1
         except Exception as e:
             print("Error adding chunk: ", e)
 

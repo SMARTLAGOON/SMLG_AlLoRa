@@ -139,9 +139,9 @@ class Digital_Endpoint:
             if mesh_mode:
                 self.count_retransmission()
         
-    def set_metadata(self, metadata, hop, mesh_mode, path=None):
+    def set_metadata(self, metadata, hop, mesh_mode, path=None, chunk_size=None):
         if metadata:
-            new_file = AlLoRa_File(name=metadata[1], length=metadata[0], path=path)
+            new_file = AlLoRa_File(name=metadata[1], length=metadata[0], chunk_size=chunk_size, path=path)
             self.set_current_file(new_file)
             self.file_reception_info["current_receiving_file_name"] = new_file.name
             self.file_reception_info["total_chunks"] = new_file.length

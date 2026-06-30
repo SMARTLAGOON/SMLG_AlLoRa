@@ -207,7 +207,7 @@ class Requester(Node):
                         print("ASKING METADATA to {}".format(mac))
                     metadata, hop = self.ask_metadata(packet_request)
                     t0 = time()
-                    digital_endpoint.set_metadata(metadata, hop, self.mesh_mode, save_to)
+                    digital_endpoint.set_metadata(metadata, hop, self.mesh_mode, save_to, self.chunk_size)
                     if self.debug:
                         print("METADATA from {}: {}".format(mac, metadata))
 
