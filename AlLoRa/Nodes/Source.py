@@ -1,6 +1,6 @@
 import gc
 from AlLoRa.Nodes.Node import Node, Packet, urandom
-from AlLoRa.File import CTP_File
+from AlLoRa.File import AlLoRa_File
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, sleep_ms
 from AlLoRa.utils.debug_utils import print
 from AlLoRa.utils.os_utils import os
@@ -25,10 +25,10 @@ class Source(Node):
     def got_file(self):     # Check if I have a file to send
         return self.file is not None
 
-    def set_file(self, file : CTP_File):
+    def set_file(self, file : AlLoRa_File):
         self.file = file
 
-    def restore_file(self, file: CTP_File):
+    def restore_file(self, file: AlLoRa_File):
         self.set_file(file)
         self.file.first_sent = time()
         self.file.metadata_sent = True

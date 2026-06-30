@@ -1,7 +1,7 @@
 import time, gc
 
 from AlLoRa.Nodes.Source import Source
-from AlLoRa.File import CTP_File
+from AlLoRa.File import AlLoRa_File
 from AlLoRa.Connectors.SX127x_connector import SX127x_connector
 
 def clean_timing_file():
@@ -41,7 +41,7 @@ try:
             size = sizes[n]
             print("Setting file")
 
-            file = CTP_File(name = '{}.json'.format(size),
+            file = AlLoRa_File(name = '{}.json'.format(size),
                             content = bytearray('{}'.format(n%10)*(1024 * size), 'utf-8'),
                             chunk_size=chunk_size)
             lora_node.set_file(file)

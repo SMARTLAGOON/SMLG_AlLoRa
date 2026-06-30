@@ -10,7 +10,7 @@ from subslogger import Logger
 
 from AlLoRa.Nodes.Source import Source
 from AlLoRa.Connectors.SX127x_connector import SX127x_connector
-from AlLoRa.File import CTP_File
+from AlLoRa.File import AlLoRa_File
 
 gc.enable()
 
@@ -34,7 +34,7 @@ def get_oldest_SD_file(sd, chunk_size):
         file = sd.get_file(oldest_file_name)
         filename = file.filename.split("/")[-1]
         print("Getting file: ", filename, " from SD", file)
-        ctp_file = CTP_File(name=filename, content=file, chunk_size=chunk_size)
+        ctp_file = AlLoRa_File(name=filename, content=file, chunk_size=chunk_size)
         return ctp_file
     except Exception as e:
         print("Error getting file: ", e)

@@ -14,7 +14,7 @@ from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Source import Source
 from AlLoRa.Nodes.Requester import Requester
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
-from AlLoRa.File import CTP_File
+from AlLoRa.File import AlLoRa_File
 
 # Source = responder (lives with the data), Collector = initiator (drives the transfer).
 SOURCE_MAC = "a1a1a1a1"
@@ -59,7 +59,7 @@ def test_source_to_collector_file_transfer_over_loopback(tmp_path):
     source_conn, collector_conn = Loopback_connector.create_pair(SOURCE_MAC, COLLECTOR_MAC)
 
     source = Source(source_conn, config_file=config_file)
-    source.set_file(CTP_File(name=filename,
+    source.set_file(AlLoRa_File(name=filename,
                              content=bytearray(payload),
                              chunk_size=source.get_chunk_size()))
 

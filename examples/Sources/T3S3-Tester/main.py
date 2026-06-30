@@ -8,7 +8,7 @@ from utils.led_alive import LED
 
 from AlLoRa.Nodes.Source import Source
 from AlLoRa.Connectors.SX127x_connector import SX127x_connector
-from AlLoRa.File import CTP_File
+from AlLoRa.File import AlLoRa_File
 from AlLoRa.utils.debug_utils import print
 from AlLoRa.utils.time_utils import get_time, sleep
 
@@ -55,7 +55,7 @@ def run():
         print("Connection OK")
         while True:
             if not lora_node.got_file():
-                file = CTP_File(name = 'test_{}.json'.format(n),
+                file = AlLoRa_File(name = 'test_{}.json'.format(n),
                             content = bytearray('{}'.format(0)*1024, 'utf-8'),
                             chunk_size=chunk_size)
                 print("Sending LoRa file: ", file.get_name())

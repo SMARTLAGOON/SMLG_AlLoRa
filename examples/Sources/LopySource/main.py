@@ -2,7 +2,7 @@ import pycom
 
 from AlLoRa.Nodes.Source import Source
 from AlLoRa.Connectors.LoPy4_connector import LoPy4_connector
-from AlLoRa.File import CTP_File
+from AlLoRa.File import AlLoRa_File
 from time import sleep
 
 # For testing
@@ -50,7 +50,7 @@ if __name__ == "__main__":
 				print("Setting file")
 				pycom.rgbled(0xd74894)							# Kirby Pink.
 
-				file = CTP_File(name = '{}.json'.format(size),
+				file = AlLoRa_File(name = '{}.json'.format(size),
 								content = bytearray('{}'.format(n%10)*(1024 * size)),
 								chunk_size=chunk_size)
 				lora_node.set_file(file)

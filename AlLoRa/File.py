@@ -26,7 +26,7 @@ class OnDemandFileWriter:
     def close(self):
         self.file.close()
 
-class CTP_File:
+class AlLoRa_File:
 
     def __init__(self, name: str = None, content: bytearray = None, chunk_size: int = None, length: int = None, report=False, path="Results"):
         self.name = name
@@ -141,7 +141,7 @@ class CTP_File:
                     test_log.write(txt.encode())
 
 if __name__ == "__main__":
-    x = CTP_File(name="Test", length=100)
+    x = AlLoRa_File(name="Test", length=100)
     print(x.get_name())
-    y = CTP_File(name="Test2", content=bytearray(b"1111111111111111111"), chunk_size=2)
+    y = AlLoRa_File(name="Test2", content=bytearray(b"1111111111111111111"), chunk_size=2)
     print(y.get_name())

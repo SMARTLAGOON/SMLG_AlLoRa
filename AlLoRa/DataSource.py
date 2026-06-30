@@ -2,7 +2,7 @@ import _thread
 import utime
 import os
 
-from AlLoRa.File import CTP_File
+from AlLoRa.File import AlLoRa_File
 
 # Do not instanciate this class as pretends to be an abstract one
 class DataSource:
@@ -26,7 +26,7 @@ class DataSource:
         return self.file_chunk_size
 
 
-    def add_to_queue(self, file: CTP_File):
+    def add_to_queue(self, file: AlLoRa_File):
         
         if len(self.file_queue) >= self.file_queue_size:
             self.file_queue.pop(0)
@@ -55,7 +55,7 @@ class DataSource:
         print(self.STOP_THREAD)
 
 
-    def read_datasource(self) -> CTP_File:
+    def read_datasource(self) -> AlLoRa_File:
         pass
 
 
@@ -98,13 +98,13 @@ class DataSource:
             content = None
             with open("./content-backup", "r") as f:
                 content = f.read()
-            rescued_file = CTP_File(name='{}'.format(filename), content=bytearray(content), chunk_size=self.file_chunk_size)
+            rescued_file = AlLoRa_File(name='{}'.format(filename), content=bytearray(content), chunk_size=self.file_chunk_size)
             return rescued_file
         except OSError as e:
             print("The backup could not be restored", e)
 
 
-    def backup(self, file: CTP_File):
+    def backup(self, file: AlLoRa_File):
         try:
             os.remove("./filename-backup.txt")
             os.remove("./content-backup")

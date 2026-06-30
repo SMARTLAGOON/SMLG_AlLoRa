@@ -1,6 +1,6 @@
 import gc
 from AlLoRa.Nodes.Node import Node, Packet, urandom, loads, dumps
-from AlLoRa.File import CTP_File
+from AlLoRa.File import AlLoRa_File
 from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.Interfaces.Interface import Interface
 from AlLoRa.utils.time_utils import current_time_ms as time, sleep

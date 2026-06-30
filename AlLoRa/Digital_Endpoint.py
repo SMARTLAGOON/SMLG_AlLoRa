@@ -1,4 +1,4 @@
-from AlLoRa.File import CTP_File
+from AlLoRa.File import AlLoRa_File
 import time
 from AlLoRa.utils.time_utils import get_time
 from AlLoRa.utils.debug_utils import print
@@ -124,7 +124,7 @@ class Digital_Endpoint:
             if not hop:
                 self.disable_mesh()
 
-    def set_current_file(self, file: CTP_File):
+    def set_current_file(self, file: AlLoRa_File):
         self.current_file = file
 
     def get_current_file(self):
@@ -141,7 +141,7 @@ class Digital_Endpoint:
         
     def set_metadata(self, metadata, hop, mesh_mode, path=None):
         if metadata:
-            new_file = CTP_File(name=metadata[1], length=metadata[0], path=path)
+            new_file = AlLoRa_File(name=metadata[1], length=metadata[0], path=path)
             self.set_current_file(new_file)
             self.file_reception_info["current_receiving_file_name"] = new_file.name
             self.file_reception_info["total_chunks"] = new_file.length
