@@ -1,8 +1,9 @@
 from AlLoRa.Packet import Packet
 from AlLoRa.Packet_v3 import Packet_v3
 from AlLoRa.Connectors.Connector import Connector
+from AlLoRa.utils.time_utils import current_time_ms as time, sleep
 from AlLoRa.utils.debug_utils import print
-from AlLoRa.utils.os_utils import os 
+from AlLoRa.utils.os_utils import os
 from AlLoRa.utils.json_utils import json
 
 from os import urandom
@@ -109,6 +110,126 @@ class Node:
         if self.protocol_version >= 3:
             return packet.get_session() == self.session_id
         return packet.get_destination() == self.MAC
+
+    # --- the shared one-round engine: request (initiator) / respond (responder) ------------
+    # Both roles run the same round from opposite sides, so both verbs live here on the Node.
+    # Role reversal is just a node calling the other verb (the drive-role swaps; the type and
+    # the trust-anchor don't).
+
+    def request(self, packet):
+        """One initiator round: transmit a request and wait for its reply. Returns the
+        connector's (response | error dict, size_sent, size_recv, td) tuple. Driven by
+        Requester/Gateway to pull a transfer; a role-reversed Source runs it too."""
+        return self.connector.send_and_wait_response(packet)
+
+    def respond(self, handler):
+        """One responder round: receive a request and, if it is addressed to me, hand it to
+        `handler` (which produces and sends the reply); otherwise forward it (mesh relay).
+        Returns the received request packet, or None if nothing arrived, so a role-specific
+        driver keeps its own bookkeeping (sf-trial, timeout)."""
+        packet = self.listen_requester()
+        if packet is None:
+            return None
+        if self.is_for_me(packet):
+            handler(packet)
+        else:
+            self.forward(packet)
+        return packet
+
+    # Receive one request and parse it, via the same connector.listen + codec.deframe seam the
+    # initiator's send_and_wait_response uses (this is the de-dup: the responder no longer
+    # hand-rolls recv + Packet.load).
+    def listen_requester(self):
+        focus_time = self.connector.adaptive_timeout
+        data, td = self.connector.listen(focus_time)   # one timed window; td measured at the radio
+        self.tr = time()   # when the request landed (send_response times the reply from here)
+
+        if not data:
+            if self.debug:
+                print("No data received within focus time")
+
+            self.connector.increase_adaptive_timeout()
+            return None
+
+        packet = self.connector.codec.deframe(data)
+        if packet is None:
+            # A frame we can't parse. deframe is safe (never throws), so like the initiator's
+            # recv path we just treat it as no usable request and wait again.
+            if self.debug:
+                print("Could not parse frame: ", data)
+            return None
+
+        if self.mesh_mode:
+            try:
+                packet_id = packet.get_id()  # Check if already forwarded or sent by myself
+                if packet_id in self.LAST_SEEN_IDS or packet_id in self.LAST_IDS:
+                    if self.debug:
+                        print("ALREADY_SEEN", self.LAST_SEEN_IDS)
+                    return None
+            except Exception as e:
+                if self.debug:
+                    print(e)
+
+        if self.debug:
+            rssi = self.connector.get_rssi()
+            snr = self.connector.get_snr()
+            print('LISTEN_REQUESTER({}) at: {} || request_content : {}'.format(td, self.connector.adaptive_timeout, packet.get_content()))
+            print("RSSI: ", rssi, " SNR: ", snr)
+            self.status['RSSI'] = rssi
+            self.status['SNR'] = snr
+            self.status['PSizeR'] = len(data)
+            self.status['TimePR'] = td * 1000  # Time in ms
+
+        self.connector.decrease_adaptive_timeout(td)
+
+        return packet
+
+    def send_response(self, response_packet: Packet):
+        if response_packet:
+            if self.mesh_mode:
+                response_packet.set_id(self.generate_id())
+            t0 = time()
+            if self.connector.sf == 12:
+                sleep(1)
+            self.send_lora(response_packet)
+            tf = time()
+            time_send = tf - t0
+            time_reply = tf - self.tr
+            if self.debug:
+                print("Time Send: ", time_send, " Time Reply: ", time_reply)
+            if self.subscribers:
+                self.status['PSizeS'] = len(response_packet.get_content())
+                self.status['TimePS'] = time_send
+                self.status['TimeBtw'] = time_reply
+                self.notify_subscribers()
+
+    def forward(self, packet: Packet):
+        try:
+            if packet.get_mesh():
+                if self.debug:
+                    print("FORWARDED", packet.get_content())
+
+                random_sleep = 0
+                if packet.get_sleep():
+                    random_sleep = (urandom(1)[0] % 5 + 1) * 0.1
+
+                if packet.get_debug_hops():
+                    packet.add_hop(self.name, self.connector.get_rssi(), random_sleep)
+                packet.enable_hop()
+                if random_sleep:
+                    sleep(random_sleep)
+
+                success = self.send_lora(packet)
+                if success:
+                    self.LAST_SEEN_IDS.append(packet.get_id())
+                    self.LAST_SEEN_IDS = self.LAST_SEEN_IDS[-self.MAX_IDS_CACHED:]
+                else:
+                    if self.debug:
+                        print("ALREADY_FORWARDED", self.LAST_SEEN_IDS)
+        except Exception as e:
+            # If packet was corrupted along the way, won't read the COMMAND part
+            if self.debug:
+                print("ERROR FORWARDING", e)
 
     def generate_id(self):
         id = -1

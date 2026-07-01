@@ -1,7 +1,7 @@
 import gc
-from AlLoRa.Nodes.Node import Node, Packet, urandom
+from AlLoRa.Nodes.Node import Node, Packet
 from AlLoRa.File import AlLoRa_File
-from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, sleep_ms
+from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep_ms
 from AlLoRa.utils.debug_utils import print
 from AlLoRa.utils.os_utils import os
 
@@ -32,79 +32,6 @@ class Source(Node):
         self.set_file(file)
         self.file.first_sent = time()
         self.file.metadata_sent = True
-
-    def send_response(self, response_packet: Packet):
-        if response_packet:
-            if self.mesh_mode:
-                response_packet.set_id(self.generate_id())
-            t0 = time()
-            if self.connector.sf == 12:
-                sleep(1)
-            self.send_lora(response_packet)
-            tf = time()
-            time_send = tf - t0
-            time_reply = tf - self.tr
-            if self.debug:
-                print("Time Send: ", time_send, " Time Reply: ", time_reply)
-            if self.subscribers:
-                self.status['PSizeS'] = len(response_packet.get_content())
-                self.status['TimePS'] = time_send
-                self.status['TimeBtw'] = time_reply
-                self.notify_subscribers()
-
-    #This function ensures that a received message matches the criteria of any expected message.
-    def listen_requester(self):
-        packet = self.new_packet()   # v2 Packet or v3 Packet_v3, per negotiated version
-        focus_time = self.connector.adaptive_timeout
-        t0 = time()
-        data = self.connector.recv(focus_time)
-        self.tr = time() # Get the time when the packet was received
-        td = (self.tr - t0) / 1000  # Calculate the time difference in seconds
-
-        if not data:
-            if self.debug:
-                print("No data received within focus time")
-            
-            self.connector.increase_adaptive_timeout()
-            return None
-
-        try:
-            if not packet.load(data):
-                return None
-        except Exception as e:
-            if data:
-                if self.debug:
-                    print("Error loading: ", data, " -> ", e)
-                self.status["CorruptedPackets"] += 1
-            else:
-                if self.debug:
-                    print("No data received")
-            return None
-
-        if self.mesh_mode:
-            try:
-                packet_id = packet.get_id()  # Check if already forwarded or sent by myself
-                if packet_id in self.LAST_SEEN_IDS or packet_id in self.LAST_IDS:
-                    if self.debug:
-                        print("ALREADY_SEEN", self.LAST_SEEN_IDS)
-                    return None
-            except Exception as e:
-                if self.debug:
-                    print(e)
-
-        if self.debug:
-            rssi = self.connector.get_rssi()
-            snr = self.connector.get_snr()
-            print('LISTEN_REQUESTER({}) at: {} || request_content : {}'.format(td, self.connector.adaptive_timeout, packet.get_content()))
-            print("RSSI: ", rssi, " SNR: ", snr)
-            self.status['RSSI'] = rssi
-            self.status['SNR'] = snr
-            self.status['PSizeR'] = len(data)
-            self.status['TimePR'] = td * 1000  # Time in ms
-
-        self.connector.decrease_adaptive_timeout(td)
-
-        return packet
 
     def establish_connection(self, try_for=None):
         while True:
@@ -154,22 +81,22 @@ class Source(Node):
                 if try_for <= 0:
                     return False
 
-    def send_file(self, timeout=float('inf')):  
+    def _serve(self, packet):
+        # The Source's responder handler: build the reply for this request, send it, and
+        # apply any accepted RF change (after the confirming reply is on the wire).
+        response_packet, new_sf = self.response(packet)
+        self.send_response(response_packet)
+        if new_sf:
+            backup_cks = self.chunk_size
+            self.change_rf_config(new_sf)
+            if self.chunk_size != backup_cks:
+                self.file.change_chunk_size(self.chunk_size)
+
+    def send_file(self, timeout=float('inf')):
         t0 = time() # Start time in ms
         while not self.file.sent:
-            packet = self.listen_requester()
-            if packet:
-                if self.is_for_me(packet=packet):
-                    response_packet, new_sf = self.response(packet)
-                    self.send_response(response_packet)
-                    if new_sf:
-                        backup_cks = self.chunk_size
-                        self.change_rf_config(new_sf)
-                        if self.chunk_size != backup_cks:
-                            self.file.change_chunk_size(self.chunk_size)
-                else:
-                    self.forward(packet=packet)
-            elif self.sf_trial:
+            packet = self.respond(self._serve)
+            if packet is None and self.sf_trial:
                 self.sf_trial -= 1
                 if self.sf_trial <= 0:
                     self.restore_rf_config()
@@ -273,31 +200,3 @@ class Source(Node):
             return response_packet, new_sf
 
         return response_packet, new_sf
-
-    def forward(self, packet: Packet):
-        try:
-            if packet.get_mesh():
-                if self.debug:
-                    print("FORWARDED", packet.get_content())
-                
-                random_sleep = 0
-                if packet.get_sleep():
-                    random_sleep = (urandom(1)[0] % 5 + 1) * 0.1
-                    
-                if packet.get_debug_hops():
-                    packet.add_hop(self.name, self.connector.get_rssi(), random_sleep)
-                packet.enable_hop()
-                if random_sleep:
-                    sleep(random_sleep)
-
-                success = self.send_lora(packet)
-                if success:
-                    self.LAST_SEEN_IDS.append(packet.get_id())
-                    self.LAST_SEEN_IDS = self.LAST_SEEN_IDS[-self.MAX_IDS_CACHED:]
-                else:
-                    if self.debug:
-                        print("ALREADY_FORWARDED", self.LAST_SEEN_IDS)
-        except Exception as e:
-            # If packet was corrupted along the way, won't read the COMMAND part
-            if self.debug:
-                print("ERROR FORWARDING", e)

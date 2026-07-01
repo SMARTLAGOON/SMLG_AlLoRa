@@ -100,8 +100,8 @@ class Requester(Node):
         self.time_since_last_request = time() - self.time_request
         self.time_request = time()
 
-        # Get the response from the connector
-        response_packet, packet_size_sent, packet_size_received, time_pr = self.connector.send_and_wait_response(packet)
+        # One initiator round via the shared verb (wraps the connector's send_and_wait_response).
+        response_packet, packet_size_sent, packet_size_received, time_pr = self.request(packet)
 
         if self.subscribers:
             self.status['PSizeS'] = packet_size_sent
