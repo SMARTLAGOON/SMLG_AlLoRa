@@ -47,6 +47,26 @@ class Node:
         self.status["TimeBtw"] = "-"  # Time between reply
         self.status["CorruptedPackets"] = 0  # Number of corrupted packets
 
+        self.session_store = None
+        self.aead = None
+        if self.security_mode == 'secure':
+            self._enable_secure()
+
+    def _enable_secure(self):
+        # Custody of secure Sessions (per-peer, keyed by sid) + the per-frame AEAD backend.
+        # Imported lazily so an open-mode node never pulls in the crypto modules. If no backend
+        # is available the node degrades to open here; a production node should instead refuse
+        # to run (anti-downgrade, ADR 0006) — that operational-vs-test distinction is a later
+        # concern. Handshake wiring (populating the store on first contact) is the next step.
+        from AlLoRa.Security.Session_store import RAM_session_store
+        from AlLoRa.Security.AEAD import detect_aead
+        self.session_store = RAM_session_store()
+        self.aead = detect_aead()
+        if self.aead is not None:
+            self.connector.set_secure(self.session_store.get, self.aead)
+        elif self.debug:
+            print("secure mode requested but no AEAD backend available — running open (degraded)")
+
 
     def open_backup(self):
         with open(self.config_file, "r") as f:

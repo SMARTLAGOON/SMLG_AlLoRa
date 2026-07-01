@@ -89,6 +89,16 @@ class Connector:
             if self.debug:
                 print("Error: No config parameters")
 
+    def set_secure(self, session_resolver, aead):
+        """Switch the codec to secure mode: it seals/opens each frame with the Session the
+        resolver returns for the frame's sid (`sid -> Session | None`), using the given AEAD
+        backend. Called by a secure-posture Node once it has a session store + a live backend;
+        the wire config (version/addressing/mesh) is unchanged, only the posture."""
+        self.codec = build_codec(
+            protocol_version=self.protocol_version, addressing=self.addressing,
+            mesh_mode=self.mesh_mode, short_mac=self.short_mac, my_mac=self.get_mac(),
+            security_mode='secure', session_resolver=session_resolver, aead=aead)
+
     def get_max_payload_size(self):
         if self.sf < 11:
             return 255
