@@ -1,6 +1,6 @@
 from AlLoRa.Packet import Packet
-from AlLoRa.Packet_v3 import Packet_v3
 from AlLoRa.Pacing import Pacing
+from AlLoRa.Codec import build_codec
 import gc
 from math import ceil
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, sleep_ms
@@ -14,6 +14,7 @@ class Connector:
     def __init__(self):
         self.MAC = "00000000"
         self.pacing = Pacing()   # one home for the adaptive receive window (was adaptive_timeout)
+        self.codec = build_codec()   # how a Packet is spoken on the wire; rebuilt in config()
         self.debug = False
 
     # `adaptive_timeout` / `observed_min_timeout` now live in `Pacing`; these properties keep
@@ -73,6 +74,17 @@ class Connector:
             self.adaptive_timeout = self.max_timeout
             self.backup_timeout = self.adaptive_timeout
             self.backup_rf_config()
+
+            # Build the codec for the negotiated version x posture. Secure posture wiring
+            # (session resolver + AEAD backend) threads through here when secure goes live;
+            # today every configured node is open, so this picks v2 or v3-open.
+            self.codec = build_codec(
+                protocol_version=self.protocol_version,
+                addressing=self.addressing,
+                mesh_mode=self.mesh_mode,
+                short_mac=self.short_mac,
+                my_mac=self.get_mac(),
+            )
         else:
             if self.debug:
                 print("Error: No config parameters")
@@ -142,22 +154,12 @@ class Connector:
     def decrease_adaptive_timeout(self, td):
         self.pacing.on_reply(td)
     
-    def _new_response_packet(self):
-        if getattr(self, 'protocol_version', 2) >= 3:
-            return Packet_v3(self.mesh_mode, self.addressing)
-        return Packet(self.mesh_mode, self.short_mac)
-
-    def _response_matches(self, response, request):
-        # v3 sid-addressed: a reply belongs to the request's session. v2: reply's
-        # source/destination MACs mirror the request (the radio-level peer filter).
-        if getattr(self, 'protocol_version', 2) >= 3:
-            return response.get_session() == request.get_session()
-        return (response.get_source() == request.get_destination()
-                and response.get_destination() == self.get_mac())
-
     def send_and_wait_response(self, packet):
         focus_time = self.adaptive_timeout
         packet_size_sent = len(packet.get_content())
+        # How a reply is matched to this request (version/posture-agnostic; the sid or MAC
+        # mirror the request). Built once — the request doesn't change across the wait loop.
+        match = self.codec.match_spec(packet)
         try:
             send_success = self.send(packet)
             if not send_success:
@@ -213,17 +215,19 @@ class Connector:
                 self.increase_adaptive_timeout()
                 return error_info, packet_size_sent, packet_size_received, td
 
-            response_packet = self._new_response_packet()
             if self.debug:
                 print("WAIT_RESPONSE({}) at: {}|| source_reply: {}".format(td, self.adaptive_timeout, received_data))
             try:
-                if response_packet.load(received_data):
-                    if self._response_matches(response_packet, packet):
+                response_packet = self.codec.deframe(received_data)
+                if response_packet is not None:
+                    if match.matches(response_packet):
                         if len(received_data) > response_packet.HEADER_SIZE + 60:  # Hardcoded for only chunks
                             self.decrease_adaptive_timeout(td)
                         if response_packet.get_debug_hops():
                             response_packet.add_hop(self.name, self.get_rssi(), 0)
                         return response_packet, packet_size_sent, packet_size_received, td
+                    # A well-formed frame that isn't our reply (a foreign/stale packet):
+                    # keep waiting within the window rather than giving up.
                 else:
                     if len(received_data) > 0:
                         error_info = {
