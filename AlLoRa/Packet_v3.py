@@ -47,6 +47,17 @@ class Packet_v3:
     HEADER_SIZE_MAC_MESH = 15
     HEADER_SIZE_SID_MESH = 8
 
+    # Secure-mode serialization. A secure frame replaces the open-mode 24-bit integrity
+    # trailer with an AEAD-sealed payload: an authenticated header [sid|VT|FL|counter2],
+    # then the AES-CTR ciphertext, then a 4-byte tag. The header is bound as the AEAD's AAD
+    # so it can't be forged; the counter is the anti-replay token. sid-addressed P2P only for
+    # now (mesh secure is a later add). This exact byte layout + the nonce assembly are a
+    # defensible provisional default, deliberately left to a crypto-review pass, not frozen.
+    SECURE_HEADER_FORMAT_SID_P2P = "!BBBH"   # sid, VT, FL, counter(2) = 5 B
+    SECURE_HEADER_SIZE_SID_P2P = 5
+    SECURE_TAG_LEN = 4
+    _SECURE_ENC_KEY_LEN = 16                  # session.key = enc(16) || mac(16)
+
     # Typed packet kinds (VT low nibble). DATA/OK/CHUNK/METADATA are the transfer core;
     # GRANT (role-swap), CTRL (control commands), ACKMAP (selective-repeat) are reserved
     # here and filled in by later increments — but they already have wire codes so the
@@ -348,3 +359,65 @@ class Packet_v3:
         if self.check:
             self.content = packet
         return self.check
+
+    # --- secure framing (parallel to get_content/load; open-mode path above is untouched) --
+
+    def get_secure_content(self, session, aead):
+        """Serialize as a secure frame: an authenticated header + the AEAD-sealed payload.
+
+        The header (sid, version+kind, flags, a fresh monotonic counter) is bound as the
+        AEAD's AAD so it cannot be forged; the payload is encrypted and tagged. Consumes one
+        send counter from the session, so it must be called exactly once per transmitted
+        frame.
+        """
+        counter = session.next_counter()
+        header = struct.pack(self.SECURE_HEADER_FORMAT_SID_P2P,
+                             self.sid, self._pack_vt(), self._pack_fl(), counter)
+        nonce = session.nonce_prefix + struct.pack("!H", counter)    # prefix || 2-B counter
+        enc_key = session.key[:self._SECURE_ENC_KEY_LEN]
+        mac_key = session.key[self._SECURE_ENC_KEY_LEN:]
+        sealed = aead.seal(enc_key, mac_key, nonce, header, self.payload)  # ciphertext || tag
+        self.content = header + sealed
+        return self.content
+
+    def load_secure(self, wire, session, aead):
+        """Parse, authenticate, decrypt and replay-check a secure frame into this packet.
+
+        Returns True only if the tag verifies (header + payload untampered) *and* the frame
+        is fresh (not a replay). On any failure nothing is decrypted into the packet.
+        """
+        if len(wire) < self.SECURE_HEADER_SIZE_SID_P2P + self.SECURE_TAG_LEN:
+            self.check = False
+            return False
+        header = wire[:self.SECURE_HEADER_SIZE_SID_P2P]
+        try:
+            sid, vt, fl, counter = struct.unpack(self.SECURE_HEADER_FORMAT_SID_P2P, header)
+        except Exception:
+            self.check = False
+            return False
+
+        version = vt >> 4
+        kind_code = vt & 0x0F
+        if version != self.VERSION or kind_code not in self.KIND_NAMES:
+            self.check = False
+            return False
+
+        nonce = session.nonce_prefix + struct.pack("!H", counter)
+        enc_key = session.key[:self._SECURE_ENC_KEY_LEN]
+        mac_key = session.key[self._SECURE_ENC_KEY_LEN:]
+        plaintext = aead.open(enc_key, mac_key, nonce, header,
+                              wire[self.SECURE_HEADER_SIZE_SID_P2P:])
+        if plaintext is None:
+            self.check = False          # authentication failed -> reject, decrypt nothing
+            return False
+        if not session.accept(counter):
+            self.check = False          # replay (or too old) -> reject
+            return False
+
+        self.sid = sid
+        self.kind = self.KIND_NAMES[kind_code]
+        self._unpack_fl(fl)
+        self.payload = plaintext
+        self.content = wire
+        self.check = True
+        return True
