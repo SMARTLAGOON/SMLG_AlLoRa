@@ -66,6 +66,7 @@ class Packet:
 
         ## Flags:
         self.command = None               # Type of command / or Data                           bit: 0, 1
+        self.v3_beacon = False            # v3-capable beacon (freed spare)                    bit: 2
         # Only for mesh mode
         self.mesh = False                 # Mesh On or Off for this Node                        bit: 3
         self.sleep = True                # True if should sleep before forwarding message       bit: 4
@@ -174,6 +175,14 @@ class Packet:
     def set_data(self, chunk):
         self.command = "DATA"
         self.payload = chunk
+
+    def set_v3_beacon(self, on=True):
+        # ADR 0003 §5: a v3-capable node sets v2's freed spare bit 2 as a beacon a vanilla
+        # v2 peer ignores. Registered/echoing peers upgrade; unknown peers stay v2.
+        self.v3_beacon = on
+
+    def get_v3_beacon(self):
+        return self.v3_beacon
 
     def get_mesh(self):
         return self.mesh
@@ -297,6 +306,8 @@ class Packet:
                 flags = flags | (1<<0)
             if command_bits[1] == "1":
                 flags = flags | (1<<1)
+            if self.v3_beacon:
+                flags = flags | (1<<2)
             if self.mesh:
                 flags = flags | (1<<3)
             if self.sleep:
@@ -329,6 +340,7 @@ class Packet:
         c1 = "1" if (flags >> 1) & 1 == 1 else "0"
         self.command = self.COMMAND_BITS[c0+c1]
 
+        self.v3_beacon = (flags >> 2) & 1 == 1
         self.mesh  = (flags >> 3) & 1 == 1
         self.sleep = (flags >> 4) & 1 == 1
         self.hop = (flags >> 5) & 1 == 1
