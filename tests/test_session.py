@@ -23,18 +23,20 @@ from AlLoRa.Security.Session import Session, SessionExhausted
 
 
 KEY = bytes(range(16))              # opaque 16-byte AES key stand-in
-NONCE_PREFIX = bytes(range(8))      # opaque per-session prefix stand-in
+SEND_PREFIX = bytes(range(8))       # opaque per-direction nonce prefixes (send / receive)
+RECV_PREFIX = bytes(range(8, 16))
 
 
 def _session(sid=7):
-    return Session(sid=sid, key=KEY, nonce_prefix=NONCE_PREFIX)
+    return Session(sid=sid, key=KEY, send_nonce_prefix=SEND_PREFIX, recv_nonce_prefix=RECV_PREFIX)
 
 
 def test_session_holds_its_identity_and_key_material_opaquely():
     s = _session(sid=42)
     assert s.sid == 42
     assert s.key == KEY
-    assert s.nonce_prefix == NONCE_PREFIX
+    assert s.send_nonce_prefix == SEND_PREFIX
+    assert s.recv_nonce_prefix == RECV_PREFIX
 
 
 def test_send_counter_is_strictly_monotonic_starting_at_one():

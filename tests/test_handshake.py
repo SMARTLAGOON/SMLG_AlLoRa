@@ -42,15 +42,19 @@ def test_handshake_yields_matching_session_keys():
     session_i, session_r = _run_handshake()
     assert session_i.sid == session_r.sid == SID
     assert session_i.key == session_r.key
-    assert session_i.nonce_prefix == session_r.nonce_prefix
+    # Per-direction prefixes agree across the ends: what one seals under, the other opens under.
+    assert session_i.send_nonce_prefix == session_r.recv_nonce_prefix
+    assert session_i.recv_nonce_prefix == session_r.send_nonce_prefix
+    assert session_i.send_nonce_prefix != session_i.recv_nonce_prefix   # the two directions differ
 
 
 def test_a_frame_sealed_by_one_end_opens_at_the_other():
     session_i, session_r = _run_handshake()
     aead = detect_aead()
 
-    # The frame layer splits the session's opaque key into the enc + mac keys for the AEAD.
-    nonce = session_i.nonce_prefix + b"\x00\x01"   # prefix + a frame counter
+    # The initiator seals under its send prefix; the responder opens under its recv prefix,
+    # which the handshake made equal — so the same nonce reconstructs at both ends.
+    nonce = session_i.send_nonce_prefix + b"\x00\x01"   # prefix + a frame counter
     aad = b"frame-header"
     plaintext = b"a sensor reading"
 
@@ -58,6 +62,7 @@ def test_a_frame_sealed_by_one_end_opens_at_the_other():
     sealed = aead.seal(enc_i, mac_i, nonce, aad, plaintext)
 
     enc_r, mac_r = _split(session_r.key)
+    assert session_r.recv_nonce_prefix == session_i.send_nonce_prefix
     assert aead.open(enc_r, mac_r, nonce, aad, sealed) == plaintext
 
 
@@ -118,13 +123,14 @@ def test_handshake_completes_over_the_loopback_connector():
 
     # both ends built the same session without the secret ever crossing the wire
     assert session_i.key == session_r.key
-    assert session_i.nonce_prefix == session_r.nonce_prefix
+    assert session_i.send_nonce_prefix == session_r.recv_nonce_prefix
+    assert session_i.recv_nonce_prefix == session_r.send_nonce_prefix
     assert session_i.sid == session_r.sid == SID
 
     # and a frame sealed by one end opens at the other, end to end over the connector
     aead = detect_aead()
     enc_i, mac_i = _split(session_i.key)
     enc_r, mac_r = _split(session_r.key)
-    nonce = session_i.nonce_prefix + b"\x00\x01"
+    nonce = session_i.send_nonce_prefix + b"\x00\x01"
     sealed = aead.seal(enc_i, mac_i, nonce, b"hdr", b"payload-over-the-wire")
     assert aead.open(enc_r, mac_r, nonce, b"hdr", sealed) == b"payload-over-the-wire"

@@ -20,14 +20,17 @@ from AlLoRa.Security.AEAD import detect_aead
 
 SID = 42
 KEY = bytes(range(32))          # enc(16) || mac(16)
-NONCE_PREFIX = bytes(range(10))
+NONCE_PREFIX = bytes(range(10))         # the sender's send prefix == the receiver's recv prefix
+REVERSE_PREFIX = bytes(range(10, 20))   # the other direction (unused by these one-way tests)
 
 
 def _sessions():
-    # The two ends of one handshake hold sessions with identical key material; here we
-    # construct them directly (the codec doesn't care how the keys were derived).
-    sender = Session(sid=SID, key=KEY, nonce_prefix=NONCE_PREFIX)
-    receiver = Session(sid=SID, key=KEY, nonce_prefix=NONCE_PREFIX)
+    # The two ends of one handshake: identical key material, and per-direction nonce prefixes
+    # that agree (the sender's send prefix is the receiver's recv prefix, and vice versa).
+    sender = Session(sid=SID, key=KEY,
+                     send_nonce_prefix=NONCE_PREFIX, recv_nonce_prefix=REVERSE_PREFIX)
+    receiver = Session(sid=SID, key=KEY,
+                       send_nonce_prefix=REVERSE_PREFIX, recv_nonce_prefix=NONCE_PREFIX)
     return sender, receiver
 
 
@@ -103,3 +106,22 @@ def test_the_wire_counter_advances_per_frame():
     c1 = struct.unpack(Packet_v3.SECURE_HEADER_FORMAT_SID_P2P, w1[:Packet_v3.SECURE_HEADER_SIZE_SID_P2P])[3]
     c2 = struct.unpack(Packet_v3.SECURE_HEADER_FORMAT_SID_P2P, w2[:Packet_v3.SECURE_HEADER_SIZE_SID_P2P])[3]
     assert c1 == 1 and c2 == 2
+
+
+def test_the_two_directions_never_share_a_keystream():
+    # The per-direction-prefix fix. Both ends' first frame uses counter 1, but the disjoint
+    # send prefixes keep their (key, nonce) pairs distinct — so sealing the *same* plaintext
+    # each way yields *different* wire bytes (no keystream reuse), and each frame opens only
+    # at the peer. With a single shared prefix this test would fail (identical ciphertext).
+    sender, receiver = _sessions()
+    aead = detect_aead()
+    plaintext = b"identical reading"
+
+    wire_up = _data_packet(plaintext).get_secure_content(sender, aead)    # sender -> receiver, ctr 1
+    wire_down = _data_packet(plaintext).get_secure_content(receiver, aead)  # receiver -> sender, ctr 1
+    assert wire_up != wire_down                       # same plaintext + counter, disjoint nonces
+
+    got_up = Packet_v3(addressing="sid")
+    assert got_up.load_secure(wire_up, receiver, aead) is True and got_up.get_payload() == plaintext
+    got_down = Packet_v3(addressing="sid")
+    assert got_down.load_secure(wire_down, sender, aead) is True and got_down.get_payload() == plaintext

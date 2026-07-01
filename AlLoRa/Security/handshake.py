@@ -20,7 +20,7 @@ splits them back out when it calls the AEAD.
 from AlLoRa.Security.ec_p256 import (
     generate_private_key, public_key_uncompressed, ecdh_shared_secret,
 )
-from AlLoRa.Security.kdf import derive_session_keys
+from AlLoRa.Security.kdf import derive_session_material
 from AlLoRa.Security.Session import Session
 
 _PUB_LEN = 65  # SEC1 uncompressed public key: 0x04 || X(32) || Y(32)
@@ -40,7 +40,7 @@ def responder_accept(static_priv, hello_payload, sid):
     (session, welcome_payload). The welcome carries the responder's static public key and
     the sid."""
     shared = ecdh_shared_secret(static_priv, hello_payload)
-    session = _session_from(shared, sid)
+    session = _session_from(shared, sid, is_initiator=False)
     welcome_payload = public_key_uncompressed(static_priv) + bytes([sid])
     return session, welcome_payload
 
@@ -52,9 +52,16 @@ def initiator_complete(state, welcome_payload):
     static_pub = welcome_payload[:_PUB_LEN]
     sid = welcome_payload[_PUB_LEN]
     shared = ecdh_shared_secret(ephemeral_priv, static_pub)
-    return _session_from(shared, sid)
+    return _session_from(shared, sid, is_initiator=True)
 
 
-def _session_from(shared_secret, sid):
-    enc_key, mac_key, nonce_prefix = derive_session_keys(shared_secret)
-    return Session(sid=sid, key=enc_key + mac_key, nonce_prefix=nonce_prefix)
+def _session_from(shared_secret, sid, is_initiator):
+    # One shared AES+HMAC key, two per-direction nonce prefixes. Each end seals with its own
+    # direction's prefix and opens the peer's with the other — so the two ends agree (the
+    # initiator's send prefix is the responder's receive prefix, and vice versa) while their
+    # nonce spaces stay disjoint.
+    enc_key, mac_key, prefix_ab, prefix_ba = derive_session_material(shared_secret)
+    key = enc_key + mac_key
+    if is_initiator:   # sends initiator->responder (ab), receives responder->initiator (ba)
+        return Session(sid=sid, key=key, send_nonce_prefix=prefix_ab, recv_nonce_prefix=prefix_ba)
+    return Session(sid=sid, key=key, send_nonce_prefix=prefix_ba, recv_nonce_prefix=prefix_ab)

@@ -115,14 +115,18 @@ def test_v3_match_spec_matches_on_the_wire():
 
 SID = 42
 KEY = bytes(range(32))               # enc(16) || mac(16)
-NONCE_PREFIX = bytes(range(10))
+NONCE_PREFIX = bytes(range(10))          # the sender's send prefix == the receiver's recv prefix
+REVERSE_PREFIX = bytes(range(10, 20))    # the other direction
 
 
 def _secure_pair():
-    """Two ends of one handshake: identical key material, independent send/recv sessions."""
+    """Two ends of one handshake: identical key material, per-direction nonce prefixes that
+    agree (sender's send prefix == receiver's recv prefix, and vice versa)."""
     aead = detect_aead()
-    sender = Session(sid=SID, key=KEY, nonce_prefix=NONCE_PREFIX)
-    receiver = Session(sid=SID, key=KEY, nonce_prefix=NONCE_PREFIX)
+    sender = Session(sid=SID, key=KEY,
+                     send_nonce_prefix=NONCE_PREFIX, recv_nonce_prefix=REVERSE_PREFIX)
+    receiver = Session(sid=SID, key=KEY,
+                       send_nonce_prefix=REVERSE_PREFIX, recv_nonce_prefix=NONCE_PREFIX)
     return (V3SecureCodec(lambda sid: sender, aead),
             V3SecureCodec(lambda sid: receiver, aead), aead)
 
@@ -153,7 +157,8 @@ def test_secure_deframe_rejects_a_replay():
 def test_secure_deframe_rejects_an_unknown_session():
     aead = detect_aead()
     blind = V3SecureCodec(lambda sid: None, aead)     # resolver knows no sessions
-    real = Session(sid=SID, key=KEY, nonce_prefix=NONCE_PREFIX)
+    real = Session(sid=SID, key=KEY,
+                   send_nonce_prefix=NONCE_PREFIX, recv_nonce_prefix=REVERSE_PREFIX)
     wire = _v3_data(SID, b"x").get_secure_content(real, aead)
     assert blind.deframe(wire) is None                # can't authenticate -> reject
 

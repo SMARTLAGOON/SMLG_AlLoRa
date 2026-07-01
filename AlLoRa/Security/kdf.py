@@ -46,3 +46,28 @@ def derive_session_keys(shared_secret, info=_INFO):
     mac_key = material[ENC_KEY_LEN:ENC_KEY_LEN + MAC_KEY_LEN]
     nonce_prefix = material[ENC_KEY_LEN + MAC_KEY_LEN:]
     return enc_key, mac_key, nonce_prefix
+
+
+def derive_session_material(shared_secret, info=_INFO):
+    """Return ``(enc_key, mac_key, prefix_ab, prefix_ba)``: the shared AES + HMAC keys, plus a
+    **per-direction nonce prefix** — one for initiator->responder frames, one for the reverse.
+
+    Both directions' send counters start at 1, so a single shared nonce prefix would make the
+    first frame each way reuse ``(key, nonce)`` — a keystream-reuse footgun. Two prefixes keep
+    the two directions' nonce spaces disjoint, which is all AES-CTR needs, and (because the
+    prefix is bound into the HMAC) also makes a reflected frame fail the tag. This is the lean
+    fix: **one key schedule**, not two (per-direction *keys* would add isolation that is
+    worthless when the session is per-peer anyway), and **zero wire cost** — the prefixes are
+    derived, never transmitted, exactly like the key.
+
+    Provisional layout: the ordering (init prefix first) and the info label are a crypto-review
+    surface, not frozen — property-tested, not byte-pinned.
+    """
+    length = ENC_KEY_LEN + MAC_KEY_LEN + 2 * NONCE_PREFIX_LEN
+    material = hkdf_sha256(shared_secret, length, info=info)
+    i = 0
+    enc_key = material[i:i + ENC_KEY_LEN]; i += ENC_KEY_LEN
+    mac_key = material[i:i + MAC_KEY_LEN]; i += MAC_KEY_LEN
+    prefix_ab = material[i:i + NONCE_PREFIX_LEN]; i += NONCE_PREFIX_LEN
+    prefix_ba = material[i:i + NONCE_PREFIX_LEN]
+    return enc_key, mac_key, prefix_ab, prefix_ba

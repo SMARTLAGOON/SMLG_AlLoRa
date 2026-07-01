@@ -21,10 +21,14 @@ class Session:
 
     MAX_COUNTER = 0xFFFF   # 2-byte wire field; 0 is reserved as the "no counter yet" sentinel
 
-    def __init__(self, sid, key, nonce_prefix):
+    def __init__(self, sid, key, send_nonce_prefix, recv_nonce_prefix):
         self.sid = sid
-        self.key = key                    # opaque AES key material (the crypto backend reads it)
-        self.nonce_prefix = nonce_prefix  # opaque per-session nonce prefix (never transmitted)
+        self.key = key                    # opaque AES+HMAC key material (shared both directions)
+        # Per-direction nonce prefixes (never transmitted): I seal with send_, I open a peer
+        # frame with recv_ (= the peer's send_). Two prefixes keep the directions' nonce spaces
+        # disjoint even though both counters start at 1 — no cross-direction (key, nonce) reuse.
+        self.send_nonce_prefix = send_nonce_prefix
+        self.recv_nonce_prefix = recv_nonce_prefix
         self._send_counter = 0
         self._replay = Replay_window()
 

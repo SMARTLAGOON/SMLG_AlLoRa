@@ -11,7 +11,9 @@ different secret yields different keys. They deliberately do not pin the exact b
 concrete construction (labels, prefix length) is provisional until the crypto-review pass,
 and property tests survive that review unchanged.
 """
-from AlLoRa.Security.kdf import derive_session_keys, ENC_KEY_LEN, MAC_KEY_LEN
+from AlLoRa.Security.kdf import (
+    derive_session_keys, derive_session_material, ENC_KEY_LEN, MAC_KEY_LEN,
+)
 
 SECRET = bytes(range(32))
 OTHER = bytes(range(1, 33))
@@ -40,3 +42,18 @@ def test_a_different_secret_yields_different_keys():
     enc2, mac2, p2 = derive_session_keys(OTHER)
     assert (enc1, mac1, p1) != (enc2, mac2, p2)
     assert enc1 != enc2 and mac1 != mac2
+
+
+def test_directional_material_gives_two_disjoint_prefixes():
+    # One shared key pair, but a distinct nonce prefix per direction so the two directions'
+    # nonce spaces never overlap (the fix for cross-direction (key, nonce) reuse).
+    enc, mac, prefix_ab, prefix_ba = derive_session_material(SECRET)
+    assert len(enc) == ENC_KEY_LEN and len(mac) == MAC_KEY_LEN
+    assert len(prefix_ab) == len(prefix_ba) > 0
+    assert prefix_ab != prefix_ba
+    # the shared keys still match what the single-set derivation would give up front
+    assert (enc, mac) == derive_session_keys(SECRET)[:2]
+
+
+def test_directional_material_is_deterministic():
+    assert derive_session_material(SECRET) == derive_session_material(SECRET)

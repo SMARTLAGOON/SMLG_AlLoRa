@@ -12,11 +12,12 @@ from AlLoRa.Security.Session import Session
 from AlLoRa.Security.Session_store import Session_store, RAM_session_store
 
 KEY = bytes(16)
-NONCE_PREFIX = bytes(8)
+SEND_PREFIX = bytes(8)
+RECV_PREFIX = bytes(range(8, 16))
 
 
 def _sess(sid):
-    return Session(sid=sid, key=KEY, nonce_prefix=NONCE_PREFIX)
+    return Session(sid=sid, key=KEY, send_nonce_prefix=SEND_PREFIX, recv_nonce_prefix=RECV_PREFIX)
 
 
 def test_ram_store_round_trips_a_session_by_sid():

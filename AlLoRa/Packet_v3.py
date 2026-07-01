@@ -373,7 +373,8 @@ class Packet_v3:
         counter = session.next_counter()
         header = struct.pack(self.SECURE_HEADER_FORMAT_SID_P2P,
                              self.sid, self._pack_vt(), self._pack_fl(), counter)
-        nonce = session.nonce_prefix + struct.pack("!H", counter)    # prefix || 2-B counter
+        # Seal under my send-direction prefix (the peer opens with its matching recv prefix).
+        nonce = session.send_nonce_prefix + struct.pack("!H", counter)   # prefix || 2-B counter
         enc_key = session.key[:self._SECURE_ENC_KEY_LEN]
         mac_key = session.key[self._SECURE_ENC_KEY_LEN:]
         sealed = aead.seal(enc_key, mac_key, nonce, header, self.payload)  # ciphertext || tag
@@ -402,7 +403,9 @@ class Packet_v3:
             self.check = False
             return False
 
-        nonce = session.nonce_prefix + struct.pack("!H", counter)
+        # Open under my receive-direction prefix (= the peer's send prefix); the disjoint
+        # prefixes are what stop the two directions from sharing a (key, nonce).
+        nonce = session.recv_nonce_prefix + struct.pack("!H", counter)
         enc_key = session.key[:self._SECURE_ENC_KEY_LEN]
         mac_key = session.key[self._SECURE_ENC_KEY_LEN:]
         plaintext = aead.open(enc_key, mac_key, nonce, header,
