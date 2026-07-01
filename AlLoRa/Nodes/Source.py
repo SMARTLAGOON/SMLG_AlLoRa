@@ -54,7 +54,7 @@ class Source(Node):
 
     #This function ensures that a received message matches the criteria of any expected message.
     def listen_requester(self):
-        packet = Packet(mesh_mode=self.mesh_mode, short_mac=self.short_mac)
+        packet = self.new_packet()   # v2 Packet or v3 Packet_v3, per negotiated version
         focus_time = self.connector.adaptive_timeout
         t0 = time()
         data = self.connector.recv(focus_time)
@@ -197,9 +197,11 @@ class Source(Node):
         if not Packet.check_command(command):
             return None, None
 
-        response_packet = Packet(mesh_mode=self.mesh_mode, short_mac=self.short_mac)
-        response_packet.set_source(self.MAC)
-        response_packet.set_destination(packet.get_source())
+        v3 = self.protocol_version >= 3
+        response_packet = self.new_packet()
+        if not v3:
+            response_packet.set_source(self.MAC)
+            response_packet.set_destination(packet.get_source())
 
         if self.mesh_mode:
             if packet.get_mesh() and packet.get_hop():
@@ -214,7 +216,7 @@ class Source(Node):
             self.sf_trial = False
             self.backup_config()
 
-        if packet.get_debug_hops():
+        if not v3 and packet.get_debug_hops():
             response_packet.set_data("")
             response_packet.enable_debug_hops()
             response_packet.add_previous_hops(packet.get_message_path())
@@ -222,7 +224,7 @@ class Source(Node):
             return response_packet, new_sf
 
         if command == Packet.CHUNK:
-            requested_chunk = int(packet.get_payload().decode())
+            requested_chunk = packet.get_chunk_index() if v3 else int(packet.get_payload().decode())
             response_packet.set_data(self.file.get_chunk(requested_chunk))
             if self.subscribers:
                 self.status['Chunk'] = self.file.get_length() - requested_chunk
@@ -238,7 +240,13 @@ class Source(Node):
 
         if command == Packet.METADATA:    # handle for new file
             filename = self.file.get_name()
-            response_packet.set_metadata(self.file.get_length(), filename)
+            if v3:
+                # Typed METADATA: carry chunk_size + total byte length so the receiver's
+                # positioned writes stop depending on both ends being configured with the
+                # same chunk_size. v2 sent only chunk_count + filename.
+                response_packet.set_metadata(self.file.chunk_size, self.file.length, filename)
+            else:
+                response_packet.set_metadata(self.file.get_length(), filename)
 
             if self.file.metadata_sent:
                 self.file.retransmission += 1
@@ -257,7 +265,7 @@ class Source(Node):
         if command == Packet.OK:
             response_packet.set_ok()
 
-            if packet.get_change_rf():
+            if (not v3) and packet.get_change_rf():
                 new_sf = packet.get_config()
                 response_packet.set_change_rf(new_sf)
             elif self.file.first_sent and not self.file.last_sent:	# If some chunks are already sent...

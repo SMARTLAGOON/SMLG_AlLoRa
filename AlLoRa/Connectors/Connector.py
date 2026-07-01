@@ -1,4 +1,5 @@
 from AlLoRa.Packet import Packet
+from AlLoRa.Packet_v3 import Packet_v3
 import gc
 from math import ceil
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, sleep_ms
@@ -38,6 +39,10 @@ class Connector:
 
             self.mesh_mode = self.config_parameters.get('mesh_mode', False)
             self.short_mac = self.config_parameters.get('short_mac', False)
+
+            # v3: which codec parses replies, and how a reply is matched to its request.
+            self.protocol_version = self.config_parameters.get('protocol_version', 2)
+            self.addressing = self.config_parameters.get('addressing', 'mac')
 
             self.min_timeout = self.config_parameters.get('min_timeout', 0.5)
             self.max_timeout = self.config_parameters.get('max_timeout', 6)
@@ -121,6 +126,19 @@ class Connector:
         self.observed_min_timeout = min(self.observed_min_timeout, td)
         self.adaptive_timeout = max(new_timeout, max(self.min_timeout, self.observed_min_timeout))
     
+    def _new_response_packet(self):
+        if getattr(self, 'protocol_version', 2) >= 3:
+            return Packet_v3(self.mesh_mode, self.addressing)
+        return Packet(self.mesh_mode, self.short_mac)
+
+    def _response_matches(self, response, request):
+        # v3 sid-addressed: a reply belongs to the request's session. v2: reply's
+        # source/destination MACs mirror the request (the radio-level peer filter).
+        if getattr(self, 'protocol_version', 2) >= 3:
+            return response.get_session() == request.get_session()
+        return (response.get_source() == request.get_destination()
+                and response.get_destination() == self.get_mac())
+
     def send_and_wait_response(self, packet):
         focus_time = self.adaptive_timeout
         packet_size_sent = len(packet.get_content())
@@ -179,12 +197,12 @@ class Connector:
                 self.increase_adaptive_timeout()
                 return error_info, packet_size_sent, packet_size_received, td
 
-            response_packet = Packet(self.mesh_mode, self.short_mac)
+            response_packet = self._new_response_packet()
             if self.debug:
                 print("WAIT_RESPONSE({}) at: {}|| source_reply: {}".format(td, self.adaptive_timeout, received_data))
             try:
                 if response_packet.load(received_data):
-                    if response_packet.get_source() == packet.get_destination() and response_packet.get_destination() == self.get_mac():
+                    if self._response_matches(response_packet, packet):
                         if len(received_data) > response_packet.HEADER_SIZE + 60:  # Hardcoded for only chunks
                             self.decrease_adaptive_timeout(td)
                         if response_packet.get_debug_hops():

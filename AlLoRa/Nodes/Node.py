@@ -1,4 +1,5 @@
 from AlLoRa.Packet import Packet
+from AlLoRa.Packet_v3 import Packet_v3
 from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.utils.debug_utils import print
 from AlLoRa.utils.os_utils import os 
@@ -56,9 +57,18 @@ class Node:
         self.short_mac = self.config.get('short_mac', False)
         self.chunk_size = self.config.get('chunk_size', 235)
 
+        # v3: protocol version + open-mode session addressing.
+        # Defaults keep v2 behavior byte-for-byte (version 2, MAC addressing).
+        self.protocol_version = self.config.get('protocol_version', 2)
+        self.security_mode = self.config.get('security_mode', 'open')
+        self.session_id = self.config.get('session_id', 0)
+        self.addressing = 'sid' if self.protocol_version >= 3 else 'mac'
+
         self.config_connector_dic = self.config.get('connector', None)    #{"freq" : lora_config['freq'], "sf": lora_config['sf']}
         self.config_connector_dic['mesh_mode'] = self.mesh_mode
         self.config_connector_dic['short_mac'] = self.short_mac
+        self.config_connector_dic['protocol_version'] = self.protocol_version
+        self.config_connector_dic['addressing'] = self.addressing
 
         if self.debug:
             print(self.config)
@@ -83,7 +93,21 @@ class Node:
     def get_mesh_mode(self):
         return self.mesh_mode
 
-    def is_for_me(self, packet: Packet):
+    def new_packet(self):
+        """Build an outgoing packet for the negotiated protocol version.
+
+        v3 frames are session-id-addressed (the sid is pre-set here); v2 frames keep
+        MAC addressing. Callers that need MAC fields (v2) set source/destination after.
+        """
+        if self.protocol_version >= 3:
+            packet = Packet_v3(mesh_mode=self.mesh_mode, addressing=self.addressing)
+            packet.set_session(self.session_id)
+            return packet
+        return Packet(self.mesh_mode, self.short_mac)
+
+    def is_for_me(self, packet):
+        if self.protocol_version >= 3:
+            return packet.get_session() == self.session_id
         return packet.get_destination() == self.MAC
 
     def generate_id(self):

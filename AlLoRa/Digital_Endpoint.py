@@ -9,10 +9,11 @@ class Digital_Endpoint:
     PROCESS_CHUNK_STATE = "PROCESS_CHUNK_STATE"
     OK = "OK"
 
-    def __init__(self, config=None, name="N", mac_address="00000000", active=True, 
-                 sleep_mesh=True, asking_frequency=60, listening_time=30, 
+    def __init__(self, config=None, name="N", mac_address="00000000", active=True,
+                 sleep_mesh=True, asking_frequency=60, listening_time=30,
                  MAX_RETRANSMISSIONS_BEFORE_MESH=10, lock_on_file_receive=False,
                  max_listen_time_when_locked=300,
+                 session_id=0,
                  debug=False):
         """
         Initializes a new Digital Endpoint with detailed control over its operational parameters.
@@ -43,6 +44,7 @@ class Digital_Endpoint:
             self.bw = config.get('bw', 125)
             self.cr = config.get('cr', 1)
             self.tx_power = config.get('tx_power', 14)
+            self.session_id = config.get('session_id', session_id)  # v3: sid for this session
         else:
             self.name = name
             self.mac_address = mac_address[-8:]
@@ -58,6 +60,7 @@ class Digital_Endpoint:
             self.bw = 125
             self.cr = 1
             self.tx_power = 14
+            self.session_id = session_id  # v3: sid for this session
 
         self.state = Digital_Endpoint.OK
         self.current_file = None

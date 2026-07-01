@@ -47,11 +47,17 @@ class Requester(Node):
         self.status["SMAC"] = "-"   # Source MAC
         self.source_mac = None
         self.time_request = time()
+        self._wire_chunk_size = None   # v3: sender's chunk_size, read from typed METADATA
 
-    def create_request(self, destination, mesh_active, sleep_mesh):
-        packet = Packet(self.mesh_mode, self.short_mac)
-        packet.set_source(self.connector.get_mac())
-        packet.set_destination(destination)
+    def create_request(self, destination, mesh_active, sleep_mesh, session_id=None):
+        if self.protocol_version >= 3:
+            packet = self.new_packet()          # v3 frame, session-id addressed
+            if session_id is not None:
+                packet.set_session(session_id)
+        else:
+            packet = Packet(self.mesh_mode, self.short_mac)
+            packet.set_source(self.connector.get_mac())
+            packet.set_destination(destination)
         if mesh_active:
             packet.enable_mesh()
             if not sleep_mesh:
@@ -83,7 +89,7 @@ class Requester(Node):
 
     #     return response_packet
     def send_request(self, packet: Packet) -> Packet:
-        if self.mesh_mode:
+        if self.mesh_mode and self.protocol_version < 3:   # v3 mesh uses seq, not a random id
             packet.set_id(self.generate_id())
             if self.debug_hops:
                 packet.enable_debug_hops()
@@ -135,6 +141,7 @@ class Requester(Node):
         if response_packet.get_command() == Packet.METADATA:
             try:
                 metadata = response_packet.get_metadata()
+                self._wire_chunk_size = metadata.get("CHUNK_SIZE")  # v3 carries it; None for v2
                 hop = response_packet.get_hop()
                 length = metadata["LENGTH"]
                 filename = metadata["FILENAME"]
@@ -200,14 +207,18 @@ class Requester(Node):
             t0 = time()
             
             try:
-                packet_request = self.create_request(mac, digital_endpoint.get_mesh(), sleep_mesh)
+                packet_request = self.create_request(mac, digital_endpoint.get_mesh(), sleep_mesh,
+                                                     digital_endpoint.session_id)
 
                 if digital_endpoint.state == "REQUEST_DATA_STATE":
                     if self.debug:
                         print("ASKING METADATA to {}".format(mac))
                     metadata, hop = self.ask_metadata(packet_request)
                     t0 = time()
-                    digital_endpoint.set_metadata(metadata, hop, self.mesh_mode, save_to, self.chunk_size)
+                    # v3 typed METADATA carries the sender's chunk_size; v2 falls back to
+                    # our own configured chunk_size (the matched-config stopgap).
+                    cks = self._wire_chunk_size or self.chunk_size
+                    digital_endpoint.set_metadata(metadata, hop, self.mesh_mode, save_to, cks)
                     if self.debug:
                         print("METADATA from {}: {}".format(mac, metadata))
 
@@ -221,9 +232,11 @@ class Requester(Node):
                         self.status['Chunk'] = digital_endpoint.file_reception_info["total_chunks"] - next_chunk
                         file = digital_endpoint.set_data(data, hop, self.mesh_mode)
                         if file:
-                            final_ok = self.create_request(mac, digital_endpoint.get_mesh(), sleep_mesh)
+                            final_ok = self.create_request(mac, digital_endpoint.get_mesh(),
+                                                           sleep_mesh, digital_endpoint.session_id)
                             final_ok.set_ok()
-                            final_ok.set_source(self.connector.get_mac())
+                            if self.protocol_version < 3:
+                                final_ok.set_source(self.connector.get_mac())
                             sleep(1)
                             self.send_lora(final_ok)
                             self.status['Chunk'] = "DONE"
