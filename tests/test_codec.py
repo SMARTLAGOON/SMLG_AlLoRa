@@ -56,6 +56,15 @@ def test_v2_match_spec_rejects_a_foreign_reply():
     assert spec.matches(_v2("a1a1a1a1", "dddddddd")) is False   # not addressed to us
 
 
+def test_v2_match_spec_matches_on_the_wire():
+    # The same MAC-mirror check, applied to the raw frame prefix (src bytes then dst bytes)
+    # — what a keyless bridge runs at the radio.
+    codec = V2Codec(short_mac=True, my_mac="b2b2b2b2")
+    spec = codec.match_spec(_v2("b2b2b2b2", "a1a1a1a1"))
+    assert spec.matches_wire(codec.frame(_v2("a1a1a1a1", "b2b2b2b2"))) is True
+    assert spec.matches_wire(codec.frame(_v2("cccccccc", "b2b2b2b2"))) is False
+
+
 # --- V3OpenCodec (sid-addressed typed frame + 24-bit integrity) ----------------------------
 
 def _v3_data(sid, chunk):
@@ -89,6 +98,17 @@ def test_v3_match_spec_is_by_session():
     reply_bad = Packet_v3(addressing="sid"); reply_bad.set_session(3); reply_bad.set_ok()
     assert spec.matches(reply_ok) is True
     assert spec.matches(reply_bad) is False
+
+
+def test_v3_match_spec_matches_on_the_wire():
+    # The sid is cleartext at wire offset 0, so the reply-match runs on the prefix — keyless,
+    # and identical for open and secure frames.
+    codec = V3OpenCodec(addressing="sid")
+    req = Packet_v3(addressing="sid"); req.set_session(9); req.ask_metadata()
+    spec = codec.match_spec(req)
+    assert spec.matches_wire(codec.frame(_v3_data(9, b"x"))) is True
+    assert spec.matches_wire(codec.frame(_v3_data(3, b"x"))) is False
+    assert spec.matches_wire(b"") is False
 
 
 # --- V3SecureCodec (the secure pair folded in; session resolved from the cleartext sid) ----

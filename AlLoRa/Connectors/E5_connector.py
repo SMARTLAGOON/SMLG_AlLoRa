@@ -233,13 +233,12 @@ class E5_connector(Connector):
             self.snr = None
     
     # Connector Methods
-    def send(self, packet):
-        data = packet.get_content()
-        hex_data = self.bytes_to_hex(data)
+    def transmit(self, wire):
+        hex_data = self.bytes_to_hex(wire)
         hex_data = hex_data.strip().strip('"')
-        
+
         success = self.send_packet(hex_data)
-        
+
         return success
 
     def recv(self, focus_time=12):

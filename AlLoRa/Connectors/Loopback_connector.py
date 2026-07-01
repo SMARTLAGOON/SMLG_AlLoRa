@@ -52,15 +52,15 @@ class Loopback_connector(Connector):
     def get_mac(self):
         return self.MAC
 
-    def send(self, packet):
-        # The wire carries the framed bytes, exactly as a radio would put on air.
+    def transmit(self, wire):
+        # The wire carries the already-framed bytes, exactly as a radio would put on air.
         if self.loss and self._rng is not None and self._rng.random() < self.loss:
             # Lost in the channel: the transmitter still "sent" fine (returns True),
             # the receiver simply never sees it — its recv will time out and the
             # protocol retransmits.
             self.dropped += 1
             return True
-        self.outbox.put(packet.get_content())
+        self.outbox.put(wire)
         return True
 
     def recv(self, focus_time=12):

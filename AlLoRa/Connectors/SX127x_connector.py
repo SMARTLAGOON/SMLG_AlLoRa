@@ -39,12 +39,12 @@ class SX127x_connector(Connector):
     def get_snr(self):
         return self.lora.get_snr()
 
-    def send(self, packet):
+    def transmit(self, wire):
         if self.debug:
-            print("SEND_PACKET() || packet: {}".format(packet.get_content()))
-        if packet.get_length() <= Connector.MAX_LENGTH_MESSAGE:
+            print("SEND_PACKET() || packet: {}".format(wire))
+        if len(wire) <= Connector.MAX_LENGTH_MESSAGE:
             try:
-                timeout = max(0.5, self.calculate_toa(self.sf, self.bw, self.cr, packet.get_length())*1.1)  # Seconds
+                timeout = max(0.5, self.calculate_toa(self.sf, self.bw, self.cr, len(wire))*1.1)  # Seconds
                 t0 = time.ticks_ms()
                 if self.sf == 12:
                     timeout *= 1.2
@@ -52,7 +52,7 @@ class SX127x_connector(Connector):
                     print("Using timeout: ", timeout, "s to send packet")
                 self.lora.settimeout(timeout)
                 self.lora.setblocking(True)
-                self.lora.send(packet.get_content())  # .encode()
+                self.lora.send(wire)  # .encode()
                 self.lora.setblocking(False)
                 td = time.ticks_ms() - t0
                 if self.debug:

@@ -79,13 +79,13 @@ class SX1262_connector(Connector):
     def get_rssi(self):
         return self.lora.getRSSI()
 
-    def send(self, packet):
+    def transmit(self, wire):
         if self.debug:
-            print("SEND_PACKET() || packet: {}".format(packet.get_content()))
-        if packet.get_length() <= Connector.MAX_LENGTH_MESSAGE:
+            print("SEND_PACKET() || packet: {}".format(wire))
+        if len(wire) <= Connector.MAX_LENGTH_MESSAGE:
             try:
                 self.lora.setBlockingCallback(True)
-                self.lora.send(data=packet.get_content())
+                self.lora.send(data=wire)
                 self.lora.setBlockingCallback(False)
                 return True
             except Exception as e:

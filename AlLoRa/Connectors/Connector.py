@@ -142,11 +142,56 @@ class Connector:
     def set_mesh_mode(self, mesh_mode=False):
         self.mesh_mode = mesh_mode
 
-    def send(self, packet: Packet):
+    def transmit(self, wire):
+        # Pure byte send — the narrowed transport primitive. Concrete connectors override
+        # this (a radio put-on-air, a loopback queue); the base is a stub like recv.
         return None
 
     def recv(self, focus_time=12):
         return None
+
+    def send(self, packet: Packet):
+        # Back-compat: frame via the codec, then transmit the bytes. Connectors now override
+        # transmit(wire); this keeps every send(packet) caller (Source/Node.send_lora) working
+        # and routes them through the same framing home.
+        return self.transmit(self.codec.frame(packet))
+
+    def listen(self, window):
+        # One timed receive window, measured at the radio — the (wire, td) a split-Connector
+        # tunnel bridge would run remotely and report back up (td is the round-trip the
+        # policy layer feeds to Pacing).
+        t0 = time()
+        wire = self.recv(window)
+        td = (time() - t0) / 1000
+        return wire, td
+
+    def exchange(self, wire, window, match_key):
+        """Transmit a frame and wait — at the radio — for the reply that satisfies `match_key`,
+        within a shrinking window. Codec-free and keyless: it matches on the wire prefix
+        (`match_key.matches_wire`), so a dumb tunnel bridge can run it and never ferry a
+        foreign frame across the link. Returns `(reply_wire, td, status)` with status in
+        matched / timeout / exhausted / send_error.
+
+        This is the transport verb a split Connector's Interface will serve (D↓/td↑). The
+        local engine keeps composing transmit/listen with the codec directly, so its
+        corrupt-vs-foreign error taxonomy (which needs the codec) is unchanged.
+        """
+        if not self.transmit(wire):
+            return None, 0, "send_error"
+        focus = window
+        td = 0
+        while focus > 0:
+            wire_in, td = self.listen(focus)
+            if not wire_in:
+                return None, td, "timeout"
+            if match_key.matches_wire(wire_in):
+                return wire_in, td, "matched"
+            # A frame whose addressing bytes aren't ours (foreign, or corruption that hit the
+            # addressing prefix): keep waiting within the window rather than ferrying it up.
+            focus = window - td
+            if focus < self.min_timeout:
+                return None, td, "exhausted"
+        return None, td, "exhausted"
 
     def increase_adaptive_timeout(self):
         self.pacing.on_timeout()
@@ -156,12 +201,13 @@ class Connector:
     
     def send_and_wait_response(self, packet):
         focus_time = self.adaptive_timeout
-        packet_size_sent = len(packet.get_content())
+        wire = self.codec.frame(packet)   # framing goes live on the send path here (was in self.send)
+        packet_size_sent = len(wire)
         # How a reply is matched to this request (version/posture-agnostic; the sid or MAC
         # mirror the request). Built once — the request doesn't change across the wait loop.
         match = self.codec.match_spec(packet)
         try:
-            send_success = self.send(packet)
+            send_success = self.transmit(wire)
             if not send_success:
                 error_info = {
                     "type": "SEND_ERROR",
@@ -185,9 +231,8 @@ class Connector:
             return error_info, packet_size_sent, 0, 0
 
         while focus_time > 0:
-            t0 = time()
             try:
-                received_data = self.recv(focus_time)
+                received_data, td = self.listen(focus_time)   # one timed window at the radio
             except Exception as e:
                 error_info = {
                     "type": "EXCEPTION",
@@ -199,7 +244,6 @@ class Connector:
                     print(error_info["message"])
                 return error_info, packet_size_sent, 0, 0
 
-            td = (time() - t0) / 1000  # Calculate the time difference in seconds
             packet_size_received = len(received_data) if received_data else 0
 
             if not received_data:

@@ -26,33 +26,55 @@ receive side by the sid on the wire. So the engine calls `frame`/`deframe` ident
 open and secure; the posture never leaks up. The reply match is likewise keyless (v3: the
 cleartext sid), which is what will let it move down to the radio later without keys.
 """
+import struct
+
 from AlLoRa.Packet import Packet
 from AlLoRa.Packet_v3 import Packet_v3
 
 
 class _MacMatchSpec:
     """v2: a reply belongs to our request when the MACs mirror — it came *from* the peer we
-    asked (`reply.src == request.dst`) and is addressed *to* us (`reply.dst == my_mac`)."""
+    asked (`reply.src == request.dst`) and is addressed *to* us (`reply.dst == my_mac`).
 
-    def __init__(self, peer_mac, my_mac):
+    `matches` works on the parsed packet; `matches_wire` does the same check on the raw
+    wire prefix (src bytes then dst bytes) so a keyless bridge can apply it at the radio."""
+
+    def __init__(self, peer_mac, my_mac, short_mac=True):
         self._peer = peer_mac
         self._me = my_mac
+        # The wire prefix for at-the-radio matching: src[0:n] then dst[n:2n]. Short MAC packs
+        # each address as a 4-byte compressed int (the v2 header's `4s` fields).
+        if short_mac:
+            self._peer_bytes = struct.pack('I', int(peer_mac, 16))
+            self._me_bytes = struct.pack('I', int(my_mac, 16))
+        else:
+            self._peer_bytes = peer_mac.encode()
+            self._me_bytes = my_mac.encode()
 
     def matches(self, reply):
         return reply.get_source() == self._peer and reply.get_destination() == self._me
+
+    def matches_wire(self, wire):
+        n = len(self._peer_bytes)
+        return (len(wire) >= 2 * n
+                and wire[0:n] == self._peer_bytes
+                and wire[n:2 * n] == self._me_bytes)
 
 
 class _SidMatchSpec:
     """v3: a reply belongs to our request when they share a session id. Keyless and
     posture-independent (the sid is cleartext at offset 0 in open *and* secure frames), so
-    the same spec matches either, and the check can later run on the wire prefix at the
-    radio without keys."""
+    the same spec matches either, and `matches_wire` runs the check on the wire prefix at
+    the radio without keys."""
 
     def __init__(self, sid):
         self._sid = sid
 
     def matches(self, reply):
         return reply.get_session() == self._sid
+
+    def matches_wire(self, wire):
+        return len(wire) >= 1 and wire[0] == self._sid
 
 
 class V2Codec:
@@ -73,7 +95,7 @@ class V2Codec:
             return None
 
     def match_spec(self, request):
-        return _MacMatchSpec(request.get_destination(), self._my_mac)
+        return _MacMatchSpec(request.get_destination(), self._my_mac, self._short_mac)
 
 
 class V3OpenCodec:
