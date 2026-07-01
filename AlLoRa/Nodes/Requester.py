@@ -1,6 +1,7 @@
 import gc
 from AlLoRa.Nodes.Node import Node, Packet
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
+from AlLoRa.Pacing import Pacing
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, sleep_ms
 from AlLoRa.utils.debug_utils import print
 from AlLoRa.utils.os_utils import os
@@ -17,22 +18,14 @@ class Requester(Node):
         
         self.debug_hops = debug_hops
 
-        self.min_sleep_time, self.max_sleep_time = self.calculate_sleep_time_bounds()
-        self.NEXT_ACTION_TIME_SLEEP = self.min_sleep_time
-
-        #self.NEXT_ACTION_TIME_SLEEP = NEXT_ACTION_TIME_SLEEP
-        self.observed_min_sleep = float('inf')
-        self.observed_max_sleep = 0
-        self.sleep_delta = 0.1  # Adjustable delta for dynamic sleep adjustments
-        self.max_sleep_time = max_sleep_time  # Maximum sleep time
-        self.successful_interactions_required = successful_interactions_required
-        self.successful_interactions_count = 0  # Counter for successful interactions
-        self.minimum_sleep_found = False  # Flag to indicate minimum sleep time found
-        self.sleep_just_decreased = False  # Flag to indicate sleep time just changed
-        self.last_sleep_time = self.NEXT_ACTION_TIME_SLEEP
-        self.failure_count = 0  # Track consecutive failures
-        self.max_failures = 3  # Maximum allowed consecutive failures
-        self.exponential_backoff_threshold = 0.5  # Threshold for aggressive increase in sleep time
+        # The inter-request sleep controller lives in Pacing now (policy on the logic-holder,
+        # mirroring the adaptive-window extraction). Pacing is fed the sf/bw-derived bounds;
+        # the init cap is the caller's `max_sleep_time`, not the ToA-derived max — preserving
+        # the original two-step init, where calculate_sleep_time_bounds' max was overwritten.
+        min_sleep, _ = self.calculate_sleep_time_bounds()
+        self.pacing = Pacing(successful_interactions_required=successful_interactions_required,
+                             max_failures=3, exponential_backoff_threshold=0.5)
+        self.pacing.set_sleep_bounds(min_sleep, max_sleep_time)
 
         if self.config:
             self.result_path = self.config.get('result_path', "Results")
@@ -48,6 +41,16 @@ class Requester(Node):
         self.source_mac = None
         self.time_request = time()
         self._wire_chunk_size = None   # v3: sender's chunk_size, read from typed METADATA
+
+    # `NEXT_ACTION_TIME_SLEEP` now lives in `Pacing.sleep`; this property keeps every call
+    # site working (the loop's `finally`, `Gateway.check_digital_endpoints`, examples).
+    @property
+    def NEXT_ACTION_TIME_SLEEP(self):
+        return self.pacing.sleep
+
+    @NEXT_ACTION_TIME_SLEEP.setter
+    def NEXT_ACTION_TIME_SLEEP(self, value):
+        self.pacing.sleep = value
 
     def create_request(self, destination, mesh_active, sleep_mesh, session_id=None):
         if self.protocol_version >= 3:
@@ -260,12 +263,7 @@ class Requester(Node):
                     self.sf_trial = False
                     self.backup_config()
 
-                self.successful_interactions_count += 1
-                if self.successful_interactions_count >= self.successful_interactions_required:
-                    self.last_sleep_time = self.NEXT_ACTION_TIME_SLEEP
-                    self.decrease_sleep_time()
-                    self.sleep_just_decreased = True
-                    self.failure_count = 0
+                self.pacing.on_success()
 
             except Exception as e:
                 if self.debug:
@@ -279,24 +277,8 @@ class Requester(Node):
                         self.sf_trial = False
 
                 dt = (time() - t0) / 1000
-                
-                self.increase_sleep_time()
-                self.successful_interactions_count = 0
-                self.failure_count += 1
-                if self.sleep_just_decreased:
-                    self.sleep_just_decreased = False
-                    self.minimum_sleep_found = True
-                    self.NEXT_ACTION_TIME_SLEEP = self.last_sleep_time
-                    self.observed_min_sleep = self.last_sleep_time
-                    if self.debug:
-                        print("Minimum sleep time found: ", self.NEXT_ACTION_TIME_SLEEP)
-                
-                if self.failure_count >= self.max_failures:
-                    self.observed_min_sleep = self.NEXT_ACTION_TIME_SLEEP
-                    if self.debug:
-                        print("Updated minimum sleep time to higher value: ", self.observed_min_sleep)
-                    self.NEXT_ACTION_TIME_SLEEP = self.observed_min_sleep
-                    self.failure_count = 0
+
+                self.pacing.on_failure()
 
             finally:
                 if self.subscribers:
@@ -307,7 +289,7 @@ class Requester(Node):
                 dt = (time() - t0) / 1000
                 if self.debug:
                     print("DT: ", dt, "Sleep time: ", self.NEXT_ACTION_TIME_SLEEP)
-                sleep_time = max(0, self.NEXT_ACTION_TIME_SLEEP)
+                sleep_time = self.pacing.next_sleep()
                 if self.debug:
                     print("Sleep time: ", sleep_time)
                 if sleep_time > 0:
@@ -405,43 +387,11 @@ class Requester(Node):
                 if try_for <= 0:
                     return False
 
-    def increase_sleep_time(self):
-        if self.NEXT_ACTION_TIME_SLEEP < self.exponential_backoff_threshold:
-            self.NEXT_ACTION_TIME_SLEEP *= 2  # Exponential increase
-        else:
-            random_factor = int.from_bytes(os.urandom(2), "little") / 2**16
-            self.NEXT_ACTION_TIME_SLEEP = min(self.NEXT_ACTION_TIME_SLEEP * (1 + random_factor), self.max_sleep_time)
-        
-        if self.debug:
-            print("Increased sleep time to:", self.NEXT_ACTION_TIME_SLEEP)
-
-    def decrease_sleep_time(self):
-        smoothing_factor = 0.2
-        absolute_min_sleep = 0.01
-        new_sleep_time = self.NEXT_ACTION_TIME_SLEEP * (1 - smoothing_factor)
-        new_sleep_time = max(absolute_min_sleep, new_sleep_time)
-        
-        # Update observed minimum if the new sleep time is lower
-        if self.minimum_sleep_found and new_sleep_time < self.observed_min_sleep:
-            self.observed_min_sleep = new_sleep_time
-        elif not self.minimum_sleep_found:
-            self.observed_min_sleep = new_sleep_time
-        
-        self.NEXT_ACTION_TIME_SLEEP = max(new_sleep_time, self.observed_min_sleep)
-        if self.debug:
-            print("Decreased sleep time to:", self.NEXT_ACTION_TIME_SLEEP)
-
     def reset_sleep_time(self):
-        self.min_sleep_time, self.max_sleep_time = self.calculate_sleep_time_bounds()
-        self.NEXT_ACTION_TIME_SLEEP = self.min_sleep_time
-        self.observed_min_sleep = float('inf')
-        self.observed_max_sleep = 0
-        self.sleep_delta = 0.1
-        self.successful_interactions_count = 0
-        self.minimum_sleep_found = False
-        self.sleep_just_decreased = False
-        self.last_sleep_time = self.NEXT_ACTION_TIME_SLEEP
-        self.failure_count = 0
+        # Recompute the sf/bw-derived bounds (they may have changed with the RF config) and
+        # hand them to Pacing, which resets the controller to a fresh hunt. Unlike init, the
+        # max here is the ToA-derived one, matching the original reset_sleep_time.
+        self.pacing.set_sleep_bounds(*self.calculate_sleep_time_bounds())
         if self.debug:
             print("Reset sleep time to:", self.NEXT_ACTION_TIME_SLEEP)
 
