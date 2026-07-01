@@ -1,5 +1,6 @@
 from AlLoRa.Packet import Packet
 from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Pacing import Pacing
 import gc
 from math import ceil
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, sleep_ms
@@ -12,8 +13,26 @@ class Connector:
 
     def __init__(self):
         self.MAC = "00000000"
-        self.observed_min_timeout = float('inf')
+        self.pacing = Pacing()   # one home for the adaptive receive window (was adaptive_timeout)
         self.debug = False
+
+    # `adaptive_timeout` / `observed_min_timeout` now live in `Pacing`; these properties keep
+    # every existing call site (the send loop, the Source's pokes, the tunnels) working.
+    @property
+    def adaptive_timeout(self):
+        return self.pacing.window
+
+    @adaptive_timeout.setter
+    def adaptive_timeout(self, value):
+        self.pacing.window = value
+
+    @property
+    def observed_min_timeout(self):
+        return self.pacing.observed_min_timeout
+
+    @observed_min_timeout.setter
+    def observed_min_timeout(self, value):
+        self.pacing.observed_min_timeout = value
 
     def config(self, config_json):
         # JSON Example:
@@ -73,6 +92,7 @@ class Connector:
         max_toa = min_toa * 2
         self.min_timeout = min_toa + self.timeout_delta # Convert ms to seconds
         self.max_timeout = max_toa + self.timeout_delta  # Convert ms to seconds and add delta for processing times
+        self.pacing.set_bounds(self.min_timeout, self.max_timeout)   # bounds change -> window resets to max (as before)
         if self.debug:
             print("Updated timeouts: Min: {} s, Max: {} s".format(self.min_timeout, self.max_timeout))
 
@@ -117,14 +137,10 @@ class Connector:
         return None
 
     def increase_adaptive_timeout(self):
-        random_factor = int.from_bytes(urandom(2), "little") / 2**16
-        self.adaptive_timeout = min(self.adaptive_timeout * (1 + random_factor), self.max_timeout)
+        self.pacing.on_timeout()
 
     def decrease_adaptive_timeout(self, td):
-        smoothing_factor = 0.2
-        new_timeout = self.adaptive_timeout * (1 - smoothing_factor) + td * smoothing_factor
-        self.observed_min_timeout = min(self.observed_min_timeout, td)
-        self.adaptive_timeout = max(new_timeout, max(self.min_timeout, self.observed_min_timeout))
+        self.pacing.on_reply(td)
     
     def _new_response_packet(self):
         if getattr(self, 'protocol_version', 2) >= 3:
