@@ -170,6 +170,65 @@ def test_secure_frame_without_a_session_is_a_wiring_error():
         codec.frame(_v3_data(SID, b"x"))
 
 
+# --- V3SecureCodec is hybrid: MAC-addressed handshake CTRL frames go open ------------------
+# First contact bootstraps the very session the data path needs, so the secure codec also
+# speaks the open MAC handshake frame. Framing routes by the packet's addressing; parsing
+# try-parses (secure sid first, then open MAC CTRL) with no new wire field.
+
+def _handshake_ctrl(src, dst, payload=b"ephemeral-pubkey"):
+    p = Packet_v3(addressing="mac")
+    p.set_source(src)
+    p.set_destination(dst)
+    p.set_kind(Packet_v3.CTRL)
+    p.set_payload(payload)
+    return p
+
+
+def test_secure_codec_frames_a_handshake_ctrl_open_not_sealed():
+    codec = V3SecureCodec(lambda sid: None, detect_aead(), my_mac="b2b2b2b2")
+    hs = _handshake_ctrl("a1a1a1a1", "b2b2b2b2")
+    # MAC-addressed -> framed open (get_content), so a codec with no sessions can still send it
+    assert codec.frame(hs) == hs.get_content()
+    got = codec.deframe(codec.frame(hs))
+    assert got is not None
+    assert got.get_command() == Packet_v3.CTRL
+    assert got.get_payload() == b"ephemeral-pubkey"
+    assert got.get_source() == "a1a1a1a1"
+
+
+def test_secure_codec_disambiguates_secure_data_from_a_handshake_frame():
+    aead = detect_aead()
+    sender = Session(sid=SID, key=KEY,
+                     send_nonce_prefix=NONCE_PREFIX, recv_nonce_prefix=REVERSE_PREFIX)
+    receiver = Session(sid=SID, key=KEY,
+                       send_nonce_prefix=REVERSE_PREFIX, recv_nonce_prefix=NONCE_PREFIX)
+    send_codec = V3SecureCodec(lambda sid: sender, aead)
+    recv_codec = V3SecureCodec(lambda sid: receiver, aead, my_mac="b2b2b2b2")
+
+    # the one codec deframes both a sealed data frame...
+    got_secure = recv_codec.deframe(send_codec.frame(_v3_data(SID, b"reading")))
+    assert got_secure is not None and got_secure.get_payload() == b"reading"
+    # ...and an open MAC handshake frame addressed to it
+    got_hs = recv_codec.deframe(_handshake_ctrl("a1a1a1a1", "b2b2b2b2").get_content())
+    assert got_hs is not None and got_hs.get_command() == Packet_v3.CTRL
+
+
+def test_secure_codec_ignores_a_handshake_frame_for_someone_else():
+    codec = V3SecureCodec(lambda sid: None, detect_aead(), my_mac="b2b2b2b2")
+    # a well-formed handshake frame, but addressed to a different node
+    assert codec.deframe(_handshake_ctrl("a1a1a1a1", "cccccccc").get_content()) is None
+
+
+def test_secure_codec_match_spec_routes_by_addressing():
+    codec = V3SecureCodec(lambda sid: None, detect_aead(), my_mac="b2b2b2b2")
+    # sid request -> matched by session
+    assert codec.match_spec(_v3_data(9, b"x")).matches(_v3_data(9, b"y")) is True
+    assert codec.match_spec(_v3_data(9, b"x")).matches(_v3_data(3, b"y")) is False
+    # MAC handshake request -> matched by the mirrored MACs
+    req = _handshake_ctrl("b2b2b2b2", "a1a1a1a1")            # I (b2) ask peer a1
+    assert codec.match_spec(req).matches(_handshake_ctrl("a1a1a1a1", "b2b2b2b2")) is True
+
+
 # --- build_codec (picks the implementation for version x posture) --------------------------
 
 def test_build_codec_picks_v2_for_version_2():

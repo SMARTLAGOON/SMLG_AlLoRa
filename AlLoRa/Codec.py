@@ -122,17 +122,30 @@ class V3OpenCodec:
 
 
 class V3SecureCodec:
+    """Secure posture, but *hybrid*: it speaks sid-addressed data frames sealed, and
+    MAC-addressed first-contact/handshake CTRL frames open (they carry public keys and no
+    session exists yet). A node has to hold both because first contact bootstraps the very
+    session the data path needs — and a Gateway does it with different Sources over its
+    lifetime. Framing is routed by the packet's own addressing; parsing try-parses (the
+    ADRs define both frame shapes but no explicit discriminator), using the AEAD tag / the
+    24-bit integrity already on the wire as the validity check — no new wire field."""
 
-    def __init__(self, session_resolver, aead, mesh_mode=False, addressing="sid"):
+    def __init__(self, session_resolver, aead, mesh_mode=False, addressing="sid",
+                 my_mac="00000000"):
         self._resolve = session_resolver   # sid -> Session | None
         self._aead = aead
         self._mesh = mesh_mode
         self._addressing = addressing
+        self._my_mac = my_mac
 
-    def _new(self):
-        return Packet_v3(mesh_mode=self._mesh, addressing=self._addressing)
+    def _new(self, addressing):
+        return Packet_v3(mesh_mode=self._mesh, addressing=addressing)
 
     def frame(self, packet):
+        # MAC-addressed handshake frames go on the wire open (public keys, nothing secret);
+        # established sid-addressed frames are sealed.
+        if packet.addressing == "mac":
+            return packet.get_content()
         session = self._resolve(packet.get_session())
         if session is None:
             # Sealing a frame needs the peer's session; its absence is a wiring error, not a
@@ -144,17 +157,31 @@ class V3SecureCodec:
     def deframe(self, wire):
         if not wire:
             return None
-        sid = wire[0]                      # cleartext, offset 0 (secure header is "!BBBH")
-        session = self._resolve(sid)
-        if session is None:
-            return None                    # unknown session -> unauthenticatable -> reject
-        p = self._new()
+        # Common case first: a secure sid-addressed frame. A verifying 4-byte AEAD tag is a
+        # strong "yes, secure" — a handshake frame won't have a valid tag under a session key.
+        session = self._resolve(wire[0])           # wire[0] = sid (or, for a MAC frame, a MAC byte)
+        if session is not None:
+            p = self._new("sid")
+            try:
+                if p.load_secure(wire, session, self._aead):
+                    return p
+            except Exception:
+                pass
+        # Otherwise an open MAC-addressed handshake CTRL frame — accepted only if its 24-bit
+        # integrity checks, it is a CTRL frame, and it is addressed to me.
+        h = self._new("mac")
         try:
-            return p if p.load_secure(wire, session, self._aead) else None
+            if (h.load(wire) and h.get_command() == Packet_v3.CTRL
+                    and h.get_destination() == self._my_mac):
+                return h
         except Exception:
-            return None
+            pass
+        return None
 
     def match_spec(self, request):
+        # A handshake round is MAC-mirrored (like v2); an established round matches by sid.
+        if request.addressing == "mac":
+            return _MacMatchSpec(request.get_destination(), self._my_mac, short_mac=True)
         return _SidMatchSpec(request.get_session())
 
 
@@ -169,6 +196,6 @@ def build_codec(protocol_version=2, addressing="mac", mesh_mode=False, short_mac
     if protocol_version >= 3:
         if (security_mode in ("secure", "strict")
                 and session_resolver is not None and aead is not None):
-            return V3SecureCodec(session_resolver, aead, mesh_mode, addressing)
+            return V3SecureCodec(session_resolver, aead, mesh_mode, addressing, my_mac)
         return V3OpenCodec(mesh_mode, addressing)
     return V2Codec(mesh_mode, short_mac, my_mac)
