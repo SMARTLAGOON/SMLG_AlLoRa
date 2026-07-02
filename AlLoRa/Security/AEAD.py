@@ -107,14 +107,28 @@ def _detect_ctr():
     return _cryptography_ctr() or _ucryptolib_ctr()
 
 
+def _self_test(aead):
+    """Confirm the backend actually seals and opens. Importing ``ucryptolib`` does not prove
+    AES-CTR is compiled in (it needs the CTR build flag), so a backend that *looks* present
+    can still throw on first use — a one-shot round-trip catches that here."""
+    try:
+        key = bytes(16)
+        sealed = aead.seal(key, key, bytes(12), b"", b"probe")
+        return aead.open(key, key, bytes(12), b"", sealed) == b"probe"
+    except Exception:
+        return False
+
+
 def detect_aead():
-    """Return an AEAD backed by native AES-CTR, or None if this platform has none.
+    """Return an AEAD backed by working native AES-CTR, or None if this platform has none.
 
     None is the graceful-degradation signal: secure mode is unavailable and the caller
     decides posture — an operational (registered) node must refuse to run, a test node may
-    fall back to open mode.
+    fall back to open mode. The backend is *self-tested* before it is returned, so a platform
+    where AES-CTR imports but is not compiled in degrades cleanly instead of crashing later.
     """
     ctr = _detect_ctr()
     if ctr is None:
         return None
-    return Ctr_hmac_aead(ctr)
+    aead = Ctr_hmac_aead(ctr)
+    return aead if _self_test(aead) else None

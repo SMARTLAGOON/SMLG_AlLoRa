@@ -11,7 +11,7 @@ caught — which survive a later byte-layout review unchanged.
 verifies the tag *before* decrypting, so a forged frame never yields plaintext. Tests run
 against the platform-detected backend (``detect_aead()``), exercising the real path.
 """
-from AlLoRa.Security.AEAD import detect_aead
+from AlLoRa.Security.AEAD import detect_aead, Ctr_hmac_aead, _self_test
 
 ENC_KEY = bytes(range(16))          # AES-128 key
 MAC_KEY = bytes(range(16, 32))      # separate HMAC key
@@ -84,3 +84,25 @@ def test_empty_plaintext_seals_to_just_the_tag():
     sealed = aead.seal(ENC_KEY, MAC_KEY, NONCE, AAD, b"")
     assert len(sealed) == 4
     assert aead.open(ENC_KEY, MAC_KEY, NONCE, AAD, sealed) == b""
+
+
+def test_detect_aead_returns_a_self_tested_working_backend():
+    # On any platform where detect_aead returns non-None, the backend must actually work.
+    aead = detect_aead()
+    assert aead is not None            # CPython has the cryptography backend
+    assert _self_test(aead) is True
+
+
+def test_self_test_rejects_a_backend_whose_ctr_throws():
+    # Mirrors ucryptolib present but without the CTR build flag: import "succeeds", first use
+    # throws. _self_test must catch it so detect_aead can degrade to open instead of crashing.
+    def broken_ctr(key, nonce, data):
+        raise ValueError("AES-CTR not compiled in")
+    assert _self_test(Ctr_hmac_aead(broken_ctr)) is False
+
+
+def test_self_test_rejects_a_backend_that_corrupts():
+    # A backend that returns wrong bytes (not just throws) also fails the round-trip.
+    def bad_ctr(key, nonce, data):
+        return bytes(len(data))        # zeros — round-trip won't recover the plaintext
+    assert _self_test(Ctr_hmac_aead(bad_ctr)) is False
