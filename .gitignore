@@ -5,4 +5,5 @@ __pycache__/
 .pytest_cache/
 .vscode/
 manifest.py
-!firmware/**/manifest.py   # the firmware build recipe's board manifests must be tracked
+# the firmware build recipe's board manifests must be tracked
+!firmware/**/manifest.py
