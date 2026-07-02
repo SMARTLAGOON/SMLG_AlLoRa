@@ -32,8 +32,10 @@ target (they're coupled — a MicroPython release supports specific ESP-IDF vers
 
 1. If it's a **new modem**, vendor its driver under `drivers/<name>/` (pin the exact version).
 2. Add `targets/<device>-<modem>/` with `boards/<BOARD>/` (the board overlay) and `modules/`
-   (board helpers). Enable `MICROPY_PY_UCRYPTOLIB_CTR` in `mpconfigboard.h` and `require("hmac")`
-   in `manifest.py` if the target runs **secure** mode.
+   (board helpers). For **secure** mode, enable native AES-CTR in `mpconfigboard.h` and
+   `require("hmac")` in `manifest.py`. The CTR flag is `MICROPY_PY_CRYPTOLIB_CTR` on MicroPython
+   ≥ v1.21 (renamed from `MICROPY_PY_UCRYPTOLIB_CTR`); define both to be version-safe. Get it
+   wrong and `detect_aead()` returns None → the node silently degrades to open.
 3. Add a row to the workflow matrix (target dir, board, driver, MicroPython/ESP-IDF versions).
 
 That's the whole "which MicroPython, which modem, which device" decision — one folder + one
