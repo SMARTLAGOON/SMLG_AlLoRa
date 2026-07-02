@@ -126,8 +126,8 @@ class V3SecureCodec:
     MAC-addressed first-contact/handshake CTRL frames open (they carry public keys and no
     session exists yet). A node has to hold both because first contact bootstraps the very
     session the data path needs — and a Gateway does it with different Sources over its
-    lifetime. Framing is routed by the packet's own addressing; parsing try-parses (the
-    ADRs define both frame shapes but no explicit discriminator), using the AEAD tag / the
+    lifetime. Framing is routed by the packet's own addressing; parsing try-parses (the wire
+    format has both frame shapes but no marker to tell them apart), using the AEAD tag / the
     24-bit integrity already on the wire as the validity check — no new wire field."""
 
     def __init__(self, session_resolver, aead, mesh_mode=False, addressing="sid",

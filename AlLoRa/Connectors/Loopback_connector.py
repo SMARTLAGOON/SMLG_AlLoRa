@@ -8,11 +8,11 @@ from AlLoRa.utils.debug_utils import print
 class Loopback_connector(Connector):
     """An in-memory `Connector` for testing the protocol on CPython, with no radio.
 
-    The `Connector` is the v3 transport seam (ADR 0001 §2): the protocol engine
-    (`Source` / `Collector`) talks only to `send` / `recv` / `send_and_wait_response`,
-    never to a chip. This implementation backs that contract with a pair of in-process
-    queues instead of a radio, so a `Source` and a `Collector` can run a full file
-    transfer in a test — the proof that the seam is clean.
+    The `Connector` is the v3 transport seam: the protocol engine (`Source` / `Collector`)
+    talks only to `send` / `recv` / `send_and_wait_response`, never to a chip. This
+    implementation backs that contract with a pair of in-process queues instead of a radio,
+    so a `Source` and a `Collector` can run a full file transfer in a test — the proof that
+    the seam is clean.
 
     Build a connected pair with `Loopback_connector.create_pair(mac_a, mac_b)`:
     whatever one end `send`s, the other end `recv`s. The link is in-order; pass a

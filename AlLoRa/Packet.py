@@ -177,8 +177,8 @@ class Packet:
         self.payload = chunk
 
     def set_v3_beacon(self, on=True):
-        # ADR 0003 §5: a v3-capable node sets v2's freed spare bit 2 as a beacon a vanilla
-        # v2 peer ignores. Registered/echoing peers upgrade; unknown peers stay v2.
+        # A v3-capable node sets v2's freed spare bit 2 as a beacon a vanilla v2 peer ignores.
+        # Registered/echoing peers upgrade to v3; unknown peers stay v2 (retro-compat).
         self.v3_beacon = on
 
     def get_v3_beacon(self):

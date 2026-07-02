@@ -56,8 +56,9 @@ class Node:
         # Custody of secure Sessions (per-peer, keyed by sid) + the per-frame AEAD backend.
         # Imported lazily so an open-mode node never pulls in the crypto modules. If no backend
         # is available the node degrades to open here; a production node should instead refuse
-        # to run (anti-downgrade, ADR 0006) — that operational-vs-test distinction is a later
-        # concern. Handshake wiring (populating the store on first contact) is the next step.
+        # to run — a registered secure node must never silently fall back to plaintext. That
+        # operational-vs-test distinction is a later concern; handshake wiring (populating the
+        # store on first contact) is the next step.
         from AlLoRa.Security.Session_store import RAM_session_store
         from AlLoRa.Security.AEAD import detect_aead
         self.session_store = RAM_session_store()
