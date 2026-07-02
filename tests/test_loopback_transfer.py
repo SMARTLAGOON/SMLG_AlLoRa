@@ -3,7 +3,7 @@
 A `Source` serves a multi-chunk file to a `Collector` (the `Requester` preset)
 over an in-memory `Loopback_connector`, on CPython, with no radios.
 
-This is the first v3 test (ADR 0001 §2, handoff "the one next step"). It proves the
+This is the first v3 test — it proves the
 transport seam is clean: the protocol engine depends only on the narrow `Connector`
 interface, so substituting a fake connector drives an end-to-end transfer in CI — and,
 with the connector's loss injection, exercises the stop-and-wait retransmission path.

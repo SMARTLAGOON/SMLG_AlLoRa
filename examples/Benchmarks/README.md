@@ -1,9 +1,8 @@
 # v2 baseline benchmark harness
 
 Measures the **v2 wire's** end-to-end throughput / success / retransmissions on two
-T3S3, so the v3 wire-format decision ([ADR 0003](../../../docs/adr/0003-v3-wire-format-and-negotiation.md))
-is made against real numbers — the +1-header-byte and DATA-index calls are
-**gated on this baseline**, not on arithmetic.
+T3S3, so the v3 wire-format decision is made against real numbers — the +1-header-byte
+and DATA-index calls are **gated on this baseline**, not on arithmetic.
 
 > Run it from the deployed **v2.0.0** tag for a pure v2 baseline (the harness uses
 > only public `Source`/`Requester`/`AlLoRa_File` APIs that exist on both v2 and the
@@ -44,7 +43,7 @@ is made against real numbers — the +1-header-byte and DATA-index calls are
    ```
 
 Keep the capture files — they are the recorded v2 baseline the merge gate compares
-against (ADR 0001 acceptance §2).
+against (v3 must be ≥ v2 before it ships).
 
 ## Notes
 - Both nodes must share the same SF/BW/CR/freq to hear each other; the Requester's

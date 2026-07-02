@@ -1,4 +1,4 @@
-"""Tests for the benchmark log parser (CPython-side, ADR 0003 decision gate)."""
+"""Tests for the benchmark log parser (CPython-side — the v2-baseline decision gate)."""
 from examples.Benchmarks.parse_benchmark import parse_line, parse_benchmark
 
 SAMPLE = """\

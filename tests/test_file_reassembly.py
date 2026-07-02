@@ -1,4 +1,4 @@
-"""Reassembly integrity — the corruption case (ADR 0001 §6).
+"""Reassembly integrity — the silent-corruption case.
 
 v2's `add_chunk(order, chunk)` ignored `order` and appended in arrival order, so a
 file only reassembled correctly if every chunk arrived exactly once and in sequence.

@@ -7,7 +7,7 @@ feed it to ../parse_benchmark.py.
 
 Run one SF per session: set `sf` in this folder's LoRa.json (and match it on the
 Requester), flash, capture, then change SF and repeat (e.g. SF7 / SF11 / SF12).
-Establishes the v2 baseline that the v3 wire-format call is gated on (ADR 0003).
+Establishes the v2 baseline the v3 wire-format call is gated on (measured, not arithmetic).
 """
 import gc
 
