@@ -1,6 +1,7 @@
 import gc
 from os import urandom
 from AlLoRa.Nodes.Node import Node, Packet
+from AlLoRa.Packet_v3 import Packet_v3
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep_ms
 from AlLoRa.utils.debug_utils import print
@@ -91,18 +92,31 @@ class Source(Node):
         payload = request.get_payload()
         peer = request.get_source()
         if payload and payload[0] == Node._HS_INIT:
+            # A repeated INIT (our HELLO was lost) just makes a fresh ephemeral — the latest
+            # one is what the Collector will accept, so the two ends stay in step.
             self._hs_state, hello = initiator_hello(urandom)
             return self._ctrl_packet(peer, Node._HS_HELLO, hello)
-        if payload and payload[0] == Node._HS_WELCOME and self._hs_state is not None:
-            session = initiator_complete(self._hs_state, payload[1:])
-            self.session_store.put(session)
-            self._hs_state = None
+        if payload and payload[0] == Node._HS_WELCOME:
+            if self._hs_state is not None:
+                session = initiator_complete(self._hs_state, payload[1:])
+                self.session_store.put(session)
+                self._hs_state = None
+            # If the state is already cleared, a prior WELCOME completed and its ACK was lost;
+            # re-ACK idempotently so the Collector's retransmit still lands.
             return self._ctrl_packet(peer, Node._HS_ACK)
         return None
 
     def _handshake_responder(self, request):
         # respond()-compatible handler: build the handshake reply and send it.
         self.send_response(self.answer_handshake(request))
+
+    def _respond_handler(self, packet):
+        # During a secure transfer the Source may still get a first-contact handshake CTRL
+        # (e.g. the Collector re-handshaking); route those to the handshake, data to serving.
+        if packet.get_command() == Packet_v3.CTRL:
+            self.send_response(self.answer_handshake(packet))
+        else:
+            self._serve(packet)
 
     def _serve(self, packet):
         # The Source's responder handler: build the reply for this request, send it, and
@@ -118,7 +132,7 @@ class Source(Node):
     def send_file(self, timeout=float('inf')):
         t0 = time() # Start time in ms
         while not self.file.sent:
-            packet = self.respond(self._serve)
+            packet = self.respond(self._respond_handler)
             if packet is None and self.sf_trial:
                 self.sf_trial -= 1
                 if self.sf_trial <= 0:

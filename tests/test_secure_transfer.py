@@ -53,7 +53,8 @@ def _handshake_sessions(sid):
     return session_i, session_r
 
 
-def _run_secure_transfer(tmp_path, source_conn, collector_conn, payload, filename):
+def _run_secure_transfer(tmp_path, source_conn, collector_conn, payload, filename,
+                         pre_share=True):
     result_path = str(tmp_path / "Results")
     config_file = str(tmp_path / "LoRa.json")
     _write_config(config_file, result_path)
@@ -65,10 +66,12 @@ def _run_secure_transfer(tmp_path, source_conn, collector_conn, payload, filenam
     endpoint = Digital_Endpoint(name="src", mac_address=SOURCE_MAC,
                                 active=True, session_id=SESSION_ID)
 
-    # pre-share first contact: each end holds its own per-direction session under the sid
-    session_i, session_r = _handshake_sessions(SESSION_ID)
-    source.session_store.put(session_i)
-    collector.session_store.put(session_r)
+    if pre_share:
+        # stub first contact: each end holds its own per-direction session under the sid
+        session_i, session_r = _handshake_sessions(SESSION_ID)
+        source.session_store.put(session_i)
+        collector.session_store.put(session_r)
+    # else: the sessions are established live by the handshake inside listen_to_endpoint
 
     errors = []
 
@@ -109,3 +112,32 @@ def test_secure_transfer_recovers_from_lost_replies(tmp_path):
     assert source_conn.dropped > 0, "no replies were dropped — loss injection was inert"
     assert received.exists(), "collector never saved the file at {}".format(received)
     assert received.read_bytes() == payload, "lossy secure transfer did not reassemble correctly"
+
+
+def test_secure_transfer_from_first_contact(tmp_path):
+    # No pre-shared session: the ECDH handshake runs live inside listen_to_endpoint, then the
+    # transfer proceeds sealed — the whole secure flow, start to finish, over the wire.
+    payload = bytes(i % 256 for i in range(1000))
+    source_conn, collector_conn = Loopback_connector.create_pair(SOURCE_MAC, COLLECTOR_MAC)
+
+    received = _run_secure_transfer(tmp_path, source_conn, collector_conn, payload,
+                                    "first-contact.bin", pre_share=False)
+
+    assert received.exists(), "collector never saved the file at {}".format(received)
+    assert received.read_bytes() == payload, "first-contact secure transfer did not reassemble"
+
+
+def test_secure_first_contact_survives_dropped_handshake_frames(tmp_path):
+    # 30% of Source->Collector frames drop — including HELLO / ACK during the handshake. The
+    # handshake's per-round retries (fresh ephemeral on a retried INIT, idempotent re-ACK on a
+    # retried WELCOME) must recover it, then stop-and-wait recovers the sealed transfer.
+    payload = bytes(i % 256 for i in range(1000))
+    source_conn, collector_conn = Loopback_connector.create_pair(
+        SOURCE_MAC, COLLECTOR_MAC, loss_a_to_b=0.3, seed=7)
+
+    received = _run_secure_transfer(tmp_path, source_conn, collector_conn, payload,
+                                    "first-contact-lossy.bin", pre_share=False)
+
+    assert source_conn.dropped > 0, "no frames were dropped — loss injection was inert"
+    assert received.exists(), "collector never saved the file at {}".format(received)
+    assert received.read_bytes() == payload, "lossy first-contact transfer did not reassemble"

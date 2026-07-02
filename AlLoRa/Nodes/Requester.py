@@ -128,12 +128,14 @@ class Requester(Node):
 
         return response_packet  # Return valid packet if successful
 
-    def perform_handshake(self, digital_endpoint):
+    def perform_handshake(self, digital_endpoint, tries=5):
         """As the Collector (the handshake responder + sid-assigner), drive the two-round ECDH
-        with a Source over open MAC CTRL frames and store the resulting Session. Returns the
-        Session on success, or None if a round fails. The Source authenticates nothing here —
-        in `secure` this is confidentiality-only; the gateway accepts the peer by its
-        registered identity, and the catastrophic downlink is guarded separately."""
+        with a Source over open MAC CTRL frames and store the resulting Session. Each round is
+        retried up to `tries` times so a dropped handshake frame recovers (a retried INIT gets
+        a fresh ephemeral; a retried WELCOME gets an idempotent re-ACK). Returns the Session,
+        or None if a round never lands. The Source authenticates nothing here — in `secure`
+        this is confidentiality-only; the gateway accepts the peer by its registered identity,
+        and the catastrophic downlink is guarded separately."""
         from AlLoRa.Security.handshake import responder_accept
         from AlLoRa.Security.ec_p256 import generate_private_key
         if self.static_priv is None:
@@ -143,18 +145,22 @@ class Requester(Node):
         sid = digital_endpoint.session_id
 
         # round 1: prompt the Source for its ephemeral public key
-        hello = self.send_request(self._ctrl_packet(peer, Node._HS_INIT))
+        hello = None
+        for _ in range(tries):
+            hello = self.send_request(self._ctrl_packet(peer, Node._HS_INIT))
+            if self._is_hs(hello, Node._HS_HELLO):
+                break
         if not self._is_hs(hello, Node._HS_HELLO):
             return None
         session, welcome = responder_accept(self.static_priv, hello.get_payload()[1:], sid)
 
         # round 2: send our static public key + the assigned sid, expect the ack
-        ack = self.send_request(self._ctrl_packet(peer, Node._HS_WELCOME, welcome))
-        if not self._is_hs(ack, Node._HS_ACK):
-            return None
-
-        self.session_store.put(session)
-        return session
+        for _ in range(tries):
+            if self._is_hs(self.send_request(self._ctrl_packet(peer, Node._HS_WELCOME, welcome)),
+                           Node._HS_ACK):
+                self.session_store.put(session)
+                return session
+        return None
 
     @staticmethod
     def _is_hs(packet, hs_kind):
@@ -236,6 +242,16 @@ class Requester(Node):
             if self.debug:
                 print("Connector not ready for endpoint: ", mac)
             return False
+
+        # Secure first contact: establish a session (ECDH handshake) before the transfer, once
+        # per session lifetime — the RAM store keeps it across subsequent listens. If it fails
+        # there is nothing to protect the transfer with, so give up this endpoint for now.
+        if self.security_mode == 'secure' and self.session_store is not None \
+                and self.session_store.get(digital_endpoint.session_id) is None:
+            if self.perform_handshake(digital_endpoint) is None:
+                if self.debug:
+                    print("Handshake failed with endpoint: ", mac)
+                return False
 
         t0 = time()
         if listening_time is None:
