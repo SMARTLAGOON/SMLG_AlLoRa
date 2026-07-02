@@ -1,0 +1,21 @@
+{
+  "name": "S",
+  "chunk_size": 200,
+  "mesh_mode": false,
+  "short_mac": true,
+  "protocol_version": 3,
+  "security_mode": "open",
+  "session_id": 42,
+  "debug": true,
+  "connector": {
+    "sf": 7,
+    "freq": 868,
+    "bandwidth": 125,
+    "coding_rate": 1,
+    "tx_power": 14,
+    "min_timeout": 0.5,
+    "max_timeout": 12,
+    "timeout_delta": 1,
+    "debug": false
+  }
+}
