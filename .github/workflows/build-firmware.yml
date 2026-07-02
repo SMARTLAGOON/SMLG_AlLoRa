@@ -58,6 +58,7 @@ jobs:
           repository: micropython/micropython
           ref: ${{ matrix.micropython_ref }}
           path: micropython
+          submodules: recursive   # fetch berkeley-db (btree) etc.; `make submodules` alone misses some
 
       - name: Assemble the board overlay + frozen module bundle
         run: |

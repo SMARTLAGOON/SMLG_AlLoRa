@@ -16,7 +16,3 @@
 // AEAD runs in C. Without this, detect_aead() finds no backend and a secure node degrades to
 // open.
 #define MICROPY_PY_UCRYPTOLIB_CTR           (1)
-
-// AlLoRa doesn't use the on-disk btree module; disabling it drops the berkeley-db submodule
-// dependency (which `make submodules` doesn't fetch) and trims the firmware.
-#define MICROPY_PY_BTREE                    (0)
