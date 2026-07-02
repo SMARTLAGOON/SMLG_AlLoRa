@@ -1,0 +1,106 @@
+# Freeze AlLoRa into per-target MicroPython firmware and attach the .bin files to the release.
+# Runs in Espressif's ESP-IDF container, so no toolchain is installed by hand — a target is one
+# matrix row + one folder under firmware/targets/ (see firmware/README.md).
+#
+# FIRST RUN: validate with `workflow_dispatch` before trusting a release build — the version
+# pins below are best-effort (a MicroPython release supports specific ESP-IDF versions; bump the
+# two together). The original hand-build used ESP-IDF v5.1.2 + the network_common.c WIFI_AUTH
+# patch; this defaults to a newer pair with the patch off. If a build fails on the IDF version
+# or the WIFI_AUTH assert, adjust the matrix row (and flip apply_wifi_auth_patch).
+
+name: Build AlLoRa firmware
+
+on:
+  workflow_dispatch:          # manual — use this to validate before a real release
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.idf_image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: t3s3-sx127x
+            board: ESP32_GENERIC_S3
+            driver: PyLora_SX127x_extensions
+            micropython_ref: v1.24.1
+            idf_image: espressif/idf:v5.2.2
+            apply_wifi_auth_patch: "false"
+          # - target: t3s3-sx1262        # TODO: vendor firmware/drivers/sx1262 (Abel's port) + the board overlay first
+          #   board: ESP32_GENERIC_S3
+          #   driver: sx1262
+          #   micropython_ref: v1.24.1
+          #   idf_image: espressif/idf:v5.2.2
+          #   apply_wifi_auth_patch: "false"
+    steps:
+      - name: Trust the workspace (container runs as root)
+        run: git config --global --add safe.directory '*'
+
+      - name: Check out AlLoRa (the recipe + the package to freeze)
+        uses: actions/checkout@v4
+
+      - name: Check out MicroPython (pinned per target)
+        uses: actions/checkout@v4
+        with:
+          repository: micropython/micropython
+          ref: ${{ matrix.micropython_ref }}
+          path: micropython
+
+      - name: Assemble the board overlay + frozen module bundle
+        run: |
+          set -eux
+          TARGET_DIR="firmware/targets/${{ matrix.target }}"
+          MP_BOARD_DIR="micropython/ports/esp32/boards/${{ matrix.board }}"
+          # board overlay (sdkconfig.board, mpconfigboard.{h,cmake}, manifest.py)
+          cp -r "$TARGET_DIR/boards/${{ matrix.board }}/." "$MP_BOARD_DIR/"
+          # freeze bundle -> boards/<BOARD>/modules/ : AlLoRa (live) + chip driver + board helpers
+          mkdir -p "$MP_BOARD_DIR/modules"
+          cp -r AlLoRa "$MP_BOARD_DIR/modules/"
+          cp -r "firmware/drivers/${{ matrix.driver }}" "$MP_BOARD_DIR/modules/"
+          cp -r "$TARGET_DIR/modules/." "$MP_BOARD_DIR/modules/"
+
+      - name: Compatibility patch (ESP-IDF v5.1.2 WIFI_AUTH_MAX)
+        if: matrix.apply_wifi_auth_patch == 'true'
+        run: |
+          set -eux
+          sed -i 's/WIFI_AUTH_MAX == 10/WIFI_AUTH_MAX == 11/' \
+            micropython/ports/esp32/network_common.c
+
+      - name: Build mpy-cross
+        run: |
+          . "$IDF_PATH/export.sh"
+          make -C micropython/mpy-cross
+
+      - name: Fetch esp32 submodules
+        working-directory: micropython/ports/esp32
+        run: |
+          . "$IDF_PATH/export.sh"
+          make submodules BOARD=${{ matrix.board }}
+
+      - name: Build firmware
+        working-directory: micropython/ports/esp32
+        run: |
+          . "$IDF_PATH/export.sh"
+          make BOARD=${{ matrix.board }}
+
+      - name: Collect the .bin
+        run: |
+          set -eux
+          cp "micropython/ports/esp32/build-${{ matrix.board }}/firmware.bin" \
+             "AlLoRa-${{ matrix.target }}-firmware.bin"
+
+      - name: Upload as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AlLoRa-${{ matrix.target }}-firmware
+          path: AlLoRa-${{ matrix.target }}-firmware.bin
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AlLoRa-${{ matrix.target }}-firmware.bin

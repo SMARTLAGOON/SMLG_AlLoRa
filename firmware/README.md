@@ -1,0 +1,40 @@
+# AlLoRa firmware — freeze the protocol into MicroPython, per target
+
+A **target = one (device × radio modem)**. Building a target freezes `AlLoRa/` (the protocol,
+from the repo root) plus that target's **chip driver** and **board helpers** into a custom
+MicroPython firmware, so `import AlLoRa` just works on the device with no filesystem copy.
+
+The protocol is already modem-agnostic — every radio is a `Connector` (`SX127x_connector`,
+`SX1262_connector`, `E5_connector`, …) behind one interface, so the engine never knows the
+chip. The only things that vary per hardware are the **low-level driver** and the **board
+config**, and this layout keeps each in exactly one place:
+
+```
+firmware/
+  drivers/                 # chip drivers, vendored + pinned WITH the protocol (varies by MODEM)
+    PyLora_SX127x_extensions/    SX127x / SX1276  (upstream: github.com/GRCDEV/PyLora_SX127x_extensions)
+  targets/                 # one folder per (device, modem)
+    t3s3-sx127x/           #   the primary board (LilyGo T3S3 + SX127x)
+      boards/<BOARD>/      #     MicroPython board overlay: sdkconfig.board, mpconfigboard.*, manifest.py
+      modules/             #     board helpers to freeze (lora32, lilygo_oled, utils)
+  patches/                 # version-specific MicroPython source patches (see patches/README.md)
+  T3S3/                    # (legacy) flashing instructions + an old prebuilt .bin
+```
+
+## Building
+
+CI does it — a GitHub Actions workflow (`.github/workflows/build-firmware.yml`) builds every
+target in a matrix inside Espressif's ESP-IDF container and attaches each `firmware.bin` to the
+release. No local toolchain. Each matrix row pins the MicroPython + ESP-IDF versions for that
+target (they're coupled — a MicroPython release supports specific ESP-IDF versions).
+
+## Adding a target (new device or new modem)
+
+1. If it's a **new modem**, vendor its driver under `drivers/<name>/` (pin the exact version).
+2. Add `targets/<device>-<modem>/` with `boards/<BOARD>/` (the board overlay) and `modules/`
+   (board helpers). Enable `MICROPY_PY_UCRYPTOLIB_CTR` in `mpconfigboard.h` and `require("hmac")`
+   in `manifest.py` if the target runs **secure** mode.
+3. Add a row to the workflow matrix (target dir, board, driver, MicroPython/ESP-IDF versions).
+
+That's the whole "which MicroPython, which modem, which device" decision — one folder + one
+matrix row. A supplier switching modems is a new driver + a new target; the protocol is untouched.
