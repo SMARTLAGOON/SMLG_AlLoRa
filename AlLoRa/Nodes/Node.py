@@ -49,6 +49,8 @@ class Node:
 
         self.session_store = None
         self.aead = None
+        self.static_priv = None     # the responder's long-lived ECDH key (built lazily)
+        self._hs_state = None       # the initiator's ephemeral key, held between handshake rounds
         if self.security_mode == 'secure':
             self._enable_secure()
 
@@ -57,8 +59,7 @@ class Node:
         # Imported lazily so an open-mode node never pulls in the crypto modules. If no backend
         # is available the node degrades to open here; a production node should instead refuse
         # to run — a registered secure node must never silently fall back to plaintext. That
-        # operational-vs-test distinction is a later concern; handshake wiring (populating the
-        # store on first contact) is the next step.
+        # operational-vs-test distinction is a later concern.
         from AlLoRa.Security.Session_store import RAM_session_store
         from AlLoRa.Security.AEAD import detect_aead
         self.session_store = RAM_session_store()
@@ -67,6 +68,25 @@ class Node:
             self.connector.set_secure(self.session_store.get, self.aead)
         elif self.debug:
             print("secure mode requested but no AEAD backend available — running open (degraded)")
+
+    # --- first-contact handshake over the wire (open MAC-addressed CTRL frames) -------------
+    # The exchange rides the shared request/respond verbs. Message kinds ride a 1-byte prefix
+    # on the CTRL payload (provisional layout): the Collector (responder + sid-assigner) drives
+    # two rounds, the Source (initiator) answers with its ephemeral key then completes.
+    _HS_INIT = 0        # Collector -> Source: begin (prompt for the ephemeral key)
+    _HS_HELLO = 1       # Source -> Collector: ephemeral public key
+    _HS_WELCOME = 2     # Collector -> Source: static public key + assigned sid
+    _HS_ACK = 3         # Source -> Collector: session established
+
+    def _ctrl_packet(self, dst_mac, hs_kind, payload=b""):
+        # A MAC-addressed v3 CTRL frame (there is no sid until the handshake assigns one); the
+        # hybrid codec puts it on the wire open.
+        p = Packet_v3(mesh_mode=self.mesh_mode, addressing="mac")
+        p.set_source(self.MAC)
+        p.set_destination(dst_mac)
+        p.set_kind(Packet_v3.CTRL)
+        p.set_payload(bytes([hs_kind]) + payload)
+        return p
 
 
     def open_backup(self):
@@ -129,6 +149,8 @@ class Node:
 
     def is_for_me(self, packet):
         if self.protocol_version >= 3:
+            if packet.addressing == "mac":   # a first-contact / handshake frame (no sid yet)
+                return packet.get_destination() == self.MAC
             return packet.get_session() == self.session_id
         return packet.get_destination() == self.MAC
 

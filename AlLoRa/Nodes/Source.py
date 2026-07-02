@@ -1,4 +1,5 @@
 import gc
+from os import urandom
 from AlLoRa.Nodes.Node import Node, Packet
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep_ms
@@ -80,6 +81,28 @@ class Source(Node):
                 try_for -= 1
                 if try_for <= 0:
                     return False
+
+    def answer_handshake(self, request):
+        """As the Source (handshake initiator), answer the Collector's handshake CTRL: on INIT,
+        make a fresh ephemeral key and return the HELLO (its public key); on WELCOME, derive +
+        store the session and return the ACK. Returns the reply packet, or None on an
+        unexpected message. A fresh ephemeral key per session means a reboot re-handshakes."""
+        from AlLoRa.Security.handshake import initiator_hello, initiator_complete
+        payload = request.get_payload()
+        peer = request.get_source()
+        if payload and payload[0] == Node._HS_INIT:
+            self._hs_state, hello = initiator_hello(urandom)
+            return self._ctrl_packet(peer, Node._HS_HELLO, hello)
+        if payload and payload[0] == Node._HS_WELCOME and self._hs_state is not None:
+            session = initiator_complete(self._hs_state, payload[1:])
+            self.session_store.put(session)
+            self._hs_state = None
+            return self._ctrl_packet(peer, Node._HS_ACK)
+        return None
+
+    def _handshake_responder(self, request):
+        # respond()-compatible handler: build the handshake reply and send it.
+        self.send_response(self.answer_handshake(request))
 
     def _serve(self, packet):
         # The Source's responder handler: build the reply for this request, send it, and

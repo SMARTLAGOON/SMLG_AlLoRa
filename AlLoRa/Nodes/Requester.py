@@ -1,5 +1,7 @@
 import gc
+from os import urandom
 from AlLoRa.Nodes.Node import Node, Packet
+from AlLoRa.Packet_v3 import Packet_v3
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Pacing import Pacing
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, sleep_ms
@@ -125,6 +127,40 @@ class Requester(Node):
             return None
 
         return response_packet  # Return valid packet if successful
+
+    def perform_handshake(self, digital_endpoint):
+        """As the Collector (the handshake responder + sid-assigner), drive the two-round ECDH
+        with a Source over open MAC CTRL frames and store the resulting Session. Returns the
+        Session on success, or None if a round fails. The Source authenticates nothing here —
+        in `secure` this is confidentiality-only; the gateway accepts the peer by its
+        registered identity, and the catastrophic downlink is guarded separately."""
+        from AlLoRa.Security.handshake import responder_accept
+        from AlLoRa.Security.ec_p256 import generate_private_key
+        if self.static_priv is None:
+            self.static_priv = generate_private_key(urandom)
+
+        peer = digital_endpoint.get_mac_address()
+        sid = digital_endpoint.session_id
+
+        # round 1: prompt the Source for its ephemeral public key
+        hello = self.send_request(self._ctrl_packet(peer, Node._HS_INIT))
+        if not self._is_hs(hello, Node._HS_HELLO):
+            return None
+        session, welcome = responder_accept(self.static_priv, hello.get_payload()[1:], sid)
+
+        # round 2: send our static public key + the assigned sid, expect the ack
+        ack = self.send_request(self._ctrl_packet(peer, Node._HS_WELCOME, welcome))
+        if not self._is_hs(ack, Node._HS_ACK):
+            return None
+
+        self.session_store.put(session)
+        return session
+
+    @staticmethod
+    def _is_hs(packet, hs_kind):
+        # A valid handshake reply: a CTRL frame whose 1-byte type prefix matches.
+        return (packet is not None and packet.get_command() == Packet_v3.CTRL
+                and packet.get_payload() and packet.get_payload()[0] == hs_kind)
 
     def ask_ok(self, packet: Packet):
         packet.set_ok()
