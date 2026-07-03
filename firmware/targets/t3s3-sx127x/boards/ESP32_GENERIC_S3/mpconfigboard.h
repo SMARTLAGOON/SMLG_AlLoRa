@@ -20,5 +20,10 @@
 // MicroPython renamed this flag MICROPY_PY_UCRYPTOLIB_CTR -> MICROPY_PY_CRYPTOLIB_CTR in v1.21
 // (the u-module unification). v1.24.1 only honors the new name; the old one is a dead no-op. We
 // define BOTH so CTR is enabled regardless of the MicroPython version the build pins.
+//
+// The same v1.21 change renamed the MODULE ucryptolib -> cryptolib, and (unlike ubinascii/utime)
+// it has no weak-link alias, so `import ucryptolib` raises on v1.21+. The library imports it as
+// `cryptolib` (AEAD.py) — this flag and that import are the two halves of enabling CTR here:
+// with the flag but the old import name, detect_aead() still fails and secure mode degrades.
 #define MICROPY_PY_CRYPTOLIB_CTR            (1)   // MicroPython >= 1.21 (the one v1.24.1 checks)
 #define MICROPY_PY_UCRYPTOLIB_CTR           (1)   // pre-1.21 name; harmless/ignored on newer builds
