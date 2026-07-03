@@ -89,22 +89,32 @@ def _cryptography_ctr():
     return ctr
 
 
-def _ucryptolib_ctr():
+def _micropython_ctr():
+    # MicroPython's native AES module was renamed ``ucryptolib`` -> ``cryptolib`` in v1.21 (the
+    # u-module unification, the same change that renamed the CTR build flag). Unlike ubinascii /
+    # utime / ujson, ``ucryptolib`` was never in the weak-link alias table, so on a v1.21+ build
+    # ``import ucryptolib`` raises and there is no fallback — the module is only reachable as
+    # ``cryptolib``. Prefer the new name; keep the old one for pre-1.21 firmware.
     try:
-        import ucryptolib
+        import cryptolib as aes_mod
+    except ImportError:
+        try:
+            import ucryptolib as aes_mod
+        except Exception:
+            return None
     except Exception:
         return None
 
-    MODE_CTR = 6  # ucryptolib AES-CTR (needs MICROPY_PY_UCRYPTOLIB_CTR in the board recipe)
+    MODE_CTR = 6  # AES-CTR (needs MICROPY_PY_CRYPTOLIB_CTR compiled into the board)
 
     def ctr(key, nonce, data):
-        return ucryptolib.aes(bytes(key), MODE_CTR, _ctr_block(nonce)).encrypt(bytes(data))
+        return aes_mod.aes(bytes(key), MODE_CTR, _ctr_block(nonce)).encrypt(bytes(data))
 
     return ctr
 
 
 def _detect_ctr():
-    return _cryptography_ctr() or _ucryptolib_ctr()
+    return _cryptography_ctr() or _micropython_ctr()
 
 
 def _self_test(aead):
@@ -132,3 +142,18 @@ def detect_aead():
         return None
     aead = Ctr_hmac_aead(ctr)
     return aead if _self_test(aead) else None
+
+
+def unavailable_reason():
+    """A short human-readable explanation of why ``detect_aead()`` returned None, for the
+    degraded-mode log line. Best-effort and only meant for the degrade path (it re-runs the
+    cheap detection). Distinguishes the two failure modes that otherwise look identical from
+    the outside: the native AES module not importing at all vs. importing but AES-CTR not being
+    compiled in (or hmac / hashlib.sha256 being broken), which the round-trip self-test catches.
+    """
+    ctr = _detect_ctr()
+    if ctr is None:
+        return "native AES module did not import (need 'cryptolib'; v1.21+ dropped 'ucryptolib')"
+    if not _self_test(Ctr_hmac_aead(ctr)):
+        return "AES module imported but self-test failed (CTR mode not compiled, or hmac/hashlib)"
+    return "AEAD available"

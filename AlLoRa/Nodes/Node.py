@@ -67,7 +67,9 @@ class Node:
         if self.aead is not None:
             self.connector.set_secure(self.session_store.get, self.aead)
         elif self.debug:
-            print("secure mode requested but no AEAD backend available — running open (degraded)")
+            from AlLoRa.Security.AEAD import unavailable_reason
+            print("secure mode requested but no AEAD backend available — running open (degraded):",
+                  unavailable_reason())
 
     # --- first-contact handshake over the wire (open MAC-addressed CTRL frames) -------------
     # The exchange rides the shared request/respond verbs. Message kinds ride a 1-byte prefix

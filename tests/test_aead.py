@@ -11,7 +11,11 @@ caught — which survive a later byte-layout review unchanged.
 verifies the tag *before* decrypting, so a forged frame never yields plaintext. Tests run
 against the platform-detected backend (``detect_aead()``), exercising the real path.
 """
-from AlLoRa.Security.AEAD import detect_aead, Ctr_hmac_aead, _self_test
+import sys
+import types
+
+from AlLoRa.Security.AEAD import (detect_aead, Ctr_hmac_aead, _self_test,
+                                  _micropython_ctr, unavailable_reason)
 
 ENC_KEY = bytes(range(16))          # AES-128 key
 MAC_KEY = bytes(range(16, 32))      # separate HMAC key
@@ -106,3 +110,68 @@ def test_self_test_rejects_a_backend_that_corrupts():
     def bad_ctr(key, nonce, data):
         return bytes(len(data))        # zeros — round-trip won't recover the plaintext
     assert _self_test(Ctr_hmac_aead(bad_ctr)) is False
+
+
+def _fake_aes_module(tag):
+    """A stand-in for MicroPython's cryptolib/ucryptolib: its .aes(key, mode, iv) records the
+    module identity so a test can prove which one _micropython_ctr picked."""
+    mod = types.ModuleType("fake_aes")
+    mod.picked = tag
+
+    class _Cipher:
+        def __init__(self, key, mode, iv):
+            mod.last_mode = mode
+        def encrypt(self, data):
+            return data                # identity is fine — we assert selection, not crypto here
+
+    mod.aes = lambda key, mode, iv: _Cipher(key, mode, iv)
+    return mod
+
+
+def test_micropython_ctr_prefers_cryptolib_over_ucryptolib(monkeypatch):
+    # The regression that bit us on MicroPython v1.24.1: the module was renamed
+    # ucryptolib -> cryptolib and has no weak-link alias, so importing the old name fails.
+    # _micropython_ctr must reach for the new name first.
+    cryptolib = _fake_aes_module("cryptolib")
+    ucryptolib = _fake_aes_module("ucryptolib")
+    monkeypatch.setitem(sys.modules, "cryptolib", cryptolib)
+    monkeypatch.setitem(sys.modules, "ucryptolib", ucryptolib)
+
+    ctr = _micropython_ctr()
+    assert ctr is not None
+    ctr(bytes(16), bytes(12), b"probe")
+    assert cryptolib.picked == "cryptolib"
+    assert cryptolib.last_mode == 6          # AES-CTR
+    assert not hasattr(ucryptolib, "last_mode")   # the old name was never touched
+
+
+def test_micropython_ctr_falls_back_to_ucryptolib_on_pre_1_21(monkeypatch):
+    # Pre-1.21 firmware only has the old name; the fallback must still find it.
+    monkeypatch.delitem(sys.modules, "cryptolib", raising=False)
+    monkeypatch.setattr("builtins.__import__", _blocking_import({"cryptolib"}))
+    ucryptolib = _fake_aes_module("ucryptolib")
+    monkeypatch.setitem(sys.modules, "ucryptolib", ucryptolib)
+
+    ctr = _micropython_ctr()
+    assert ctr is not None
+    ctr(bytes(16), bytes(12), b"probe")
+    assert ucryptolib.last_mode == 6
+
+
+def test_micropython_ctr_returns_none_when_no_native_aes(monkeypatch):
+    # Neither name importable (e.g. CPython, or a build without cryptolib) -> no backend.
+    monkeypatch.setattr("builtins.__import__", _blocking_import({"cryptolib", "ucryptolib"}))
+    assert _micropython_ctr() is None
+
+
+def _blocking_import(blocked):
+    """An __import__ replacement that raises ImportError for the named modules and otherwise
+    defers to the real importer — so we can simulate a build where cryptolib/ucryptolib are
+    absent without disturbing every other import."""
+    real_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name in blocked:
+            raise ImportError("no module named {}".format(name))
+        return real_import(name, *args, **kwargs)
+    return fake_import
