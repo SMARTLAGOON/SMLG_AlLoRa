@@ -134,12 +134,15 @@ def scalar_mult(k, point):
     if k < 0:
         x, y = point
         return scalar_mult(-k, (x, (-y) % P))
+    # Right-to-left double-and-add (same structure as the original affine loop, which avoids
+    # int.bit_length() — not available on MicroPython — just with the point ops in Jacobian).
     R = _JAC_INF
-    Q = (point[0] % P, point[1] % P, 1)          # affine base -> Jacobian (Z = 1)
-    for i in range(k.bit_length() - 1, -1, -1):  # left-to-right double-and-add
-        R = _jac_double(R)
-        if (k >> i) & 1:
-            R = _jac_add(R, Q)
+    addend = (point[0] % P, point[1] % P, 1)     # affine base -> Jacobian (Z = 1)
+    while k:
+        if k & 1:
+            R = _jac_add(R, addend)
+        addend = _jac_double(addend)
+        k >>= 1
     return _jac_to_affine(R)
 
 
