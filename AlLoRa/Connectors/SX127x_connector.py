@@ -75,7 +75,11 @@ class SX127x_connector(Connector):
             data = self.lora.recv(Connector.MAX_LENGTH_MESSAGE)
             td = time.ticks_ms() - t0
             return data
-        except:
+        except Exception:
+            # Was a bare 'except', which also swallowed KeyboardInterrupt: since the node spends
+            # almost all its time blocked in this receive, Ctrl-C never landed and the board could
+            # not be dropped into the REPL. 'except Exception' still catches the normal
+            # LoRaTimeoutError "no packet in the window" case but lets KeyboardInterrupt through.
             if self.debug:
                 print("nothing received or error")
             return None
