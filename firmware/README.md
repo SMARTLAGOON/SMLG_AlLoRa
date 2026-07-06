@@ -54,6 +54,11 @@ handshake. Known traps the frozen library must avoid (all fixed, listed so they 
   local constant-time compare instead. (`AlLoRa/Security/AEAD.py`)
 - **`hashlib.sha256().digest_size`** — MicroPython hash objects don't expose it. Hardcode `32`.
   (`AlLoRa/Security/kdf.py`)
+- **`int.bit_length()`** — not available on MicroPython. The P-256 scalar-mult ladder uses the
+  right-to-left `while k: … k >>= 1` form instead. (`AlLoRa/Security/ec_p256.py`)
+
+`tests/test_micropython_portability.py` scans the frozen secure path for these names so CI, not
+the ESP32, is what fails when a new one creeps in.
 
 Rule of thumb: after any change to the secure path, don't trust CI alone — flash and confirm the
 Source boots **without** the `secure mode … running open (degraded): …` line, whose suffix now
