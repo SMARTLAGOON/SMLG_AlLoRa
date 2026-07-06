@@ -59,3 +59,10 @@ Rule of thumb: after any change to the secure path, don't trust CI alone — fla
 Source boots **without** the `secure mode … running open (degraded): …` line, whose suffix now
 names the exact backend failure. Note the frozen library is baked into the `.bin`, so a
 library-only change needs a firmware rebuild to reach the device.
+
+**Handshake CPU budget.** First contact runs pure-Python P-256 ECDH — a few scalar multiplications
+per session, on the order of half a second each on an ESP32-class board (they compute in Jacobian
+coordinates; the earlier affine version took ~13 s and overran the handshake receive window, so the
+peer looped `Handshake failed`). This is a one-off per-session cost, never per frame, but it does
+block the radio loop while it runs, so keep the handshake receive window comfortably larger than a
+single scalar multiplication.
