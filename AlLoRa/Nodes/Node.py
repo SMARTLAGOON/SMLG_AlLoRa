@@ -51,41 +51,104 @@ class Node:
         self.aead = None
         self.static_priv = None     # the responder's long-lived ECDH key (built lazily)
         self._hs_state = None       # the initiator's ephemeral key, held between handshake rounds
+
+        # Long-term identity (secure): the fingerprint of this key is the device_id. Distinct
+        # from the per-session ephemeral used in the ECDH — the ephemeral rotates every session,
+        # so it can't be a stable identity. Loaded on demand (never in open mode).
+        self.identity_priv = None
+        self.identity_pub = None
+        self.device_id = None
+
         if self.security_mode == 'secure':
             self._enable_secure()
 
+        # The 1-byte sid is identity-derived by default, config-overridable. Resolved here (not
+        # in open_backup) because it needs the MAC (open) or the device_id (secure), both known
+        # only after config_connector / _enable_secure.
+        self.session_id = self._resolve_session_id()
+
     def _enable_secure(self):
         # Custody of secure Sessions (per-peer, keyed by sid) + the per-frame AEAD backend.
-        # Imported lazily so an open-mode node never pulls in the crypto modules. If no backend
-        # is available the node degrades to open here; a production node should instead refuse
-        # to run — a registered secure node must never silently fall back to plaintext. That
-        # operational-vs-test distinction is a later concern.
+        # Imported lazily so an open-mode node never pulls in the crypto modules.
         from AlLoRa.Security.Session_store import RAM_session_store
         from AlLoRa.Security.AEAD import detect_aead
         self.session_store = RAM_session_store()
         self.aead = detect_aead()
+        # A secure node always has a device_id — it is its wire identity (first-contact address
+        # + sid seed), needed whether or not the sid is config-overridden.
+        self._ensure_identity()
         if self.aead is not None:
             self.connector.set_secure(self.session_store.get, self.aead)
-        elif self.debug:
-            from AlLoRa.Security.AEAD import unavailable_reason
-            print("secure mode requested but no AEAD backend available — running open (degraded):",
-                  unavailable_reason())
+            return
+        # No crypto backend. A configured-secure node must NOT silently run plaintext — the
+        # operator believes the link is protected, so a silent degrade is the worst outcome.
+        # It halts loudly, unless an explicit opt-in (tests / bring-up only) permits open.
+        from AlLoRa.Security.AEAD import unavailable_reason
+        reason = unavailable_reason()
+        if self.config.get('allow_insecure_fallback', False):
+            print("WARNING: secure mode requested but no AEAD backend — running OPEN (insecure),",
+                  "because allow_insecure_fallback is set:", reason)
+            return
+        raise RuntimeError(
+            "secure mode requires a crypto (AEAD) backend, none available: {}. Flash the AlLoRa "
+            "firmware (native CTR), or set allow_insecure_fallback for an explicit insecure run "
+            "(tests/bring-up only).".format(reason))
 
-    # --- first-contact handshake over the wire (open MAC-addressed CTRL frames) -------------
+    def _ensure_identity(self):
+        # Load (or, on first boot, generate + persist) this node's long-term identity keypair
+        # and its device_id. Persisting keeps the device_id stable across reboots so the
+        # operator's registration stays valid; without a configured identity_file the key is
+        # RAM-only (fine for tests, but the device_id then changes each boot).
+        if self.device_id is not None:
+            return
+        from AlLoRa.Security.identity import (load_or_create_identity, device_id_from_pubkey)
+        from AlLoRa.Security.ec_p256 import generate_private_key, public_key_uncompressed
+        path = self.config.get('identity_file', None)
+        if path:
+            self.identity_priv, self.identity_pub, self.device_id = \
+                load_or_create_identity(path, urandom)
+        else:
+            self.identity_priv = generate_private_key(urandom)
+            self.identity_pub = public_key_uncompressed(self.identity_priv)
+            self.device_id = device_id_from_pubkey(self.identity_pub)
+            if self.debug:
+                print("no identity_file configured — using an ephemeral identity "
+                      "(device_id changes each boot)")
+
+    def _resolve_session_id(self):
+        # The 1-byte session address. An explicit config value always wins (debugging, or the
+        # Collector's on-clash reassignment). Otherwise it is identity-derived: device_id[0] in
+        # secure, the device-specific low byte of the short MAC in open (never the OUI bytes).
+        explicit = self.config.get('session_id', None)
+        if explicit is not None:
+            return explicit
+        if self.security_mode in ('secure', 'strict'):
+            self._ensure_identity()
+            return self.device_id[0]
+        return int(self.MAC[-2:], 16)
+
+    # --- first-contact handshake over the wire (open device_id-addressed CTRL frames) -------
     # The exchange rides the shared request/respond verbs. Message kinds ride a 1-byte prefix
     # on the CTRL payload (provisional layout): the Collector (responder + sid-assigner) drives
-    # two rounds, the Source (initiator) answers with its ephemeral key then completes.
+    # two rounds, the Source (initiator) answers with its ephemeral key then completes. Frames
+    # are addressed by the Source's device_id[:4] (no MAC on the wire); a MAC-registered peer
+    # keeps the retiring two-MAC shape.
     _HS_INIT = 0        # Collector -> Source: begin (prompt for the ephemeral key)
     _HS_HELLO = 1       # Source -> Collector: ephemeral public key
     _HS_WELCOME = 2     # Collector -> Source: static public key + assigned sid
     _HS_ACK = 3         # Source -> Collector: session established
 
-    def _ctrl_packet(self, dst_mac, hs_kind, payload=b""):
-        # A MAC-addressed v3 CTRL frame (there is no sid until the handshake assigns one); the
-        # hybrid codec puts it on the wire open.
-        p = Packet_v3(mesh_mode=self.mesh_mode, addressing="mac")
-        p.set_source(self.MAC)
-        p.set_destination(dst_mac)
+    def _ctrl_packet(self, token, hs_kind, payload=b"", addressing="did"):
+        # A first-contact v3 CTRL frame (no sid until the handshake assigns one); the hybrid
+        # codec puts it on the wire open. Addressed by device_id[:4] (v3, no MAC on the wire) —
+        # a single token stamped the same in both directions — or, for a MAC-registered peer,
+        # by the retiring two-MAC shape.
+        p = Packet_v3(mesh_mode=self.mesh_mode, addressing=addressing)
+        if addressing == "did":
+            p.set_did(token)
+        else:
+            p.set_source(self.MAC)
+            p.set_destination(token)
         p.set_kind(Packet_v3.CTRL)
         p.set_payload(bytes([hs_kind]) + payload)
         return p
@@ -105,7 +168,8 @@ class Node:
         # Defaults keep v2 behavior byte-for-byte (version 2, MAC addressing).
         self.protocol_version = self.config.get('protocol_version', 2)
         self.security_mode = self.config.get('security_mode', 'open')
-        self.session_id = self.config.get('session_id', 0)
+        # session_id is resolved after init (identity-derived unless config overrides); see
+        # _resolve_session_id. It is read from config here only as the explicit override source.
         self.addressing = 'sid' if self.protocol_version >= 3 else 'mac'
 
         self.config_connector_dic = self.config.get('connector', None)    #{"freq" : lora_config['freq'], "sf": lora_config['sf']}
@@ -151,7 +215,9 @@ class Node:
 
     def is_for_me(self, packet):
         if self.protocol_version >= 3:
-            if packet.addressing == "mac":   # a first-contact / handshake frame (no sid yet)
+            if packet.addressing == "did":   # v3 first contact — addressed to my device_id[:4]
+                return self.device_id is not None and packet.get_did() == self.device_id[:4]
+            if packet.addressing == "mac":   # legacy first-contact / handshake frame (no sid yet)
                 return packet.get_destination() == self.MAC
             return packet.get_session() == self.session_id
         return packet.get_destination() == self.MAC

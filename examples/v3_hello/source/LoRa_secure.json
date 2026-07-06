@@ -5,7 +5,7 @@
   "short_mac": true,
   "protocol_version": 3,
   "security_mode": "secure",
-  "session_id": 42,
+  "identity_file": "identity.key",
   "debug": true,
   "connector": {
     "sf": 7,

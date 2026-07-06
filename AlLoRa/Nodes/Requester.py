@@ -141,23 +141,35 @@ class Requester(Node):
         if self.static_priv is None:
             self.static_priv = generate_private_key(urandom)
 
-        peer = digital_endpoint.get_mac_address()
+        # Address follows registration: a device_id-registered peer takes the v3 did-addressed
+        # path (no MAC on the wire); a MAC-registered one keeps the legacy two-MAC handshake.
+        did = digital_endpoint.get_did()
+        if did is not None:
+            addressing, token = "did", did
+            # The sid rides the WELCOME only when we had to move it off the derived value to
+            # break a clash — otherwise both ends already derive device_id[0].
+            send_sid = digital_endpoint.session_id != digital_endpoint.derived_sid()
+        else:
+            addressing, token = "mac", digital_endpoint.get_mac_address()
+            send_sid = True    # no shared identity to derive the sid from; it must be sent
         sid = digital_endpoint.session_id
 
         # round 1: prompt the Source for its ephemeral public key
         hello = None
         for _ in range(tries):
-            hello = self.send_request(self._ctrl_packet(peer, Node._HS_INIT))
+            hello = self.send_request(self._ctrl_packet(token, Node._HS_INIT, addressing=addressing))
             if self._is_hs(hello, Node._HS_HELLO):
                 break
         if not self._is_hs(hello, Node._HS_HELLO):
             return None
-        session, welcome = responder_accept(self.static_priv, hello.get_payload()[1:], sid)
+        session, welcome = responder_accept(self.static_priv, hello.get_payload()[1:], sid,
+                                            send_sid=send_sid)
 
-        # round 2: send our static public key + the assigned sid, expect the ack
+        # round 2: send our static public key (+ sid only on reassignment), expect the ack
         for _ in range(tries):
-            if self._is_hs(self.send_request(self._ctrl_packet(peer, Node._HS_WELCOME, welcome)),
-                           Node._HS_ACK):
+            if self._is_hs(self.send_request(
+                    self._ctrl_packet(token, Node._HS_WELCOME, welcome, addressing=addressing)),
+                    Node._HS_ACK):
                 self.session_store.put(session)
                 return session
         return None

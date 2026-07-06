@@ -77,6 +77,23 @@ class _SidMatchSpec:
         return len(wire) >= 1 and wire[0] == self._sid
 
 
+class _DidMatchSpec:
+    """v3 first contact: a reply belongs to our request when it carries the same device_id[:4]
+    token. One 4-byte address, symmetric in both directions (the Collector polls a Source's
+    did; the Source answers under it), cleartext at wire offset 0 — so like the sid spec it is
+    keyless and `matches_wire` runs at the radio without touching a key."""
+
+    def __init__(self, did):
+        self._did = bytes(did)
+
+    def matches(self, reply):
+        return reply.get_did() == self._did
+
+    def matches_wire(self, wire):
+        n = len(self._did)
+        return len(wire) >= n and wire[:n] == self._did
+
+
 class V2Codec:
 
     def __init__(self, mesh_mode=False, short_mac=False, my_mac="00000000"):
@@ -118,6 +135,8 @@ class V3OpenCodec:
             return None
 
     def match_spec(self, request):
+        if request.addressing == "did":
+            return _DidMatchSpec(request.get_did())
         return _SidMatchSpec(request.get_session())
 
 
@@ -142,9 +161,10 @@ class V3SecureCodec:
         return Packet_v3(mesh_mode=self._mesh, addressing=addressing)
 
     def frame(self, packet):
-        # MAC-addressed handshake frames go on the wire open (public keys, nothing secret);
+        # First-contact handshake frames go on the wire open (public keys, nothing secret) —
+        # whether device_id-addressed (v3) or MAC-addressed (the retiring v2-compat shape);
         # established sid-addressed frames are sealed.
-        if packet.addressing == "mac":
+        if packet.addressing in ("did", "mac"):
             return packet.get_content()
         session = self._resolve(packet.get_session())
         if session is None:
@@ -168,7 +188,8 @@ class V3SecureCodec:
             except Exception:
                 pass
         # Otherwise an open MAC-addressed handshake CTRL frame — accepted only if its 24-bit
-        # integrity checks, it is a CTRL frame, and it is addressed to me.
+        # integrity checks, it is a CTRL frame, and it is addressed to me. (Retiring v2-compat
+        # shape; the v3 first-contact frame is device_id-addressed, handled next.)
         h = self._new("mac")
         try:
             if (h.load(wire) and h.get_command() == Packet_v3.CTRL
@@ -176,10 +197,23 @@ class V3SecureCodec:
                 return h
         except Exception:
             pass
+        # Or an open device_id-addressed handshake CTRL frame. The did token is the *Source's*
+        # in both directions, so a Collector serving many Sources can't tell "mine" from
+        # "theirs" here — that decision moves to is_for_me (responder) / match_spec (initiator);
+        # deframe only vouches for integrity + that it is a CTRL frame.
+        d = self._new("did")
+        try:
+            if d.load(wire) and d.get_command() == Packet_v3.CTRL:
+                return d
+        except Exception:
+            pass
         return None
 
     def match_spec(self, request):
-        # A handshake round is MAC-mirrored (like v2); an established round matches by sid.
+        # A handshake round matches by its first-contact token (device_id[:4], or the retiring
+        # MAC-mirror); an established round matches by sid.
+        if request.addressing == "did":
+            return _DidMatchSpec(request.get_did())
         if request.addressing == "mac":
             return _MacMatchSpec(request.get_destination(), self._my_mac, short_mac=True)
         return _SidMatchSpec(request.get_session())

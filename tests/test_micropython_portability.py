@@ -19,6 +19,7 @@ _ON_DEVICE_SECURE = [
     "AlLoRa/Security/kdf.py",
     "AlLoRa/Security/AEAD.py",
     "AlLoRa/Security/handshake.py",
+    "AlLoRa/Security/identity.py",
     "AlLoRa/Security/Session.py",
     "AlLoRa/Security/Session_store.py",
     "AlLoRa/Security/Replay_window.py",
@@ -26,6 +27,7 @@ _ON_DEVICE_SECURE = [
     "AlLoRa/Nodes/Node.py",
     "AlLoRa/Nodes/Source.py",
     "AlLoRa/Nodes/Requester.py",
+    "AlLoRa/Digital_Endpoint.py",
 ]
 
 # Names CPython provides but MicroPython v1.24.1 does not (each one broke secure mode on-device).

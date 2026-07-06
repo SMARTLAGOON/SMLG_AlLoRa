@@ -115,6 +115,42 @@ def test_mac_addressing_round_trips_short_macs():
     assert got.get_command() == "OK"
 
 
+# --- device_id addressing (v3 first contact, no MAC on the wire) -------------
+
+DID4 = b"\xde\xad\xbe\xef"
+
+
+def test_did_addressing_round_trips_a_four_byte_token():
+    p = _fresh("did")
+    p.set_did(DID4)
+    p.set_kind("CTRL")
+    p.set_payload(b"\x00")
+
+    got = _fresh("did")
+    assert got.load(p.get_content()) is True
+    assert got.get_did() == DID4
+    assert got.get_command() == "CTRL"
+    assert got.get_payload() == b"\x00"
+
+
+def test_did_addressed_header_is_nine_bytes():
+    # [did4][VT1][FL1][integ3] = 9 B — four bytes leaner than the two-MAC handshake header.
+    p = _fresh("did")
+    p.set_did(DID4)
+    p.set_data(b"abcdef")
+    assert len(p.get_content()) - len(b"abcdef") == 9
+
+
+def test_did_addressing_catches_corruption():
+    p = _fresh("did")
+    p.set_did(DID4)
+    p.set_data(bytes(range(20)))
+    wire = bytearray(p.get_content())
+    wire[-1] ^= 0xFF
+    got = _fresh("did")
+    assert got.load(bytes(wire)) is False
+
+
 # --- typed METADATA ---------------------------------------------------------
 
 def test_metadata_carries_chunk_size_total_len_and_filename():

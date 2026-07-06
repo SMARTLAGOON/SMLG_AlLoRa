@@ -90,20 +90,32 @@ class Source(Node):
         unexpected message. A fresh ephemeral key per session means a reboot re-handshakes."""
         from AlLoRa.Security.handshake import initiator_hello, initiator_complete
         payload = request.get_payload()
-        peer = request.get_source()
+        # Answer in the same addressing the poll used: under my own device_id[:4] (v3), or
+        # mirrored back to the Collector's MAC (the retiring legacy shape).
+        if request.addressing == "did":
+            addressing, token = "did", self.device_id[:4]
+        else:
+            addressing, token = "mac", request.get_source()
         if payload and payload[0] == Node._HS_INIT:
             # A repeated INIT (our HELLO was lost) just makes a fresh ephemeral — the latest
             # one is what the Collector will accept, so the two ends stay in step.
             self._hs_state, hello = initiator_hello(urandom)
-            return self._ctrl_packet(peer, Node._HS_HELLO, hello)
+            return self._ctrl_packet(token, Node._HS_HELLO, hello, addressing=addressing)
         if payload and payload[0] == Node._HS_WELCOME:
             if self._hs_state is not None:
-                session = initiator_complete(self._hs_state, payload[1:])
+                # If the WELCOME shed its sid (the common case), fall back to the sid both ends
+                # derive from my identity — device_id[0].
+                session = initiator_complete(self._hs_state, payload[1:],
+                                             default_sid=self.device_id[0])
                 self.session_store.put(session)
+                # Follow the established session's sid into the data phase: the Collector may
+                # have reassigned it off device_id[0] to break a clash, and my data frames must
+                # carry the same sid the session was keyed under.
+                self.session_id = session.sid
                 self._hs_state = None
             # If the state is already cleared, a prior WELCOME completed and its ACK was lost;
             # re-ACK idempotently so the Collector's retransmit still lands.
-            return self._ctrl_packet(peer, Node._HS_ACK)
+            return self._ctrl_packet(token, Node._HS_ACK, addressing=addressing)
         return None
 
     def _handshake_responder(self, request):

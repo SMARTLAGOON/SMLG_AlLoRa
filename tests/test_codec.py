@@ -229,6 +229,68 @@ def test_secure_codec_match_spec_routes_by_addressing():
     assert codec.match_spec(req).matches(_handshake_ctrl("a1a1a1a1", "b2b2b2b2")) is True
 
 
+# --- V3SecureCodec: v3 first contact is device_id-addressed -------------------------------
+# The two-MAC handshake header gives way to a single device_id[:4] token, symmetric in both
+# directions (Collector polls it, Source answers under it) — matched at wire offset 0 like the
+# sid, no MAC on the wire. Framing routes by the packet's "did" addressing; deframe try-parses
+# it as an open CTRL. "Addressed to me" moves to is_for_me/match_spec (the token is the Source's
+# did in *both* directions, so a Collector serving many Sources can't filter it in deframe).
+
+DID = b"\xde\xad\xbe\xef"
+
+
+def _handshake_did(did=DID, payload=b"ephemeral-pubkey"):
+    p = Packet_v3(addressing="did")
+    p.set_did(did)
+    p.set_kind(Packet_v3.CTRL)
+    p.set_payload(payload)
+    return p
+
+
+def test_secure_codec_frames_a_did_handshake_open_not_sealed():
+    codec = V3SecureCodec(lambda sid: None, detect_aead())
+    hs = _handshake_did()
+    assert codec.frame(hs) == hs.get_content()            # did-addressed -> framed open
+    got = codec.deframe(codec.frame(hs))
+    assert got is not None
+    assert got.get_command() == Packet_v3.CTRL
+    assert got.get_did() == DID
+    assert got.get_payload() == b"ephemeral-pubkey"
+
+
+def test_secure_codec_disambiguates_secure_data_from_a_did_handshake():
+    aead = detect_aead()
+    sender = Session(sid=SID, key=KEY,
+                     send_nonce_prefix=NONCE_PREFIX, recv_nonce_prefix=REVERSE_PREFIX)
+    receiver = Session(sid=SID, key=KEY,
+                       send_nonce_prefix=REVERSE_PREFIX, recv_nonce_prefix=NONCE_PREFIX)
+    send_codec = V3SecureCodec(lambda sid: sender, aead)
+    recv_codec = V3SecureCodec(lambda sid: receiver, aead)
+
+    got_secure = recv_codec.deframe(send_codec.frame(_v3_data(SID, b"reading")))
+    assert got_secure is not None and got_secure.get_payload() == b"reading"
+    got_hs = recv_codec.deframe(_handshake_did().get_content())
+    assert got_hs is not None and got_hs.get_command() == Packet_v3.CTRL
+
+
+def test_secure_codec_match_spec_routes_did_to_the_token():
+    codec = V3SecureCodec(lambda sid: None, detect_aead())
+    req = _handshake_did()                                # I ask the peer at this did
+    spec = codec.match_spec(req)
+    assert spec.matches(_handshake_did(DID)) is True      # a reply under the same did
+    assert spec.matches(_handshake_did(b"\x00\x00\x00\x00")) is False
+    # keyless at-the-radio form: the token is cleartext at offset 0
+    assert spec.matches_wire(_handshake_did(DID).get_content()) is True
+    assert spec.matches_wire(_handshake_did(b"\x00\x00\x00\x00").get_content()) is False
+
+
+def test_v3_open_match_spec_routes_did_to_the_token():
+    codec = V3OpenCodec(addressing="sid")
+    req = _handshake_did()
+    assert codec.match_spec(req).matches(_handshake_did(DID)) is True
+    assert codec.match_spec(req).matches(_handshake_did(b"\x00\x00\x00\x00")) is False
+
+
 # --- build_codec (picks the implementation for version x posture) --------------------------
 
 def test_build_codec_picks_v2_for_version_2():

@@ -1,5 +1,5 @@
 from AlLoRa.Nodes.Requester import Requester
-from AlLoRa.Digital_Endpoint import Digital_Endpoint
+from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids
 from AlLoRa.utils.time_utils import current_time_ms as time, sleep
 from AlLoRa.utils.debug_utils import print
 from AlLoRa.utils.os_utils import os
@@ -30,6 +30,9 @@ class Gateway(Requester):
         self.nodes_file = nodes_file
         self.digital_endpoints = []
         self.add_digital_endpoints(self.nodes_file)
+        # Give every registered endpoint a unique 1-byte sid, breaking any device_id[0] clash
+        # before first contact (a Collector serving many Sources is where a clash can arise).
+        assign_session_ids(self.digital_endpoints)
 
         self.status["Status"] = "WAIT"  # Status of the requester
         self.status["RSSI"] = "-" # Signal strength

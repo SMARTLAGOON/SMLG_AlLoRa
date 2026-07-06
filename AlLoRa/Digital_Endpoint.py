@@ -3,6 +3,36 @@ import time
 from AlLoRa.utils.time_utils import get_time
 from AlLoRa.utils.debug_utils import print
 
+
+def assign_session_ids(endpoints):
+    """Give every endpoint a unique 1-byte sid, resolving device_id[0] clashes.
+
+    Each endpoint keeps its identity-derived sid (device_id[0]) when it is free; on a clash the
+    later endpoint is bumped to the lowest free byte, which the Collector then sends in that
+    session's WELCOME (the initiator can't derive a reassigned value on its own). Fixed sids —
+    an explicit override, or a MAC-registered endpoint with no identity to derive from — are
+    reserved first and never moved. A no-op for a single endpoint (the 1:1 Requester case).
+    """
+    taken = set()
+    derived_endpoints = []
+    for ep in endpoints:
+        d = ep.derived_sid()
+        if d is None or ep.session_id != d:   # fixed (override / MAC-registered) -> reserve as-is
+            taken.add(ep.session_id)
+        else:
+            derived_endpoints.append(ep)
+    for ep in derived_endpoints:
+        sid = ep.derived_sid()
+        if sid in taken:
+            sid = 0
+            while sid in taken and sid < 256:
+                sid += 1
+            if sid >= 256:                    # 256 live sessions is far beyond any deployment
+                sid = ep.derived_sid()        # leave it derived; the store would surface a real clash
+        ep.session_id = sid
+        taken.add(sid)
+
+
 class Digital_Endpoint:
 
     REQUEST_DATA_STATE = "REQUEST_DATA_STATE"
@@ -13,7 +43,8 @@ class Digital_Endpoint:
                  sleep_mesh=True, asking_frequency=60, listening_time=30,
                  MAX_RETRANSMISSIONS_BEFORE_MESH=10, lock_on_file_receive=False,
                  max_listen_time_when_locked=300,
-                 session_id=0,
+                 session_id=None,
+                 device_id=None,
                  debug=False):
         """
         Initializes a new Digital Endpoint with detailed control over its operational parameters.
@@ -44,7 +75,8 @@ class Digital_Endpoint:
             self.bw = config.get('bw', 125)
             self.cr = config.get('cr', 1)
             self.tx_power = config.get('tx_power', 14)
-            self.session_id = config.get('session_id', session_id)  # v3: sid for this session
+            explicit_sid = config.get('session_id', session_id)
+            raw_device_id = config.get('device_id', device_id)
         else:
             self.name = name
             self.mac_address = mac_address[-8:]
@@ -60,7 +92,23 @@ class Digital_Endpoint:
             self.bw = 125
             self.cr = 1
             self.tx_power = 14
-            self.session_id = session_id  # v3: sid for this session
+            explicit_sid = session_id
+            raw_device_id = device_id
+
+        # v3 identity: the registered device_id fingerprint. Accepts a hex string
+        # (the operator copies it like a MAC) or raw bytes; device_id[:4] addresses first
+        # contact and device_id[0] seeds the sid. The sid is that derived byte unless an
+        # explicit session_id overrides it (or the Collector reassigns it on a clash).
+        self.device_id = bytes.fromhex(raw_device_id) if isinstance(raw_device_id, str) \
+            else (bytes(raw_device_id) if raw_device_id is not None else None)
+        if explicit_sid is not None:
+            self.session_id = explicit_sid
+        elif self.device_id is not None:
+            self.session_id = self.device_id[0]        # secure: device_id[0]
+        elif self.mac_address and self.mac_address != "00000000":
+            self.session_id = int(self.mac_address[-2:], 16)  # open: short-MAC low byte
+        else:
+            self.session_id = 0
 
         self.state = Digital_Endpoint.OK
         self.current_file = None
@@ -87,6 +135,16 @@ class Digital_Endpoint:
 
     def get_mac_address(self):
         return self.mac_address
+
+    def get_did(self):
+        # The 4-byte first-contact address (device_id[:4]) for a device_id-registered node, or
+        # None for a MAC-registered one — which is what selects the addressing.
+        return self.device_id[:4] if self.device_id is not None else None
+
+    def derived_sid(self):
+        # The sid this node's identity implies (device_id[0]); None if MAC-registered. Lets the
+        # Collector tell an identity-derived sid from a reassigned one (whether to send it).
+        return self.device_id[0] if self.device_id is not None else None
 
     def get_mesh(self):
         return self.mesh

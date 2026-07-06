@@ -35,12 +35,15 @@ prints/saves it under `Results/<mac>/`.
 Two changes (not just the config flip):
 
 1. **Both** `LoRa.json`: `"security_mode": "open"` → `"secure"` (use the ready-made
-   `LoRa_secure.json` in each folder).
-2. **`collector/main.py`**: set the endpoint's `mac_address` to the **Source's real MAC**. Unlike
-   open mode — and unlike v3 data transfer, which is session-addressed — the first-contact ECDH
-   handshake has no session id yet, so it is **MAC-addressed**, and the Source only answers a
-   handshake aimed at its own MAC. The Source prints it on boot as `S : xxxxxxxx`. (In open mode
-   this field is ignored for addressing; it's only the save-folder label.)
+   `LoRa_secure.json` in each folder). The Source's carries `identity_file`, so its crypto
+   identity (and thus its `device_id`) is stable across reboots.
+2. **`collector/main.py`**: register the Source by its **`device_id`**, not a MAC. On boot the
+   Source prints `SOURCE device_id (register this on the Collector): <hex>` — paste that value:
+   ```python
+   endpoint = Digital_Endpoint(name="src", device_id="<the printed device_id>", active=True)
+   ```
+   First contact is addressed by `device_id[:4]` (no MAC on the wire), and the session id derives
+   from the same identity on both ends, so there is **no `session_id` to keep in sync**.
 
 Then the ECDH handshake runs automatically on first contact (needs the CTR-flag firmware, which
 the CI build has) and every frame is AEAD-sealed. Watch the Source's serial: instead of

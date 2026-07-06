@@ -18,12 +18,18 @@ so a v3 node can still fall back to a legacy peer during version negotiation.
 
 Header layouts (P2P shown; mesh inserts a 2-byte `seq` before `integ`):
 
-    MAC-addressed  [src4][dst4][VT1][FL1][integ3]   = 13 B   (handshake / first contact)
+    MAC-addressed  [src4][dst4][VT1][FL1][integ3]   = 13 B   (v2-compat first contact)
+    did-addressed  [did4][VT1][FL1][integ3]         =  9 B   (v3 first contact — no MAC on wire)
     sid-addressed  [sid1][VT1][FL1][integ3]         =  6 B   (established session)
 
     VT   = version(4b)=0x3 | kind(4b)
     FL   = mesh|sleep|hop|debug_hops|role_token|auth|cfg_epoch|spare
     integ = sha256(payload)[:3]
+
+The did token is device_id[:4] — one 4-byte identity address, the same in both directions
+(the Collector polls it, the Source answers under it), so it matches at wire offset 0 exactly
+like the sid. It replaces the two-MAC handshake header once a node is registered by device_id
+rather than by MAC.
 """
 import struct
 import hashlib
@@ -39,12 +45,16 @@ class Packet_v3:
     # Header formats. `!` = network byte order; `4s`/`Ns` carry raw bytes we pack ourselves.
     #                              src dst VT FL      seq integ
     HEADER_FORMAT_MAC_P2P   = "!4s4sBB3s"     # 13 B
+    HEADER_FORMAT_DID_P2P   = "!4sBB3s"       #  9 B
     HEADER_FORMAT_SID_P2P   = "!BBB3s"        #  6 B
     HEADER_FORMAT_MAC_MESH  = "!4s4sBB2s3s"   # 15 B
+    HEADER_FORMAT_DID_MESH  = "!4sBB2s3s"     # 11 B
     HEADER_FORMAT_SID_MESH  = "!BBB2s3s"      #  8 B
     HEADER_SIZE_MAC_P2P  = 13
+    HEADER_SIZE_DID_P2P  = 9
     HEADER_SIZE_SID_P2P  = 6
     HEADER_SIZE_MAC_MESH = 15
+    HEADER_SIZE_DID_MESH = 11
     HEADER_SIZE_SID_MESH = 8
 
     # Secure-mode serialization. A secure frame replaces the open-mode 24-bit integrity
@@ -87,8 +97,8 @@ class Packet_v3:
         return command in Packet_v3.KIND_CODES
 
     def __init__(self, mesh_mode=False, addressing="sid", short_mac=True):
-        if addressing not in ("sid", "mac"):
-            raise ValueError("addressing must be 'sid' or 'mac', got {}".format(addressing))
+        if addressing not in ("sid", "mac", "did"):
+            raise ValueError("addressing must be 'sid', 'mac' or 'did', got {}".format(addressing))
         self.mesh_mode = mesh_mode
         self.addressing = addressing
         # short_mac is accepted for signature symmetry with v2; v3 MAC addressing is
@@ -97,12 +107,16 @@ class Packet_v3:
         if addressing == "mac":
             self.HEADER_FORMAT = self.HEADER_FORMAT_MAC_MESH if mesh_mode else self.HEADER_FORMAT_MAC_P2P
             self.HEADER_SIZE = self.HEADER_SIZE_MAC_MESH if mesh_mode else self.HEADER_SIZE_MAC_P2P
+        elif addressing == "did":
+            self.HEADER_FORMAT = self.HEADER_FORMAT_DID_MESH if mesh_mode else self.HEADER_FORMAT_DID_P2P
+            self.HEADER_SIZE = self.HEADER_SIZE_DID_MESH if mesh_mode else self.HEADER_SIZE_DID_P2P
         else:
             self.HEADER_FORMAT = self.HEADER_FORMAT_SID_MESH if mesh_mode else self.HEADER_FORMAT_SID_P2P
             self.HEADER_SIZE = self.HEADER_SIZE_SID_MESH if mesh_mode else self.HEADER_SIZE_SID_P2P
 
         self.src = b"\x00\x00\x00\x00"   # 4-byte compressed short MAC (mac addressing)
         self.dst = b"\x00\x00\x00\x00"
+        self.did = b"\x00\x00\x00\x00"   # 4-byte device_id[:4] token (did addressing)
         self.sid = 0                     # 1-byte session id (sid addressing)
         self.seq = 0                     # 2-byte mesh sequence number
 
@@ -121,8 +135,12 @@ class Packet_v3:
         self.cfg_epoch = False
 
     def __repr__(self):
-        who = "sid={}".format(self.sid) if self.addressing == "sid" \
-            else "src={} dst={}".format(self.get_source(), self.get_destination())
+        if self.addressing == "sid":
+            who = "sid={}".format(self.sid)
+        elif self.addressing == "did":
+            who = "did={}".format(self.did.hex())
+        else:
+            who = "src={} dst={}".format(self.get_source(), self.get_destination())
         return "Packet_v3(v{}, {}, kind={}, {}, payload={}, check={})".format(
             self.VERSION, self.addressing, self.kind, who, self.payload, self.check)
 
@@ -145,6 +163,17 @@ class Packet_v3:
 
     def get_destination(self):
         return self._mac_decompress(self.dst)
+
+    def set_did(self, did):
+        # device_id[:4] — the 4-byte first-contact address. Stored raw; whoever builds the
+        # packet slices the fingerprint (or the registered token) to 4 bytes.
+        did = bytes(did)
+        if len(did) != 4:
+            raise ValueError("did token must be exactly 4 bytes, got {}".format(len(did)))
+        self.did = did
+
+    def get_did(self):
+        return self.did
 
     def set_session(self, sid):
         if not 0 <= sid <= 255:
@@ -306,6 +335,10 @@ class Packet_v3:
             if self.mesh_mode:
                 return struct.pack(self.HEADER_FORMAT, self.src, self.dst, vt, fl, seq, integ)
             return struct.pack(self.HEADER_FORMAT, self.src, self.dst, vt, fl, integ)
+        elif self.addressing == "did":
+            if self.mesh_mode:
+                return struct.pack(self.HEADER_FORMAT, self.did, vt, fl, seq, integ)
+            return struct.pack(self.HEADER_FORMAT, self.did, vt, fl, integ)
         else:
             if self.mesh_mode:
                 return struct.pack(self.HEADER_FORMAT, self.sid, vt, fl, seq, integ)
@@ -336,6 +369,12 @@ class Packet_v3:
                     self.seq = struct.unpack("<H", seq)[0]
                 else:
                     self.src, self.dst, vt, fl, integ = struct.unpack(self.HEADER_FORMAT, header)
+            elif self.addressing == "did":
+                if self.mesh_mode:
+                    self.did, vt, fl, seq, integ = struct.unpack(self.HEADER_FORMAT, header)
+                    self.seq = struct.unpack("<H", seq)[0]
+                else:
+                    self.did, vt, fl, integ = struct.unpack(self.HEADER_FORMAT, header)
             else:
                 if self.mesh_mode:
                     self.sid, vt, fl, seq, integ = struct.unpack(self.HEADER_FORMAT, header)
