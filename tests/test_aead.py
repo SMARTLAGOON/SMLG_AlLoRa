@@ -11,11 +11,12 @@ caught — which survive a later byte-layout review unchanged.
 verifies the tag *before* decrypting, so a forged frame never yields plaintext. Tests run
 against the platform-detected backend (``detect_aead()``), exercising the real path.
 """
+import hmac
 import sys
 import types
 
 from AlLoRa.Security.AEAD import (detect_aead, Ctr_hmac_aead, _self_test,
-                                  _micropython_ctr, unavailable_reason)
+                                  _micropython_ctr, unavailable_reason, _ct_equal)
 
 ENC_KEY = bytes(range(16))          # AES-128 key
 MAC_KEY = bytes(range(16, 32))      # separate HMAC key
@@ -110,6 +111,27 @@ def test_self_test_rejects_a_backend_that_corrupts():
     def bad_ctr(key, nonce, data):
         return bytes(len(data))        # zeros — round-trip won't recover the plaintext
     assert _self_test(Ctr_hmac_aead(bad_ctr)) is False
+
+
+def test_ct_equal_matches_and_rejects():
+    assert _ct_equal(b"abcd", b"abcd") is True
+    assert _ct_equal(b"abcd", b"abce") is False
+    assert _ct_equal(b"abc", b"abcd") is False        # length mismatch
+    assert _ct_equal(bytearray(b"\x00\x01"), b"\x00\x01") is True
+
+
+def test_open_does_not_depend_on_hmac_compare_digest(monkeypatch):
+    # MicroPython's hmac module (micropython-lib) has no compare_digest — it is CPython-only.
+    # open() must verify the tag without it, or secure mode degrades on-device while CI (CPython,
+    # which has compare_digest) stays green. Simulate the MicroPython module by removing it.
+    monkeypatch.delattr(hmac, "compare_digest", raising=False)
+    aead = detect_aead()
+    assert aead is not None
+    sealed = aead.seal(ENC_KEY, MAC_KEY, NONCE, AAD, PLAINTEXT)
+    assert aead.open(ENC_KEY, MAC_KEY, NONCE, AAD, sealed) == PLAINTEXT   # genuine tag accepted
+    forged = bytearray(sealed)
+    forged[-1] ^= 0x01
+    assert aead.open(ENC_KEY, MAC_KEY, NONCE, AAD, bytes(forged)) is None  # forged tag rejected
 
 
 def _fake_aes_module(tag):

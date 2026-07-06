@@ -25,7 +25,10 @@ def hkdf_sha256(ikm, length, salt=b"", info=b""):
     """RFC 5869 HKDF with SHA-256: extract a pseudorandom key from ``ikm`` then expand it to
     ``length`` bytes bound to ``info``."""
     if salt == b"":
-        salt = b"\x00" * hashlib.sha256().digest_size
+        # HashLen for SHA-256 is 32. Hardcoded because MicroPython's hashlib hash objects don't
+        # expose `.digest_size` (it is a CPython attribute) — reading it degrades the handshake
+        # on-device while CI stays green.
+        salt = b"\x00" * 32
     prk = hmac.new(bytes(salt), bytes(ikm), hashlib.sha256).digest()   # extract
     out = b""
     block = b""

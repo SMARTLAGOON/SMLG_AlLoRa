@@ -22,6 +22,21 @@ import hmac
 import hashlib
 
 
+def _ct_equal(a, b):
+    # Constant-time byte-string comparison. hmac.compare_digest is CPython-only — MicroPython's
+    # hmac module (micropython-lib) doesn't provide it — so depending on it degrades secure mode
+    # on-device even though everything imports. This runs in time that depends only on len(a),
+    # not on where the bytes first differ, so a forged tag can't be reconstructed byte-by-byte
+    # from response timing. Both operands here are always the fixed TAG_LEN, so the length branch
+    # leaks nothing useful.
+    if len(a) != len(b):
+        return False
+    result = 0
+    for x, y in zip(bytes(a), bytes(b)):
+        result |= x ^ y
+    return result == 0
+
+
 class AEAD:
     """Authenticated-encryption seam. Subclasses implement one construction.
 
@@ -56,7 +71,7 @@ class Ctr_hmac_aead(AEAD):
         if len(sealed) < self.TAG_LEN:
             return None
         ciphertext, tag = sealed[:-self.TAG_LEN], sealed[-self.TAG_LEN:]
-        if not hmac.compare_digest(tag, self._tag(mac_key, nonce, aad, ciphertext)):
+        if not _ct_equal(tag, self._tag(mac_key, nonce, aad, ciphertext)):
             return None                     # auth failed -> never decrypt (verify before decrypt)
         return self._ctr(enc_key, nonce, ciphertext)
 
@@ -145,15 +160,29 @@ def detect_aead():
 
 
 def unavailable_reason():
-    """A short human-readable explanation of why ``detect_aead()`` returned None, for the
-    degraded-mode log line. Best-effort and only meant for the degrade path (it re-runs the
-    cheap detection). Distinguishes the two failure modes that otherwise look identical from
-    the outside: the native AES module not importing at all vs. importing but AES-CTR not being
-    compiled in (or hmac / hashlib.sha256 being broken), which the round-trip self-test catches.
+    """A precise explanation of why ``detect_aead()`` returned None, for the degraded-mode log
+    line. Best-effort and only meant for the degrade path (it re-runs the cheap detection). It
+    exercises each stage of the seal/open self-test in isolation and reports the actual
+    exception, so a degrade on real hardware names its own cause on the boot log — no REPL
+    needed, which matters because the radio loop is hard to interrupt for one.
     """
     ctr = _detect_ctr()
     if ctr is None:
         return "native AES module did not import (need 'cryptolib'; v1.21+ dropped 'ucryptolib')"
+    # Stage 1: AES-CTR (mode 6) in isolation — a real encrypt+decrypt round-trip.
+    try:
+        pt = b"sixteen bytes!!!"
+        ct = ctr(bytes(16), bytes(12), pt)
+        if ctr(bytes(16), bytes(12), ct) != pt:
+            return "AES-CTR ran but did not round-trip (mode 6 not real CTR)"
+    except Exception as e:
+        return "AES-CTR (mode 6) raised: {} (CTR not compiled?)".format(repr(e))
+    # Stage 2: the HMAC-SHA256 tag in isolation.
+    try:
+        hmac.new(bytes(16), b"probe", hashlib.sha256).digest()
+    except Exception as e:
+        return "HMAC-SHA256 raised: {} (hmac/hashlib backend?)".format(repr(e))
+    # Stage 3: the full seal/open (catches assembly issues like a missing compare_digest).
     if not _self_test(Ctr_hmac_aead(ctr)):
-        return "AES module imported but self-test failed (CTR mode not compiled, or hmac/hashlib)"
+        return "AES-CTR + HMAC both work in isolation but seal/open round-trip failed"
     return "AEAD available"
