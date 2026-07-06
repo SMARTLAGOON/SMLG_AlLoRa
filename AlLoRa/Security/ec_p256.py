@@ -57,20 +57,90 @@ def point_add(p1, p2):
     return (x3, y3)
 
 
+# --- Jacobian projective coordinates: the fast path for scalar_mult --------------------------
+# scalar_mult runs several times per handshake. In affine coordinates every point add/double
+# needs a modular inverse (inv_mod -> a 256-bit Fermat exponentiation), ~384 of them per scalar
+# multiplication — about 13 s on the ESP32, which overruns the handshake's receive window and
+# blocks the radio loop. Jacobian coordinates, where affine (x, y) = (X/Z^2, Y/Z^3), let the
+# whole double-and-add ladder run with NO inverses; a single inverse converts the result back to
+# affine at the very end. The curve points are identical, so public keys and shared secrets are
+# byte-for-byte unchanged (pinned by the NIST known-answer test) — only the speed differs.
+# Formulas: EFD "dbl-2007-bl" / "add-2007-bl" (general a; here a = A).
+
+_JAC_INF = (1, 1, 0)   # the identity has Z = 0
+
+
+def _jac_double(pt):
+    X1, Y1, Z1 = pt
+    if Z1 == 0 or Y1 == 0:
+        return _JAC_INF
+    XX = (X1 * X1) % P
+    YY = (Y1 * Y1) % P
+    YYYY = (YY * YY) % P
+    ZZ = (Z1 * Z1) % P
+    t = (X1 + YY) % P
+    S = (2 * ((t * t - XX - YYYY) % P)) % P
+    M = (3 * XX + A * ((ZZ * ZZ) % P)) % P
+    T = (M * M - 2 * S) % P
+    u = (Y1 + Z1) % P
+    Z3 = (u * u - YY - ZZ) % P
+    Y3 = (M * ((S - T) % P) - 8 * YYYY) % P
+    return (T, Y3, Z3)
+
+
+def _jac_add(p1, p2):
+    X1, Y1, Z1 = p1
+    X2, Y2, Z2 = p2
+    if Z1 == 0:
+        return p2
+    if Z2 == 0:
+        return p1
+    Z1Z1 = (Z1 * Z1) % P
+    Z2Z2 = (Z2 * Z2) % P
+    U1 = (X1 * Z2Z2) % P
+    U2 = (X2 * Z1Z1) % P
+    S1 = (Y1 * ((Z2 * Z2Z2) % P)) % P
+    S2 = (Y2 * ((Z1 * Z1Z1) % P)) % P
+    if U1 == U2:
+        if S1 != S2:
+            return _JAC_INF          # p1 + (-p1) = identity
+        return _jac_double(p1)       # p1 == p2
+    H = (U2 - U1) % P
+    HH2 = (2 * H) % P
+    I = (HH2 * HH2) % P
+    J = (H * I) % P
+    r = (2 * ((S2 - S1) % P)) % P
+    V = (U1 * I) % P
+    X3 = (r * r - J - 2 * V) % P
+    Y3 = (r * ((V - X3) % P) - 2 * ((S1 * J) % P)) % P
+    zsum = (Z1 + Z2) % P
+    Z3 = (((zsum * zsum - Z1Z1 - Z2Z2) % P) * H) % P
+    return (X3, Y3, Z3)
+
+
+def _jac_to_affine(pt):
+    X, Y, Z = pt
+    if Z == 0:
+        return INF
+    zi = inv_mod(Z)
+    zi2 = (zi * zi) % P
+    zi3 = (zi2 * zi) % P
+    return ((X * zi2) % P, (Y * zi3) % P)
+
+
 def scalar_mult(k, point):
     if k % N == 0 or point is INF:
         return INF
     if k < 0:
         x, y = point
         return scalar_mult(-k, (x, (-y) % P))
-    result = INF
-    addend = point
-    while k:
-        if k & 1:
-            result = point_add(result, addend)
-        addend = point_add(addend, addend)
-        k >>= 1
-    return result
+    R = _JAC_INF
+    Q = (point[0] % P, point[1] % P, 1)          # affine base -> Jacobian (Z = 1)
+    for i in range(k.bit_length() - 1, -1, -1):  # left-to-right double-and-add
+        R = _jac_double(R)
+        if (k >> i) & 1:
+            R = _jac_add(R, Q)
+    return _jac_to_affine(R)
 
 
 def generate_private_key(randfunc):
