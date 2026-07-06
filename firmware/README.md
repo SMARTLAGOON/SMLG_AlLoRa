@@ -40,3 +40,22 @@ target (they're coupled — a MicroPython release supports specific ESP-IDF vers
 
 That's the whole "which MicroPython, which modem, which device" decision — one folder + one
 matrix row. A supplier switching modems is a new driver + a new target; the protocol is untouched.
+
+## Secure mode: MicroPython vs CPython (why CI-green ≠ device-works)
+
+The test suite runs on CPython, whose stdlib is a superset of MicroPython's. Several CPython-only
+APIs pass CI but throw on the ESP32, and because the secure node **degrades to open** when its
+crypto backend is unavailable, the failure is silent on the wire — it just never completes the
+handshake. Known traps the frozen library must avoid (all fixed, listed so they stay fixed):
+
+- **`import ucryptolib`** — renamed to `cryptolib` in MicroPython v1.21 with no weak-link alias.
+  Import `cryptolib` first, fall back to `ucryptolib` for pre-1.21. (`AlLoRa/Security/AEAD.py`)
+- **`hmac.compare_digest`** — CPython-only; micropython-lib's `hmac` has only `HMAC`/`new`. Use a
+  local constant-time compare instead. (`AlLoRa/Security/AEAD.py`)
+- **`hashlib.sha256().digest_size`** — MicroPython hash objects don't expose it. Hardcode `32`.
+  (`AlLoRa/Security/kdf.py`)
+
+Rule of thumb: after any change to the secure path, don't trust CI alone — flash and confirm the
+Source boots **without** the `secure mode … running open (degraded): …` line, whose suffix now
+names the exact backend failure. Note the frozen library is baked into the `.bin`, so a
+library-only change needs a firmware rebuild to reach the device.
