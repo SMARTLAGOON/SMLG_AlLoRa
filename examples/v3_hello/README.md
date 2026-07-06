@@ -32,10 +32,19 @@ prints/saves it under `Results/<mac>/`.
 
 ## Go secure
 
-Flip **one field in both** `LoRa.json`: `"security_mode": "open"` → `"secure"`. Nothing else
-changes — the ECDH handshake runs automatically on first contact (needs the CTR-flag firmware,
-which the CI build has), then every frame is AEAD-sealed. Watch the Source's serial: you'll see
-the handshake CTRL exchange before the transfer.
+Two changes (not just the config flip):
+
+1. **Both** `LoRa.json`: `"security_mode": "open"` → `"secure"` (use the ready-made
+   `LoRa_secure.json` in each folder).
+2. **`collector/main.py`**: set the endpoint's `mac_address` to the **Source's real MAC**. Unlike
+   open mode — and unlike v3 data transfer, which is session-addressed — the first-contact ECDH
+   handshake has no session id yet, so it is **MAC-addressed**, and the Source only answers a
+   handshake aimed at its own MAC. The Source prints it on boot as `S : xxxxxxxx`. (In open mode
+   this field is ignored for addressing; it's only the save-folder label.)
+
+Then the ECDH handshake runs automatically on first contact (needs the CTR-flag firmware, which
+the CI build has) and every frame is AEAD-sealed. Watch the Source's serial: instead of
+`Could not parse frame`, you'll see it answer the handshake CTRL frames, then the sealed transfer.
 
 ## If the radio link needs debugging
 
