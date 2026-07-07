@@ -65,6 +65,16 @@ Source boots **without** the `secure mode … running open (degraded): …` line
 names the exact backend failure. Note the frozen library is baked into the `.bin`, so a
 library-only change needs a firmware rebuild to reach the device.
 
+**Registering a secure node (device_id, not MAC).** A secure node's first contact is addressed by
+its device_id, the fingerprint of its long-term identity key (`SHA256(pubkey)`), not by its wifi
+MAC. On first boot the Source generates that key, persists it to the `identity_file` named in
+`LoRa.json` (so the device_id is stable across reboots), and prints it as `SOURCE device_id
+(register this on the Collector): <hex>`. Bring-up is therefore two passes: boot the Source once to
+read its device_id, then register that value on the Collector (`Digital_Endpoint(device_id="<hex>",
+active=True)`) before starting the pull. The session id derives from the same identity, so no
+hand-assigned `session_id` is needed; set one in config only to override for debugging or to break a
+rare 1-byte clash. A node registered by MAC instead keeps the legacy two-MAC handshake.
+
 **Handshake CPU budget.** First contact runs pure-Python P-256 ECDH — a few scalar multiplications
 per session, on the order of half a second each on an ESP32-class board (they compute in Jacobian
 coordinates; the earlier affine version took ~13 s and overran the handshake receive window, so the
