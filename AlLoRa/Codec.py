@@ -60,6 +60,11 @@ class _MacMatchSpec:
                 and wire[0:n] == self._peer_bytes
                 and wire[n:2 * n] == self._me_bytes)
 
+    def wire_prefix(self):
+        # The contiguous offset-0 bytes a keyless bridge compares (src then dst); `matches_wire`
+        # is exactly "wire starts with this". Sent down so the tunnel matches at the radio.
+        return self._peer_bytes + self._me_bytes
+
 
 class _SidMatchSpec:
     """v3: a reply belongs to our request when they share a session id. Keyless and
@@ -75,6 +80,10 @@ class _SidMatchSpec:
 
     def matches_wire(self, wire):
         return len(wire) >= 1 and wire[0] == self._sid
+
+    def wire_prefix(self):
+        # The cleartext sid byte at offset 0 — the keyless prefix the tunnel bridge matches on.
+        return bytes([self._sid])
 
 
 class _DidMatchSpec:
@@ -92,6 +101,11 @@ class _DidMatchSpec:
     def matches_wire(self, wire):
         n = len(self._did)
         return len(wire) >= n and wire[:n] == self._did
+
+    def wire_prefix(self):
+        # The device_id[:4] token at offset 0 — keyless, so the tunnel bridge matches it at
+        # the radio without touching a session.
+        return self._did
 
 
 class V2Codec:
