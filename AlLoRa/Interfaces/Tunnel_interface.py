@@ -37,6 +37,11 @@ class Tunnel_interface(Interface):
         while should_stop is None or not should_stop():
             self.handle_one(timeout=0.5)
 
+    def client_API(self):
+        """One pump step, for the Adapter node's run loop (which calls this repeatedly and
+        treats a truthy return as 'a request was served')."""
+        return self.handle_one(timeout=0.5)
+
     def handle_one(self, timeout=None):
         request = self.link.read_request(timeout=timeout)
         if request is None:

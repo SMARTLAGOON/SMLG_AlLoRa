@@ -17,6 +17,7 @@ Two things move against the old design's fused override:
     its own timeout.
 """
 from AlLoRa.Connectors.Connector import Connector
+from AlLoRa.Codec import build_codec
 from AlLoRa.Links import tunnel_rpc
 from AlLoRa.utils.debug_utils import print
 
@@ -30,6 +31,16 @@ class Tunnel_connector(Connector):
         # for up to the window, so its link deadline is window + slack for link + processing.
         self._rpc_timeout = rpc_timeout
         self._link_margin = link_margin
+
+    def config(self, config_json):
+        super().config(config_json)
+        # Reply matching in MAC addressing (v2, and the retiring v3-secure MAC-compat handshake)
+        # keys off *my* on-air address — which for a tunnel is the bridge radio's MAC, not this
+        # host's. The codec was just built with the placeholder MAC, so fetch the real one from
+        # the bridge and rebuild. sid / device_id addressing (the v3 default) is MAC-independent,
+        # so the tunnel skips this extra round trip there.
+        if getattr(self, "addressing", "mac") == "mac" and self.link is not None:
+            self.request_mac()
 
     # --- transport verbs, forwarded to the bridge radio over the link ---
 
@@ -129,12 +140,25 @@ class Tunnel_connector(Connector):
             return []
         return tunnel_rpc.decode_get_rf_reply(reply)
 
-    def request_mac(self):
-        """Fetch the bridge radio's MAC (the real on-air address the peer answers to) and cache
-        it as this connector's identity, so the codec's addressing/matching uses it."""
-        reply = self.link.rpc(tunnel_rpc.encode_get_mac(), timeout=self._rpc_timeout)
-        if reply:
-            mac = tunnel_rpc.decode_get_mac_reply(reply)
-            if mac:
-                self.MAC = mac
+    def request_mac(self, retries=3):
+        """Fetch the bridge radio's MAC (the real on-air address the peer answers to), cache it
+        as this connector's identity, and rebuild the codec so its reply-matching uses it. The
+        bridge may still be booting when a tunnel Collector comes up, so retry a few times."""
+        for _ in range(max(1, retries)):
+            reply = self.link.rpc(tunnel_rpc.encode_get_mac(), timeout=self._rpc_timeout)
+            if reply:
+                mac = tunnel_rpc.decode_get_mac_reply(reply)
+                if mac and mac != self.MAC:
+                    self.MAC = mac
+                    self._rebuild_codec()
+                if mac:
+                    return self.MAC
         return self.MAC
+
+    def _rebuild_codec(self):
+        # Re-frame the codec with the now-known MAC. This is the open-mode rebuild; MAC
+        # addressing is v2 (no secure posture), and the v3 secure path is sid/device_id-addressed
+        # (MAC-independent), so it never reaches here with a secure codec to preserve.
+        self.codec = build_codec(
+            protocol_version=self.protocol_version, addressing=self.addressing,
+            mesh_mode=self.mesh_mode, short_mac=self.short_mac, my_mac=self.get_mac())
