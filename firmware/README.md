@@ -28,6 +28,11 @@ target in a matrix inside Espressif's ESP-IDF container and attaches each `firmw
 release. No local toolchain. Each matrix row pins the MicroPython + ESP-IDF versions for that
 target (they're coupled — a MicroPython release supports specific ESP-IDF versions).
 
+The freeze copies the **live** `AlLoRa/` tree at build time — including `AlLoRa/Links/` (the
+`Serial_link` / `WiFi_link` tunnel transports). A device that runs tunnel code (the Adapter
+bridge, whose `Tunnel_interface` moves frames over a real UART or WiFi socket) therefore only
+picks up a tunnel change on the next rebuild; a protocol-only push does not reach it.
+
 ## Adding a target (new device or new modem)
 
 1. If it's a **new modem**, vendor its driver under `drivers/<name>/` (pin the exact version).
