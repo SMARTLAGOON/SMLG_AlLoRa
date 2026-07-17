@@ -10,11 +10,12 @@ from AlLoRa.utils.os_utils import os
 
 class Requester(Node):
 
-    def __init__(self, connector = None, config_file = "LoRa.json", 
-                    debug_hops = False, 
-                    NEXT_ACTION_TIME_SLEEP = 0.1, 
-                    max_sleep_time = 3, 
-                    successful_interactions_required = 5):
+    def __init__(self, connector = None, config_file = "LoRa.json",
+                    debug_hops = False,
+                    NEXT_ACTION_TIME_SLEEP = 0.1,
+                    max_sleep_time = 3,
+                    successful_interactions_required = 5,
+                    data_sink = None):
         super().__init__(connector, config_file)
         gc.enable()
         
@@ -38,6 +39,14 @@ class Requester(Node):
             except Exception as e:
                 if self.debug:
                     print("Error creating result path: {}".format(e))
+
+        # The completed-file output boundary, symmetric to DataSource on the Source side. Default:
+        # persist to Results/<source>/ exactly as before; a caller can inject an MQTT/cloud/website
+        # sink instead, and the Collector never learns where its files actually go.
+        if data_sink is None:
+            from AlLoRa.DataSinks.Disk_DataSink import Disk_DataSink
+            data_sink = Disk_DataSink(getattr(self, "result_path", "Results"))
+        self.data_sink = data_sink
 
         self.status["SMAC"] = "-"   # Source MAC
         self.source_mac = None
@@ -310,7 +319,8 @@ class Requester(Node):
                             if print_file:
                                 print(file.get_content())
                             if save_file:
-                                file.save(save_to)
+                                self.data_sink.consume(
+                                    file, self._reception_context(digital_endpoint, mac))
                             if one_file:
                                 stop = True
 
@@ -362,6 +372,33 @@ class Requester(Node):
                 if stop:
                     break
             
+    def _reception_context(self, digital_endpoint, mac):
+        # Freeze a completion record for the sink: identity + a final RF/quality snapshot, taken
+        # now (the endpoint is reused for the next file). Every field is best-effort — a missing
+        # RSSI/did must never break delivery — so each lookup is guarded.
+        from AlLoRa.DataSinks.DataSink import Reception
+        did = None
+        try:
+            did = digital_endpoint.get_did()
+        except Exception:
+            pass
+        rssi = snr = None
+        try:
+            rssi = self.connector.get_rssi()
+        except Exception:
+            pass
+        try:
+            snr = self.connector.get_snr()
+        except Exception:
+            pass
+        total_chunks = None
+        info = getattr(digital_endpoint, "file_reception_info", None)
+        if isinstance(info, dict):
+            total_chunks = info.get("total_chunks")
+        return Reception(source=mac, session_id=digital_endpoint.session_id,
+                         device_id=did, rssi=rssi, snr=snr,
+                         total_chunks=total_chunks, timestamp_ms=time())
+
     def save_hops(self, packet):
         if packet is None:
             return False

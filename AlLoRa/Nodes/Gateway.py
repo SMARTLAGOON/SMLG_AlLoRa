@@ -9,8 +9,8 @@ from json import loads, dumps
 
 class Gateway(Requester):
 
-    def __init__(self, connector=None, config_file="LoRa.json", debug_hops=False, 
-                    NEXT_ACTION_TIME_SLEEP=0.1, nodes_file="Nodes.json"):
+    def __init__(self, connector=None, config_file="LoRa.json", debug_hops=False,
+                    NEXT_ACTION_TIME_SLEEP=0.1, nodes_file="Nodes.json", data_sink=None):
         #JSON Example:
         # {
         #     "name": "G",
@@ -26,7 +26,7 @@ class Gateway(Requester):
         # }
 
         super().__init__(connector,  config_file, debug_hops=debug_hops,
-                            NEXT_ACTION_TIME_SLEEP=NEXT_ACTION_TIME_SLEEP)
+                            NEXT_ACTION_TIME_SLEEP=NEXT_ACTION_TIME_SLEEP, data_sink=data_sink)
         self.nodes_file = nodes_file
         self.digital_endpoints = []
         self.add_digital_endpoints(self.nodes_file)

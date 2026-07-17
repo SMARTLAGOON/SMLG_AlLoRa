@@ -123,6 +123,21 @@ class AlLoRa_File:
                 pass
         self.finalize(path)
 
+    def discard(self):
+        # save()'s counterpart for a non-disk sink (MQTT/cloud) that has already read
+        # get_content(): close the reassembly writer and drop the temp file instead of
+        # renaming it into place, so no Results copy is left and no file handle leaks.
+        if not self.assembly_needed:
+            return
+        try:
+            self.file_writer.close()
+        except Exception:
+            pass
+        try:
+            os.remove(self.temp_file_path)
+        except Exception:
+            pass
+
     # Source methods
     def get_length(self):
         return self.chunk_counter
