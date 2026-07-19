@@ -1,3 +1,11 @@
+# MicroPython's ticks_ms wraps at 2^30 ms (~12.4 days), so a deadline built with
+# raw +/< holds a window open for ~12 more days when it spans the wrap. ALL
+# deadline math on current_time_ms goes through ticks_add/ticks_diff: the same
+# semantic as the utime pair, implemented portably below for CPython (congruence
+# keeps diffs exact for unwrapped epoch ms too, for any gap under half a period).
+_TICKS_PERIOD = 1 << 30
+_TICKS_HALF = _TICKS_PERIOD >> 1
+
 try:
     # For regular Python
     import time
@@ -11,6 +19,12 @@ try:
 
     def current_time_ms():
         return int(time.time() * 1000)  # Time in milliseconds
+
+    def ticks_add(ticks, delta):
+        return (ticks + int(delta)) % _TICKS_PERIOD
+
+    def ticks_diff(ticks_end, ticks_start):
+        return ((ticks_end - ticks_start + _TICKS_HALF) % _TICKS_PERIOD) - _TICKS_HALF
 
     def sleep(seconds):
         time.sleep(seconds)
@@ -64,6 +78,12 @@ except ImportError:
 
     def current_time_ms():
         return time.ticks_ms()  # Time in milliseconds
+
+    def ticks_add(ticks, delta):
+        return time.ticks_add(ticks, int(delta))
+
+    def ticks_diff(ticks_end, ticks_start):
+        return time.ticks_diff(ticks_end, ticks_start)
 
     def sleep(seconds):
         time.sleep(seconds)

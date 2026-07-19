@@ -25,8 +25,10 @@ class Gateway(Requester):
         #     "time_per_endpoint": 10
         # }
 
+        # NEXT_ACTION_TIME_SLEEP is accepted for legacy callers but ignored, as it
+        # has been since v2.0 — the adaptive sleep controller owns the gap.
         super().__init__(connector,  config_file, debug_hops=debug_hops,
-                            NEXT_ACTION_TIME_SLEEP=NEXT_ACTION_TIME_SLEEP, data_sink=data_sink)
+                            data_sink=data_sink)
         self.nodes_file = nodes_file
         self.digital_endpoints = []
         self.add_digital_endpoints(self.nodes_file)

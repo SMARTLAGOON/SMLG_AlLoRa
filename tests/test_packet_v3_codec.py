@@ -192,6 +192,32 @@ def test_chunk_index_handles_values_v2_ascii_would_bloat():
     assert got.get_chunk_index() == 5000
 
 
+# --- typed GRANT (role reversal: the Hub delegates the drive role) ----------
+
+def test_grant_swap_id_round_trips():
+    # GRANT stays minimal: its whole payload is the 1-byte rolling swap_id, so a stale
+    # or duplicate GRANT is ignorable by comparing counters.
+    p = _fresh("sid")
+    p.set_session(9)
+    p.set_grant(0x5A)
+    assert p.get_payload() == b"\x5a"
+
+    got = _fresh("sid")
+    assert got.load(p.get_content()) is True
+    assert got.get_command() == "GRANT"
+    assert got.get_swap_id() == 0x5A
+
+
+def test_swap_id_must_fit_one_byte_and_is_kind_gated():
+    p = _fresh("sid")
+    p.set_session(9)
+    with pytest.raises(ValueError):
+        p.set_grant(256)
+    # get_swap_id on a non-GRANT frame is None, like the other typed accessors.
+    p.set_data(b"x")
+    assert p.get_swap_id() is None
+
+
 # --- FL flag byte -----------------------------------------------------------
 
 def test_role_token_flag_round_trips_without_disturbing_kind():

@@ -256,6 +256,19 @@ class Packet_v3:
             return None
         return struct.unpack("<H", self.payload[:2])[0]
 
+    def set_grant(self, swap_id):
+        # The Hub delegating the drive role. The whole payload is a 1-byte rolling
+        # counter, so the Edge can ignore a stale or duplicate GRANT by comparing it.
+        if not 0 <= swap_id <= 255:
+            raise ValueError("swap_id must fit one byte (0..255)")
+        self.kind = self.GRANT
+        self.payload = bytes([swap_id])
+
+    def get_swap_id(self):
+        if self.kind != self.GRANT or not self.payload:
+            return None
+        return self.payload[0]
+
     # --- FL flags -----------------------------------------------------------
 
     def set_role_token(self, on=True):

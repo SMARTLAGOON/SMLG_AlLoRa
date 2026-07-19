@@ -115,7 +115,7 @@ Inside the repository, you will find the following folders:
 
 - debug_hops (optional):  If True, the Sources will override the message to be sent and register the message path (or hops between Nodes), more information about this below. The default is False.
   
-- NEXT_ACTION_TIME_SLEEP (optional): Is the time (in seconds) between actions for the Requester in order to listen to the Source. The default is 0.1 seconds, but you can experiment with this number if you want.
+- NEXT_ACTION_TIME_SLEEP (deprecated, ignored): the fixed gap between requests was replaced by an adaptive controller that finds the shortest gap the link tolerates on its own, so this value is accepted for compatibility but has no effect. To tune the gap at runtime, use `node.pacing.set_sleep_bounds(min_sleep, max_sleep)`.
 
 1. Listen to endpoint:
 

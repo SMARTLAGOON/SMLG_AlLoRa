@@ -139,6 +139,20 @@ class AlLoRa_File:
             pass
 
     # Source methods
+    def reset_delivery(self):
+        # One file object can be served more than once — re-queued after delivery,
+        # or broadcast to several endpoints. Every new serve must start from an
+        # undelivered state, or the stale sent flag confirms a delivery that never
+        # happened. Receiver-side (reassembly) files have no delivery state.
+        if self.assembly_needed:
+            return
+        self.sent = False
+        self.metadata_sent = False
+        self.first_sent = None
+        self.last_sent = None
+        self.last_chunk_sent = None
+        self.retransmission = 0
+
     def get_length(self):
         return self.chunk_counter
 
