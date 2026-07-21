@@ -1,7 +1,7 @@
-"""Edge — the node at the far placement (formerly `Source`).
+"""Edge: the node at the far placement (formerly `Source`).
 
 Named by where it sits, not by which way data flows: an Edge lives with the sensors/devices
-at the end of the link and *serves* by default (home role "source") — uplink is always
+at the end of the link and *serves* by default (home role "source"): uplink is always
 Edge-serves / Hub-pulls, even for a large file. It still carries the drive loop, because a
 downlink reverses the roles for one pull: the Hub delegates the drive role with a GRANT and
 this Edge pulls the pending file, then comes home. The Edge never self-promotes, and it
@@ -19,8 +19,9 @@ from AlLoRa.utils.debug_utils import print
 class Edge(Swap_base):
 
     def __init__(self, connector=None, config_file="LoRa.json", data_sink=None,
-                 downlink_window=60):
-        super().__init__(connector, config_file, data_sink=data_sink, home_role="source")
+                 datasource=None, downlink_window=60):
+        super().__init__(connector, config_file, data_sink=data_sink,
+                         datasource=datasource, home_role="source")
         # How long a granted pull may drive before the Edge gives up and comes home (its
         # own backstop, independent of the Hub's reclaim timer).
         self.downlink_window = downlink_window
@@ -39,6 +40,7 @@ class Edge(Swap_base):
         is in seconds; None runs forever (the deployed main loop)."""
         end_time = None if timeout is None else ticks_add(time(), timeout * 1000)
         while end_time is None or ticks_diff(end_time, time()) > 0:
+            self._pump_datasource()
             self.respond(self._respond_handler)
             if self.file is not None and self.file.sent:
                 # The uplink completed (the Hub's final-OK landed): retire it, or the idle
@@ -72,7 +74,7 @@ class Edge(Swap_base):
             self.current_role = "source"
             if not delivered:
                 # A dead pull's half-built reassembly buffer holds an open file
-                # handle, and the endpoint dies with this method — nobody else can
+                # handle, and the endpoint dies with this method: nobody else can
                 # release it. A later retry starts a fresh buffer regardless, so
                 # close and drop this one (the FD table on-device is tiny).
                 in_flight = endpoint.get_current_file()
@@ -83,7 +85,7 @@ class Edge(Swap_base):
         # The Hub endpoint is captured from the live session, never configured: by the time
         # a GRANT can arrive the session already exists, so the Edge addresses the Hub by
         # the sid both ends share, drives on the RF config already in use, and adds only a
-        # fresh reassembly buffer (the endpoint starts with none). It skips the OK poll —
+        # fresh reassembly buffer (the endpoint starts with none). It skips the OK poll:
         # the GRANT itself means the downlink is ready.
         c = self.connector
         endpoint = Digital_Endpoint(config={

@@ -1,8 +1,8 @@
-"""Loopback_link — an in-process Link for testing the tunnel on CPython, with no UART/socket.
+"""Loopback_link: an in-process Link for testing the tunnel on CPython, with no UART/socket.
 
 Whatever the client half `rpc`s down, the bridge half `read_request`s; whatever the bridge
 `write_reply`s, the client's blocked `rpc` returns. Two directions, two queues, so a pending
-reply is never mistaken for the next request. CPython-only (uses `queue`) — it never freezes
+reply is never mistaken for the next request. CPython-only (uses `queue`). It never freezes
 to firmware, exactly like Loopback_connector.
 """
 import queue

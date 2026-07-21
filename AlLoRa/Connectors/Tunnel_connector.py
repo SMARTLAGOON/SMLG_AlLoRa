@@ -1,19 +1,19 @@
-"""Tunnel_connector — the logic-holder half of a split Connector.
+"""Tunnel_connector: the logic-holder half of a split Connector.
 
 A tunnel runs the protocol engine, codec and keys on one device (a Raspberry-Pi gateway) and
 the radio on another (an ESP32 Adapter) across a serial/WiFi link. This is the half on the
 logic-holder: a real Connector whose transport verbs are forwarded over a Link to the bridge,
 which runs them on its radio and returns the result. Because only opaque wire crosses the
-link — never a parsed Packet — v2 / v3-open / v3-secure all tunnel unchanged, closing the
+link (never a parsed Packet), v2 / v3-open / v3-secure all tunnel unchanged, closing the
 old "tunnels only speak v2" gap. The codec and session keys stay entirely here; the bridge is
 dumb and keyless.
 
 Two things move against the old design's fused override:
-  * the wait-for-the-reply loop runs *at the radio* via `exchange` — only the matching reply
+  * the wait-for-the-reply loop runs *at the radio* via `exchange`: only the matching reply
     (plus the radio-measured `td`) crosses the slow link, never a foreign frame, never a
     ping-ponged receive window;
   * the window `D` is sent *down* and the true `td` comes *up*, so pacing is owned here from a
-    real measurement — retiring the old `ACK:<timeout>+0.5` guess where the far side reported
+    real measurement, retiring the old `ACK:<timeout>+0.5` guess where the far side reported
     its own timeout.
 """
 from AlLoRa.Connectors.Connector import Connector
@@ -35,7 +35,7 @@ class Tunnel_connector(Connector):
     def config(self, config_json):
         super().config(config_json)
         # Reply matching in MAC addressing (v2, and the retiring v3-secure MAC-compat handshake)
-        # keys off *my* on-air address — which for a tunnel is the bridge radio's MAC, not this
+        # keys off *my* on-air address, which for a tunnel is the bridge radio's MAC, not this
         # host's. The codec was just built with the placeholder MAC, so fetch the real one from
         # the bridge and rebuild. sid / device_id addressing (the v3 default) is MAC-independent,
         # so the tunnel skips this extra round trip there.
@@ -97,7 +97,7 @@ class Tunnel_connector(Connector):
 
         packet_size_received = len(reply_wire)
         # The bridge matched on the cleartext prefix only; the codec (here, with the keys) has
-        # the final say — a right-prefix-but-corrupt or unverifiable frame deframes to None.
+        # the final say: a right-prefix-but-corrupt or unverifiable frame deframes to None.
         response_packet = self.codec.deframe(reply_wire)
         if response_packet is None:
             return ({"type": "CORRUPTED_PACKET", "message": "{}".format(reply_wire)},

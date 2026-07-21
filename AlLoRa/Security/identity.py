@@ -1,4 +1,4 @@
-"""A v3 node's crypto-bound identity — the fingerprint of its long-term public key.
+"""A v3 node's crypto-bound identity: the fingerprint of its long-term public key.
 
 The successor to MAC-as-identity. v2 addressed and "identified" a node by its wifi MAC, a
 value anyone can claim. v3 derives identity from a key the node holds: device_id =

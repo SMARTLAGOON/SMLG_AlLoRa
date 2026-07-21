@@ -153,7 +153,7 @@ class Connector:
         self.mesh_mode = mesh_mode
 
     def transmit(self, wire):
-        # Pure byte send — the narrowed transport primitive. Concrete connectors override
+        # Pure byte send: the narrowed transport primitive. Concrete connectors override
         # this (a radio put-on-air, a loopback queue); the base is a stub like recv.
         return None
 
@@ -167,7 +167,7 @@ class Connector:
         return self.transmit(self.codec.frame(packet))
 
     def listen(self, window):
-        # One timed receive window, measured at the radio — the (wire, td) a split-Connector
+        # One timed receive window, measured at the radio: the (wire, td) a split-Connector
         # tunnel bridge would run remotely and report back up (td is the round-trip the
         # policy layer feeds to Pacing).
         t0 = time()
@@ -176,7 +176,7 @@ class Connector:
         return wire, td
 
     def exchange(self, wire, window, match_key):
-        """Transmit a frame and wait — at the radio — for the reply that satisfies `match_key`,
+        """Transmit a frame and wait, at the radio, for the reply that satisfies `match_key`,
         within a shrinking window. Codec-free and keyless: it matches on the wire prefix
         (`match_key.matches_wire`), so a dumb tunnel bridge can run it and never ferry a
         foreign frame across the link. Returns `(reply_wire, td, status)` with status in
@@ -214,7 +214,7 @@ class Connector:
         wire = self.codec.frame(packet)   # framing goes live on the send path here (was in self.send)
         packet_size_sent = len(wire)
         # How a reply is matched to this request (version/posture-agnostic; the sid or MAC
-        # mirror the request). Built once — the request doesn't change across the wait loop.
+        # mirror the request). Built once: the request doesn't change across the wait loop.
         match = self.codec.match_spec(packet)
         try:
             send_success = self.transmit(wire)

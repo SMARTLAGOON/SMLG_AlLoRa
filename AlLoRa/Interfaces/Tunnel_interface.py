@@ -1,8 +1,8 @@
-"""Tunnel_interface — the bridge (Adapter) half of a split Connector.
+"""Tunnel_interface: the bridge (Adapter) half of a split Connector.
 
 The Adapter holds the radio but no protocol logic: it reads a transport-verb request off the
 link, runs that verb on its real Connector, and writes the result back. It never parses the
-LoRa wire, never holds a session key — it moves opaque bytes and, for `exchange`, matches
+LoRa wire, never holds a session key. It moves opaque bytes and, for `exchange`, matches
 replies on the cleartext prefix the logic-holder sent down. That is what lets a single dumb
 bridge serve v2, v3-open and v3-secure alike, and what "Adapter is the server half of a split
 Connector, not a node type" means in practice.
@@ -15,7 +15,7 @@ from AlLoRa.utils.debug_utils import print
 class _PrefixMatch:
     """Keyless reply matcher for the bridge radio's `exchange`: a reply is ours when it starts
     with the prefix the logic-holder sent down (a sid byte, a device_id[:4] token, or the
-    src+dst MAC bytes). No codec, no keys — the codec on the logic-holder has the final say."""
+    src+dst MAC bytes). No codec, no keys: the codec on the logic-holder has the final say."""
 
     def __init__(self, prefix):
         self._prefix = bytes(prefix) if prefix else b""

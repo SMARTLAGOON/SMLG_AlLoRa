@@ -4,7 +4,7 @@ Where a node keeps its live secure Sessions, keyed by session id. v3.0.0 ships t
 store (sessions die on reboot -> re-handshake, which fits always-powered deployments);
 persisting to ESP32 RTC slow memory for deep-sleep duty-cycling is a v3.x store that drops
 in behind this same interface with no protocol change. The seam is a plain base class
-(no ``abc`` — MicroPython-friendly) whose contract is get / put / drop.
+(no ``abc``, MicroPython-friendly) whose contract is get / put / drop.
 """
 
 

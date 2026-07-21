@@ -1,4 +1,4 @@
-"""Serial_link — a UART byte-mover for the split Connector.
+"""Serial_link: a UART byte-mover for the split Connector.
 
 The concrete `Link` under a serial tunnel: it moves opaque request/reply frames between the
 logic-holder (a Raspberry-Pi/host over `pyserial`) and the bridge (an ESP32 over

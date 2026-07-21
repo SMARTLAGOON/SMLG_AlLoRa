@@ -15,7 +15,7 @@ produces plaintext.
 
 The AES-CTR primitive is platform-detected and injected, so the same construction runs on
 CPython (the ``cryptography`` lib) and on the AlLoRa MicroPython firmware (``ucryptolib``
-with the CTR build flag). ``detect_aead()`` returns None when no native AES is present —
+with the CTR build flag). ``detect_aead()`` returns None when no native AES is present,
 the graceful-degradation signal that secure mode is unavailable on this platform.
 """
 import hmac
@@ -23,8 +23,8 @@ import hashlib
 
 
 def _ct_equal(a, b):
-    # Constant-time byte-string comparison. hmac.compare_digest is CPython-only — MicroPython's
-    # hmac module (micropython-lib) doesn't provide it — so depending on it degrades secure mode
+    # Constant-time byte-string comparison. hmac.compare_digest is CPython-only. MicroPython's
+    # hmac module (micropython-lib) doesn't provide it, so depending on it degrades secure mode
     # on-device even though everything imports. This runs in time that depends only on len(a),
     # not on where the bytes first differ, so a forged tag can't be reconstructed byte-by-byte
     # from response timing. Both operands here are always the fixed TAG_LEN, so the length branch
@@ -108,7 +108,7 @@ def _micropython_ctr():
     # MicroPython's native AES module was renamed ``ucryptolib`` -> ``cryptolib`` in v1.21 (the
     # u-module unification, the same change that renamed the CTR build flag). Unlike ubinascii /
     # utime / ujson, ``ucryptolib`` was never in the weak-link alias table, so on a v1.21+ build
-    # ``import ucryptolib`` raises and there is no fallback — the module is only reachable as
+    # ``import ucryptolib`` raises and there is no fallback: the module is only reachable as
     # ``cryptolib``. Prefer the new name; keep the old one for pre-1.21 firmware.
     try:
         import cryptolib as aes_mod
@@ -135,7 +135,7 @@ def _detect_ctr():
 def _self_test(aead):
     """Confirm the backend actually seals and opens. Importing ``ucryptolib`` does not prove
     AES-CTR is compiled in (it needs the CTR build flag), so a backend that *looks* present
-    can still throw on first use — a one-shot round-trip catches that here."""
+    can still throw on first use. A one-shot round-trip catches that here."""
     try:
         key = bytes(16)
         sealed = aead.seal(key, key, bytes(12), b"", b"probe")
@@ -148,7 +148,7 @@ def detect_aead():
     """Return an AEAD backed by working native AES-CTR, or None if this platform has none.
 
     None is the graceful-degradation signal: secure mode is unavailable and the caller
-    decides posture — an operational (registered) node must refuse to run, a test node may
+    decides posture: an operational (registered) node must refuse to run, a test node may
     fall back to open mode. The backend is *self-tested* before it is returned, so a platform
     where AES-CTR imports but is not compiled in degrades cleanly instead of crashing later.
     """
@@ -163,13 +163,13 @@ def unavailable_reason():
     """A precise explanation of why ``detect_aead()`` returned None, for the degraded-mode log
     line. Best-effort and only meant for the degrade path (it re-runs the cheap detection). It
     exercises each stage of the seal/open self-test in isolation and reports the actual
-    exception, so a degrade on real hardware names its own cause on the boot log — no REPL
+    exception, so a degrade on real hardware names its own cause on the boot log, no REPL
     needed, which matters because the radio loop is hard to interrupt for one.
     """
     ctr = _detect_ctr()
     if ctr is None:
         return "native AES module did not import (need 'cryptolib'; v1.21+ dropped 'ucryptolib')"
-    # Stage 1: AES-CTR (mode 6) in isolation — a real encrypt+decrypt round-trip.
+    # Stage 1: AES-CTR (mode 6) in isolation, a real encrypt+decrypt round-trip.
     try:
         pt = b"sixteen bytes!!!"
         ct = ctr(bytes(16), bytes(12), pt)

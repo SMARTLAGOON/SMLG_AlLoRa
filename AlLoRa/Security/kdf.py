@@ -1,8 +1,8 @@
 """Derive the session keys from the ECDH shared secret (HKDF-SHA256).
 
 The raw ECDH output (a curve X coordinate) is not usable key material directly, and one
-secret must yield several independent keys. HKDF-SHA256 — the standard extract-then-expand
-KDF — stretches the secret and separates it into an AES encryption key, a distinct HMAC
+secret must yield several independent keys. HKDF-SHA256, the standard extract-then-expand
+KDF, stretches the secret and separates it into an AES encryption key, a distinct HMAC
 key, and a per-session nonce prefix, all cryptographically independent.
 
 The construction here (the info label and the nonce-prefix length) is *provisional*: it is
@@ -26,7 +26,7 @@ def hkdf_sha256(ikm, length, salt=b"", info=b""):
     ``length`` bytes bound to ``info``."""
     if salt == b"":
         # HashLen for SHA-256 is 32. Hardcoded because MicroPython's hashlib hash objects don't
-        # expose `.digest_size` (it is a CPython attribute) — reading it degrades the handshake
+        # expose `.digest_size` (it is a CPython attribute). Reading it degrades the handshake
         # on-device while CI stays green.
         salt = b"\x00" * 32
     prk = hmac.new(bytes(salt), bytes(ikm), hashlib.sha256).digest()   # extract
@@ -53,18 +53,18 @@ def derive_session_keys(shared_secret, info=_INFO):
 
 def derive_session_material(shared_secret, info=_INFO):
     """Return ``(enc_key, mac_key, prefix_ab, prefix_ba)``: the shared AES + HMAC keys, plus a
-    **per-direction nonce prefix** — one for initiator->responder frames, one for the reverse.
+    **per-direction nonce prefix**, one for initiator->responder frames, one for the reverse.
 
     Both directions' send counters start at 1, so a single shared nonce prefix would make the
-    first frame each way reuse ``(key, nonce)`` — a keystream-reuse footgun. Two prefixes keep
+    first frame each way reuse ``(key, nonce)``, a keystream-reuse footgun. Two prefixes keep
     the two directions' nonce spaces disjoint, which is all AES-CTR needs, and (because the
     prefix is bound into the HMAC) also makes a reflected frame fail the tag. This is the lean
     fix: **one key schedule**, not two (per-direction *keys* would add isolation that is
-    worthless when the session is per-peer anyway), and **zero wire cost** — the prefixes are
+    worthless when the session is per-peer anyway), and **zero wire cost**: the prefixes are
     derived, never transmitted, exactly like the key.
 
     Provisional layout: the ordering (init prefix first) and the info label are a crypto-review
-    surface, not frozen — property-tested, not byte-pinned.
+    surface, not frozen, property-tested, not byte-pinned.
     """
     length = ENC_KEY_LEN + MAC_KEY_LEN + 2 * NONCE_PREFIX_LEN
     material = hkdf_sha256(shared_secret, length, info=info)

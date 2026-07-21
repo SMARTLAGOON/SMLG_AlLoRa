@@ -9,8 +9,8 @@ def assign_session_ids(endpoints):
 
     Each endpoint keeps its identity-derived sid (device_id[0]) when it is free; on a clash the
     later endpoint is bumped to the lowest free byte, which the Collector then sends in that
-    session's WELCOME (the initiator can't derive a reassigned value on its own). Fixed sids —
-    an explicit override, or a MAC-registered endpoint with no identity to derive from — are
+    session's WELCOME (the initiator can't derive a reassigned value on its own). Fixed sids
+    (an explicit override, or a MAC-registered endpoint with no identity to derive from) are
     reserved first and never moved. A no-op for a single endpoint (the 1:1 Requester case).
     """
     taken = set()
@@ -138,7 +138,7 @@ class Digital_Endpoint:
 
     def get_did(self):
         # The 4-byte first-contact address (device_id[:4]) for a device_id-registered node, or
-        # None for a MAC-registered one — which is what selects the addressing.
+        # None for a MAC-registered one, which is what selects the addressing.
         return self.device_id[:4] if self.device_id is not None else None
 
     def derived_sid(self):

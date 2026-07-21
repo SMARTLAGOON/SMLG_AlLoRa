@@ -140,7 +140,7 @@ class AlLoRa_File:
 
     # Source methods
     def reset_delivery(self):
-        # One file object can be served more than once — re-queued after delivery,
+        # One file object can be served more than once, re-queued after delivery,
         # or broadcast to several endpoints. Every new serve must start from an
         # undelivered state, or the stale sent flag confirms a delivery that never
         # happened. Receiver-side (reassembly) files have no delivery state.

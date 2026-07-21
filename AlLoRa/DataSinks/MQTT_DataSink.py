@@ -1,4 +1,5 @@
 from AlLoRa.DataSinks.DataSink import DataSink
+from AlLoRa.DataSources.mqtt_naming import is_envelope, decode_name
 
 
 class MQTT_DataSink(DataSink):
@@ -18,7 +19,7 @@ class MQTT_DataSink(DataSink):
 
     def __init__(self, host="localhost", port=1883, topic_prefix="allora",
                  client=None, topic_for=None, client_id="allora-collector",
-                 qos=0, retain=False, keepalive=60, cleanup=True):
+                 qos=0, retain=False, keepalive=60, cleanup=True, loop_guard=None):
         self.host = host
         self.port = port
         self.topic_prefix = topic_prefix
@@ -28,6 +29,7 @@ class MQTT_DataSink(DataSink):
         self.keepalive = keepalive
         self.cleanup = cleanup            # discard the reassembly temp after publishing
         self._topic_for = topic_for       # optional callable(source, filename) -> topic str
+        self._loop_guard = loop_guard     # shared with a co-located MQTT_Datasource
         self._client = client             # injected -> we don't own it; else built in prepare()
         self._owns_client = client is None
         self._flavor = "injected" if client is not None else None
@@ -45,6 +47,10 @@ class MQTT_DataSink(DataSink):
         topic = self._topic(source, file.get_name())
         payload = bytes(file.get_content())
         self._publish(topic, payload)
+        if self._loop_guard is not None:
+            # Remember what we just injected: a co-located MQTT_Datasource hears this
+            # very publish echoed back and must not ship it over the link again.
+            self._loop_guard.note(topic, payload)
         if self.cleanup:
             try:
                 file.discard()
@@ -64,8 +70,17 @@ class MQTT_DataSink(DataSink):
     # -- internals -----------------------------------------------------------------------------
 
     def _topic(self, source, filename):
+        # Precedence: explicit override > pairing convention > derived default. topic_for
+        # keeps full control (it can decode an envelope name itself); otherwise a file a
+        # paired MQTT_Datasource named with the envelope republishes on its original
+        # topic, and a plain file lands under <prefix>/<source>/<filename>.
         if self._topic_for is not None:
             return self._topic_for(source, filename)
+        if is_envelope(filename):
+            try:
+                return decode_name(filename)[0]
+            except ValueError:
+                pass    # a plain name that merely starts with the prefix
         parts = [self.topic_prefix, source, filename]
         return "/".join(p for p in parts if p)
 
@@ -76,7 +91,7 @@ class MQTT_DataSink(DataSink):
             t = topic.encode() if isinstance(topic, str) else topic
             p = payload if isinstance(payload, (bytes, bytearray)) else bytes(payload)
             self._client.publish(t, p, self.retain, self.qos)
-        else:  # injected / custom client — duck-typed 2-arg publish
+        else:  # injected / custom client: duck-typed 2-arg publish
             self._client.publish(topic, payload)
 
     def _build_client(self):

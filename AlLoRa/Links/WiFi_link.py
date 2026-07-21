@@ -1,16 +1,16 @@
-"""WiFi_link — an HTTP byte-mover for the split Connector.
+"""WiFi_link: an HTTP byte-mover for the split Connector.
 
 The concrete `Link` under a WiFi tunnel: the logic-holder half POSTs an opaque request frame
 to the bridge (Adapter) and reads the reply frame back as the HTTP body; the bridge half
 accepts one connection, hands the posted body up as the request, and writes the reply body
-back on the same socket. Like every Link it carries opaque bytes only — the LoRa frame rides
+back on the same socket. Like every Link it carries opaque bytes only: the LoRa frame rides
 as hex inside the `tunnel_rpc` JSON body, so the bridge never parses it and holds no key.
 
 The request/reply lockstep maps onto one HTTP round trip per verb: `read_request` accepts and
 reads the body, `write_reply` answers on the held socket and closes it. Client and bridge use
 the same BSD socket surface, so `socket` (host/CPython) and `usocket` (ESP32/MicroPython)
 both drive it; the module to use is injected, defaulting to whichever is importable. Network
-bring-up (AP/STA) is the WiFi_Interface's job — this link only moves bytes over an
+bring-up (AP/STA) is the WiFi_Interface's job. This link only moves bytes over an
 already-up network, whose final proof is on hardware.
 """
 from AlLoRa.Links.Link import Link

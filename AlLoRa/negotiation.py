@@ -14,11 +14,11 @@ V3 = 3
 def negotiate_version(registered_v3, beacon_echoed):
     """Return the protocol version to use with a peer after a first-contact poll.
 
-    - A pubkey-registered (operational) peer is **pinned to v3** — never silently
+    - A pubkey-registered (operational) peer is **pinned to v3**, never silently
       downgraded, even if the echo is jammed/lost (anti-downgrade). This stops an
       attacker forcing a secure node back to plaintext.
     - Otherwise a peer that **echoes the v3 beacon** is v3.
-    - Otherwise (a legacy peer, or genuine first contact) default to **v2** — the
+    - Otherwise (a legacy peer, or genuine first contact) default to **v2**, the
       retro-compat path, so a v3 Gateway can still consume un-reflashed v2 field nodes.
     """
     if registered_v3:

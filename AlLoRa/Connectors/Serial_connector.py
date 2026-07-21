@@ -1,4 +1,4 @@
-"""Serial_connector — a serial tunnel's logic-holder half.
+"""Serial_connector: a serial tunnel's logic-holder half.
 
 Thin over Tunnel_connector: it is a split Connector whose transport verbs cross a UART to a
 bridge (Adapter) running the radio. All the tunnel logic (exchange-routed matching, D↓/td↑

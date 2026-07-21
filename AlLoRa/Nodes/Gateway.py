@@ -26,7 +26,7 @@ class Gateway(Requester):
         # }
 
         # NEXT_ACTION_TIME_SLEEP is accepted for legacy callers but ignored, as it
-        # has been since v2.0 — the adaptive sleep controller owns the gap.
+        # has been since v2.0: the adaptive sleep controller owns the gap.
         super().__init__(connector,  config_file, debug_hops=debug_hops,
                             data_sink=data_sink)
         self.nodes_file = nodes_file

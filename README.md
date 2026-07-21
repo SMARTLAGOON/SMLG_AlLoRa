@@ -168,9 +168,11 @@ Is the counterpart of the [AlLoRa-WiFi_interface](AlLoRa/Interfaces/WiFi_interfa
 
 </details>
     
-### → [Datasource.py](AlLoRa/DataSource.py)
+### → [DataSources/](AlLoRa/DataSources/DataSource.py)
 
-A Datasource is a handy class that can be use to manage the files to be send. It is supposed to be used to feed Files to send to a Source Nodes.
+A Datasource is a handy class that can be use to manage the files to be send. It is supposed to be used to feed Files to send to a Source Nodes. The base class lives in the DataSources package (the old `AlLoRa.DataSource` import path still works), and a node serving data can take one directly (`Source(..., datasource=...)`): its serve loop will pump the datasource and send whatever it queues.
+
+The package also contains [MQTT_Datasource.py](AlLoRa/DataSources/MQTT_Datasource.py), which subscribes to an MQTT broker and turns each received message into a File to send. Paired with an [MQTT_DataSink.py](AlLoRa/DataSinks/MQTT_DataSink.py) on the other side of the link, the original topic travels inside the file name (the payload crosses untouched, byte for byte) and the message is republished on that same topic at the far broker. Together they form a bidirectional, topic-preserving MQTT bridge over AlLoRa, with role reversal carrying the downlink direction and a shared Loop_guard preventing a republished message from being bridged back again.
 
 ### → [Digital_Endpoint.py](AlLoRa/Digital_Endpoint.py)
 

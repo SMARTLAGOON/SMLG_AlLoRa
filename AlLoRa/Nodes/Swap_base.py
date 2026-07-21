@@ -1,15 +1,15 @@
-"""The unified swappable node — one object carrying BOTH whole-file loops.
+"""The unified swappable node: one object carrying BOTH whole-file loops.
 
 A transfer always has a *drive* side (the initiator: polls, asks METADATA/CHUNK, reassembles)
 and a *serve* side (the responder: lives with the data, answers each request). Historically
 those were two classes (Requester drives, Source serves), which made role reversal need two
-mirrored node instances copying state between them — the chief fragility of the old role-swap
+mirrored node instances copying state between them, the chief fragility of the old role-swap
 experiment. Here both loops live on one base with one config, one connector and one session
 state; `current_role` ("collector" drives, "source" serves) picks which loop runs, so
 reversing a role never constructs, mirrors or synchronizes a second node.
 
 The presets pick a home:  an Edge serves by default, a Hub drives by default. No swap state is
-ever persisted — on boot a node is back at `home_role`, and the Hub resuming its poll
+ever persisted. On boot a node is back at `home_role`, and the Hub resuming its poll
 re-converges the pair after any failure.
 """
 import gc
@@ -32,12 +32,13 @@ class Swap_base(Node):
                  max_sleep_time=3,
                  successful_interactions_required=5,
                  data_sink=None,
+                 datasource=None,
                  home_role="source"):
         super().__init__(connector, config_file)
         gc.enable()
 
         # The role dispatch: "source" runs the serve loop, "collector" the drive loop.
-        # current_role is RAM-only on purpose — a reboot must land on home_role.
+        # current_role is RAM-only on purpose: a reboot must land on home_role.
         self.home_role = home_role
         self.current_role = home_role
 
@@ -49,12 +50,18 @@ class Swap_base(Node):
                 print("Chunk size too big, setting to max: ", self.chunk_size)
         self.file = None
 
+        # The serve side's input boundary, the mirror of data_sink: with a datasource
+        # attached, the serve loop pumps it (non-blocking) and installs its next pending
+        # file whenever the node is idle. Without one, files arrive via set_file as ever.
+        self.datasource = datasource
+        self._datasource_ready = False
+
         # --- drive-side state (the node as poller/reassembler) -------------------------
         self.debug_hops = debug_hops
 
         # The inter-request sleep controller lives in Pacing (policy on the logic-holder,
         # mirroring the adaptive-window extraction). Pacing is fed the sf/bw-derived bounds;
-        # the init cap is the caller's `max_sleep_time`, not the ToA-derived max — preserving
+        # the init cap is the caller's `max_sleep_time`, not the ToA-derived max, preserving
         # the original two-step init, where calculate_sleep_time_bounds' max was overwritten.
         min_sleep, _ = self.calculate_sleep_time_bounds()
         self.pacing = Pacing(successful_interactions_required=successful_interactions_required,
@@ -70,7 +77,7 @@ class Swap_base(Node):
         # The completed-file output boundary, symmetric to DataSource on the serve side. The
         # default (persist to Results/<source>/ exactly as before) is built lazily on first
         # drive, so a node that only ever serves never touches the filesystem for it. On an
-        # Edge this sink is where a *downlink* lands — its drive loop only ever pulls from
+        # Edge this sink is where a *downlink* lands. Its drive loop only ever pulls from
         # its Hub.
         self.data_sink = data_sink
         self._drive_ready = False
@@ -123,7 +130,7 @@ class Swap_base(Node):
         self.pacing.sleep = value
 
     # =====================================================================================
-    # Serve side — the responder loop: hold a file, answer each request for it.
+    # Serve side. The responder loop: hold a file, answer each request for it.
     # =====================================================================================
 
     def get_chunk_size(self):
@@ -142,6 +149,20 @@ class Swap_base(Node):
         self.set_file(file)
         self.file.first_sent = time()
         self.file.metadata_sent = True
+
+    def _pump_datasource(self):
+        # One cooperative round of the input boundary, from inside the serve loop: it
+        # shares the radio loop, so check() must never block. The queue's pop is the
+        # handover. Once installed, the file is the node's to serve to completion (the
+        # RAM queue wouldn't survive a reboot anyway, so peek-retain buys nothing here).
+        if self.datasource is None:
+            return
+        if not self._datasource_ready:
+            self.datasource.prepare()
+            self._datasource_ready = True
+        self.datasource.check()
+        if self.file is None and self.datasource.has_pending():
+            self.set_file(self.datasource.get_next_file())
 
     def establish_connection(self, try_for=None):
         while True:
@@ -206,14 +227,14 @@ class Swap_base(Node):
         else:
             addressing, token = "mac", request.get_source()
         if payload and payload[0] == Node._HS_INIT:
-            # A repeated INIT (our HELLO was lost) just makes a fresh ephemeral — the latest
+            # A repeated INIT (our HELLO was lost) just makes a fresh ephemeral. The latest
             # one is what the poller will accept, so the two ends stay in step.
             self._hs_state, hello = initiator_hello(urandom)
             return self._ctrl_packet(token, Node._HS_HELLO, hello, addressing=addressing)
         if payload and payload[0] == Node._HS_WELCOME:
             if self._hs_state is not None:
                 # If the WELCOME shed its sid (the common case), fall back to the sid both ends
-                # derive from my identity — device_id[0].
+                # derive from my identity, device_id[0].
                 session = initiator_complete(self._hs_state, payload[1:],
                                              default_sid=self.device_id[0])
                 self.session_store.put(session)
@@ -236,8 +257,8 @@ class Swap_base(Node):
         # (e.g. the peer re-handshaking); route those to the handshake, data to serving.
         kind = packet.get_command()
         if kind == Packet_v3.GRANT:
-            # A delegation from the authority. Never answered on the wire — the granted pull
-            # itself is the acknowledgement — and only an Edge preset honors it.
+            # A delegation from the authority. Never answered on the wire: the granted pull
+            # itself is the acknowledgement, and only an Edge preset honors it.
             self._on_grant(packet)
             return
         if kind == Packet_v3.CTRL:
@@ -252,8 +273,8 @@ class Swap_base(Node):
 
     def _service_grant(self):
         # Base: nothing to honor. The Edge preset overrides this to run a pending
-        # delegated pull. Called from every serve wait loop — `serve()` AND the legacy
-        # `send_file()` main loops fielded firmware runs — so a delegation reaches an
+        # delegated pull. Called from every serve wait loop (`serve()` AND the legacy
+        # `send_file()` main loops fielded firmware runs), so a delegation reaches an
         # Edge no matter which loop it lives in.
         pass
 
@@ -265,7 +286,7 @@ class Swap_base(Node):
     def _heard_authority_poll(self):
         # Hub-authority tie-break. Only a *delegated* drive (an Edge granted the collector
         # role) can hear this: during its pull the only OK-kind frame that can land in the
-        # reply slot is the authority polling again — it reclaimed, so the delegation is
+        # reply slot is the authority polling again: it reclaimed, so the delegation is
         # over. The Edge yields instantly and goes home; the abandoned pull simply re-runs
         # on a later GRANT with a fresh buffer. A permanent authority never yields.
         if (self.home_role == "source" and self.current_role == "collector"
@@ -329,7 +350,7 @@ class Swap_base(Node):
             response_packet.set_source(self.MAC)
             response_packet.set_destination(packet.get_source())
         elif packet.addressing == "sid":
-            # Reply under the *session's* sid — mirror the request. In the home direction
+            # Reply under the *session's* sid: mirror the request. In the home direction
             # they coincide; while serving a delegated downlink the session is addressed by
             # the Edge's sid, not this node's own.
             response_packet.set_session(packet.get_session())
@@ -356,7 +377,7 @@ class Swap_base(Node):
 
         if command == Packet.CHUNK:
             if self.file is None:
-                # Nothing to serve: stay silent like a node that isn't serving yet — the
+                # Nothing to serve: stay silent like a node that isn't serving yet. The
                 # poller times out and retries, exactly the pre-transfer behavior.
                 return None, new_sf
             requested_chunk = packet.get_chunk_index() if v3 else int(packet.get_payload().decode())
@@ -408,7 +429,7 @@ class Swap_base(Node):
             elif self.file is not None and self.file.first_sent and not self.file.last_sent:
                 if not v3:
                     # Legacy shape, byte-for-byte: any mid-transfer OK finalizes AND is
-                    # answered — a v2 requester listens for this reply on its connection
+                    # answered: a v2 requester listens for this reply on its connection
                     # poll, so suppressing it would time that poll out.
                     self.file.sent_ok()
                 elif self.file.last_chunk_sent == self.file.get_length() - 1:
@@ -416,7 +437,7 @@ class Swap_base(Node):
                     # initiator's fire-and-forget final-OK: it ends the transfer and
                     # nobody listens for a reply, so answering would only burn airtime.
                     # An OK any earlier is a connection poll (e.g. the authority
-                    # re-polling after a reboot) and gets its keepalive answer below —
+                    # re-polling after a reboot) and gets its keepalive answer below:
                     # a half-sent file must never be marked sent by a poll.
                     self.file.sent_ok()
                     return None, new_sf
@@ -425,7 +446,7 @@ class Swap_base(Node):
         return response_packet, new_sf
 
     # =====================================================================================
-    # Drive side — the initiator loop: poll a peer, pull METADATA + CHUNKs, reassemble.
+    # Drive side. The initiator loop: poll a peer, pull METADATA + CHUNKs, reassemble.
     # =====================================================================================
 
     def create_request(self, destination, mesh_active, sleep_mesh, session_id=None):
@@ -490,7 +511,7 @@ class Swap_base(Node):
         with a serve-side peer over open MAC CTRL frames and store the resulting Session. Each
         round is retried up to `tries` times so a dropped handshake frame recovers (a retried
         INIT gets a fresh ephemeral; a retried WELCOME gets an idempotent re-ACK). Returns the
-        Session, or None if a round never lands. The peer authenticates nothing here — in
+        Session, or None if a round never lands. The peer authenticates nothing here: in
         `secure` this is confidentiality-only; the gateway accepts the peer by its registered
         identity, and the catastrophic downlink is guarded separately."""
         from AlLoRa.Security.handshake import responder_accept
@@ -504,7 +525,7 @@ class Swap_base(Node):
         if did is not None:
             addressing, token = "did", did
             # The sid rides the WELCOME only when we had to move it off the derived value to
-            # break a clash — otherwise both ends already derive device_id[0].
+            # break a clash. Otherwise both ends already derive device_id[0].
             send_sid = digital_endpoint.session_id != digital_endpoint.derived_sid()
         else:
             addressing, token = "mac", digital_endpoint.get_mac_address()
@@ -615,7 +636,7 @@ class Swap_base(Node):
             return False
 
         # Secure first contact: establish a session (ECDH handshake) before the transfer, once
-        # per session lifetime — the RAM store keeps it across subsequent listens. If it fails
+        # per session lifetime. The RAM store keeps it across subsequent listens. If it fails
         # there is nothing to protect the transfer with, so give up this endpoint for now.
         if self.security_mode == 'secure' and self.session_store is not None \
                 and self.session_store.get(digital_endpoint.session_id) is None:
@@ -639,7 +660,7 @@ class Swap_base(Node):
                                                      digital_endpoint.session_id)
 
                 # The safe boundary for a downlink delegation: any idle point between
-                # complete files — pre-contact OK, or the idle metadata-poll loop — but
+                # complete files (pre-contact OK, or the idle metadata-poll loop), but
                 # never mid-chunk (a reassembly in progress must finish first). With a
                 # downlink pending, the Hub preset delegates the drive role here (GRANT +
                 # serve + reclaim) instead of running this round's request.
@@ -679,7 +700,7 @@ class Swap_base(Node):
                             # downlink off its queue), so a sink failure after it would
                             # lose the file with no retry left anywhere. Failing here
                             # leaves the transfer unacknowledged and the next round pulls
-                            # the file again — delivery is at-least-once, and a lost
+                            # the file again. Delivery is at-least-once, and a lost
                             # final-OK may feed an (idempotent) sink twice.
                             if print_file:
                                 print(file.get_content())
@@ -688,7 +709,7 @@ class Swap_base(Node):
                                     self.data_sink.consume(
                                         file, self._reception_context(digital_endpoint, mac))
                                 except Exception:
-                                    # No ack for an unconsumed file — and no OK poll
+                                    # No ack for an unconsumed file, and no OK poll
                                     # either: to a peer whose last chunk went out, an OK
                                     # is exactly the final-OK and would retire the file.
                                     # Rewind to re-pull it whole next round instead.
@@ -755,8 +776,13 @@ class Swap_base(Node):
                 if sleep_time > 0:
                     sleep(sleep_time)
 
-                if stop:
-                    break
+            # Outside the finally on purpose: a `break` inside it silently discards
+            # any exception still propagating from the try/except (and is a hard
+            # SyntaxError on newer Pythons). The one-file drive sets `stop` in the
+            # try with no exception in flight, so breaking here, after the finally's
+            # notify/gc/sleep cleanup, is behavior-identical and safe.
+            if stop:
+                break
 
         # True only when a one_file drive completed (its file reached the sink):
         # a granted pull uses this to tell a delivered delegation from a dead one.
@@ -764,8 +790,8 @@ class Swap_base(Node):
 
     def _reception_context(self, digital_endpoint, mac):
         # Freeze a completion record for the sink: identity + a final RF/quality snapshot, taken
-        # now (the endpoint is reused for the next file). Every field is best-effort — a missing
-        # RSSI/did must never break delivery — so each lookup is guarded.
+        # now (the endpoint is reused for the next file). Every field is best-effort: a missing
+        # RSSI/did must never break delivery, so each lookup is guarded.
         from AlLoRa.DataSinks.DataSink import Reception
         did = None
         try:

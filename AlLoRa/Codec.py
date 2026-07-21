@@ -1,6 +1,6 @@
-"""Codec — the seam that *speaks* a `Packet` on the wire.
+"""Codec: the seam that *speaks* a `Packet` on the wire.
 
-A `Packet` is the typed wire unit — what a frame means (kind, sid, flags, payload). A `Codec`
+A `Packet` is the typed wire unit, what a frame means (kind, sid, flags, payload). A `Codec`
 is how that unit is encoded on the wire and read back off it. Framing used to be scattered:
 the version choice lived on the `Connector` (`_new_response_packet` / `_response_matches`),
 and the security posture lived as a parallel method-pair on `Packet_v3`
@@ -11,17 +11,17 @@ one narrow interface so the transfer engine never branches on version or posture
     deframe(wire)      -> packet | None             (parse; None = unparseable/corrupt/forged)
     match_spec(request)-> a spec whose .matches(reply) says "is this the reply to my request?"
 
-There is one implementation per (version x posture) — a new version or security mode is a new
+There is one implementation per (version x posture). A new version or security mode is a new
 implementation, never a wider interface:
 
-  * `V2Codec`      — legacy MAC-addressed frame + checksum (v2 predates secure mode).
-  * `V3OpenCodec`  — v3 sid-addressed typed frame + 24-bit integrity, no crypto.
-  * `V3SecureCodec`— v3 secure frame: the integrity trailer replaced by an AEAD-sealed
+  * `V2Codec`: legacy MAC-addressed frame + checksum (v2 predates secure mode).
+  * `V3OpenCodec`: v3 sid-addressed typed frame + 24-bit integrity, no crypto.
+  * `V3SecureCodec`: v3 secure frame: the integrity trailer replaced by an AEAD-sealed
                      payload. This is the *only* crypto home; `Packet_v3.get_secure_content`
                      /`load_secure` are its private mechanism, not a public surface.
 
 The secure codec resolves the per-peer `Session` from the `sid`, which is cleartext at wire
-offset 0 in *both* open and secure frames — the send side by the outgoing packet's sid, the
+offset 0 in *both* open and secure frames, the send side by the outgoing packet's sid, the
 receive side by the sid on the wire. So the engine calls `frame`/`deframe` identically for
 open and secure; the posture never leaks up. The reply match is likewise keyless (v3: the
 cleartext sid), which is what will let it move down to the radio later without keys.
@@ -33,7 +33,7 @@ from AlLoRa.Packet_v3 import Packet_v3
 
 
 class _MacMatchSpec:
-    """v2: a reply belongs to our request when the MACs mirror — it came *from* the peer we
+    """v2: a reply belongs to our request when the MACs mirror: it came *from* the peer we
     asked (`reply.src == request.dst`) and is addressed *to* us (`reply.dst == my_mac`).
 
     `matches` works on the parsed packet; `matches_wire` does the same check on the raw
@@ -82,14 +82,14 @@ class _SidMatchSpec:
         return len(wire) >= 1 and wire[0] == self._sid
 
     def wire_prefix(self):
-        # The cleartext sid byte at offset 0 — the keyless prefix the tunnel bridge matches on.
+        # The cleartext sid byte at offset 0, the keyless prefix the tunnel bridge matches on.
         return bytes([self._sid])
 
 
 class _DidMatchSpec:
     """v3 first contact: a reply belongs to our request when it carries the same device_id[:4]
     token. One 4-byte address, symmetric in both directions (the Collector polls a Source's
-    did; the Source answers under it), cleartext at wire offset 0 — so like the sid spec it is
+    did; the Source answers under it), cleartext at wire offset 0, so like the sid spec it is
     keyless and `matches_wire` runs at the radio without touching a key."""
 
     def __init__(self, did):
@@ -103,7 +103,7 @@ class _DidMatchSpec:
         return len(wire) >= n and wire[:n] == self._did
 
     def wire_prefix(self):
-        # The device_id[:4] token at offset 0 — keyless, so the tunnel bridge matches it at
+        # The device_id[:4] token at offset 0, keyless, so the tunnel bridge matches it at
         # the radio without touching a session.
         return self._did
 
@@ -158,10 +158,10 @@ class V3SecureCodec:
     """Secure posture, but *hybrid*: it speaks sid-addressed data frames sealed, and
     MAC-addressed first-contact/handshake CTRL frames open (they carry public keys and no
     session exists yet). A node has to hold both because first contact bootstraps the very
-    session the data path needs — and a Gateway does it with different Sources over its
+    session the data path needs, and a Gateway does it with different Sources over its
     lifetime. Framing is routed by the packet's own addressing; parsing try-parses (the wire
     format has both frame shapes but no marker to tell them apart), using the AEAD tag / the
-    24-bit integrity already on the wire as the validity check — no new wire field."""
+    24-bit integrity already on the wire as the validity check, no new wire field."""
 
     def __init__(self, session_resolver, aead, mesh_mode=False, addressing="sid",
                  my_mac="00000000"):
@@ -175,7 +175,7 @@ class V3SecureCodec:
         return Packet_v3(mesh_mode=self._mesh, addressing=addressing)
 
     def frame(self, packet):
-        # First-contact handshake frames go on the wire open (public keys, nothing secret) —
+        # First-contact handshake frames go on the wire open (public keys, nothing secret),
         # whether device_id-addressed (v3) or MAC-addressed (the retiring v2-compat shape);
         # established sid-addressed frames are sealed.
         if packet.addressing in ("did", "mac"):
@@ -192,7 +192,7 @@ class V3SecureCodec:
         if not wire:
             return None
         # Common case first: a secure sid-addressed frame. A verifying 4-byte AEAD tag is a
-        # strong "yes, secure" — a handshake frame won't have a valid tag under a session key.
+        # strong "yes, secure": a handshake frame won't have a valid tag under a session key.
         session = self._resolve(wire[0])           # wire[0] = sid (or, for a MAC frame, a MAC byte)
         if session is not None:
             p = self._new("sid")
@@ -201,7 +201,7 @@ class V3SecureCodec:
                     return p
             except Exception:
                 pass
-        # Otherwise an open MAC-addressed handshake CTRL frame — accepted only if its 24-bit
+        # Otherwise an open MAC-addressed handshake CTRL frame, accepted only if its 24-bit
         # integrity checks, it is a CTRL frame, and it is addressed to me. (Retiring v2-compat
         # shape; the v3 first-contact frame is device_id-addressed, handled next.)
         h = self._new("mac")
@@ -213,7 +213,7 @@ class V3SecureCodec:
             pass
         # Or an open device_id-addressed handshake CTRL frame. The did token is the *Source's*
         # in both directions, so a Collector serving many Sources can't tell "mine" from
-        # "theirs" here — that decision moves to is_for_me (responder) / match_spec (initiator);
+        # "theirs" here. That decision moves to is_for_me (responder) / match_spec (initiator);
         # deframe only vouches for integrity + that it is a CTRL frame.
         d = self._new("did")
         try:
@@ -238,7 +238,7 @@ def build_codec(protocol_version=2, addressing="mac", mesh_mode=False, short_mac
     """Pick the codec for a node's negotiated version x posture.
 
     v2 has no posture. v3 is open unless a secure posture *and* a working AEAD backend *and* a
-    session resolver are all present — a missing backend degrades to open (the node has
+    session resolver are all present. A missing backend degrades to open (the node has
     already decided that is acceptable for its posture, per the secure-mode trust model).
     """
     if protocol_version >= 3:

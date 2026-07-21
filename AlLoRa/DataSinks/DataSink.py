@@ -5,7 +5,7 @@ class Reception:
     It is deliberately separate from the live status stream (`Node.notify_subscribers`, which
     ticks RSSI/chunk-progress *during* a transfer): that stream is for a progress UI, this is the
     authoritative "file X from source Y finished, here are its final stats" event. A sink gets it
-    without having to also subscribe to the status channel, and it is a frozen copy — never the
+    without having to also subscribe to the status channel, and it is a frozen copy, never the
     live `Digital_Endpoint`, which gets reused/mutated for the next file.
     """
 
@@ -22,7 +22,7 @@ class Reception:
 
 # Do not instanciate this class as pretends to be an abstract one
 class DataSink:
-    """The Collector's completed-file output boundary — the symmetric twin of DataSource.
+    """The Collector's completed-file output boundary: the symmetric twin of DataSource.
 
     DataSource feeds AlLoRa_File objects *in* to a Source; DataSink drains the files a Collector
     reassembles *out* to wherever a deployment wants them (disk, MQTT, cloud, a management

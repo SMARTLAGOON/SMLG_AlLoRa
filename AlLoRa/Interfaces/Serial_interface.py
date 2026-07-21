@@ -1,8 +1,8 @@
-"""Serial_interface — a serial tunnel's bridge (Adapter) half.
+"""Serial_interface: a serial tunnel's bridge (Adapter) half.
 
 Thin over Tunnel_interface: the Adapter holds the radio but no protocol logic. It reads a
 transport-verb request off a UART, runs that verb on its real radio Connector, and writes the
-result back — never parsing the LoRa wire, never holding a session key. All of that lives in
+result back, never parsing the LoRa wire, never holding a session key. All of that lives in
 Tunnel_interface; this only builds the concrete Serial_link bridge from the interface config.
 The old file re-parsed the frame with a `S&W:`/`Listen:` string protocol, which is why the
 bridge could only ever serve v2; the split serves v2 / v3-open / v3-secure alike.

@@ -1,8 +1,8 @@
-"""Link — the byte pipe between a split Connector's two halves.
+"""Link: the byte pipe between a split Connector's two halves.
 
 A tunnel splits a Connector across a slow link: the logic-holder runs the protocol engine +
 codec + keys and forwards the transport verbs; the bridge (Adapter) holds the radio and runs
-them. The Link is the transport underneath that forwarding — it moves opaque request/reply
+them. The Link is the transport underneath that forwarding: it moves opaque request/reply
 frames and knows *nothing* about verbs, the LoRa air wire, or session keys. That ignorance is
 the point: adding a BLE or USB tunnel is a new Link, never new protocol logic.
 

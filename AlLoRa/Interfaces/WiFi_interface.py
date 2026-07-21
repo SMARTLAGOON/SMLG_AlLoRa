@@ -1,8 +1,8 @@
-"""WiFi_interface — a WiFi tunnel's bridge (Adapter) half.
+"""WiFi_interface: a WiFi tunnel's bridge (Adapter) half.
 
 Thin over Tunnel_interface: the Adapter holds the radio but no protocol logic. It brings up
 the network (AP hotspot or STA client), then reads transport-verb requests off an HTTP link,
-runs each verb on its real radio Connector, and writes the result back — never parsing the
+runs each verb on its real radio Connector, and writes the result back, never parsing the
 LoRa wire, never holding a session key. The verb pumping + dispatch live in Tunnel_interface;
 this owns only the WiFi bring-up and building the concrete WiFi_link bridge over it. The old
 file re-parsed the frame with a JSON-command protocol, which is why the bridge could only ever

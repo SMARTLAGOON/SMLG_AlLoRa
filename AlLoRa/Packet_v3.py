@@ -1,4 +1,4 @@
-"""The v3 wire unit — a typed, versioned Packet.
+"""The v3 wire unit: a typed, versioned Packet.
 
 v2's `Packet` fused the command into two bits of a flags byte, addressed every frame
 with two 4-byte MACs, and stored a 12-bit hex "checksum" in a 3-byte field. v3 fixes all
@@ -11,7 +11,7 @@ three at once, without fattening the header:
     the real destination);
   * the integrity trailer becomes a **real 24-bit** `sha256(payload)` digest.
 
-This is the *codec only* — the wire structure, zero crypto (the "open" security posture).
+This is the *codec only*, the wire structure, zero crypto (the "open" security posture).
 Secure mode swaps the integrity trailer for an AEAD tag and adds an anti-replay counter;
 the kind/flag/addressing machinery here is shared by both. v2 `Packet` is left untouched
 so a v3 node can still fall back to a legacy peer during version negotiation.
@@ -19,14 +19,14 @@ so a v3 node can still fall back to a legacy peer during version negotiation.
 Header layouts (P2P shown; mesh inserts a 2-byte `seq` before `integ`):
 
     MAC-addressed  [src4][dst4][VT1][FL1][integ3]   = 13 B   (v2-compat first contact)
-    did-addressed  [did4][VT1][FL1][integ3]         =  9 B   (v3 first contact — no MAC on wire)
+    did-addressed  [did4][VT1][FL1][integ3]         =  9 B   (v3 first contact, no MAC on wire)
     sid-addressed  [sid1][VT1][FL1][integ3]         =  6 B   (established session)
 
     VT   = version(4b)=0x3 | kind(4b)
     FL   = mesh|sleep|hop|debug_hops|role_token|auth|cfg_epoch|spare
     integ = sha256(payload)[:3]
 
-The did token is device_id[:4] — one 4-byte identity address, the same in both directions
+The did token is device_id[:4], one 4-byte identity address, the same in both directions
 (the Collector polls it, the Source answers under it), so it matches at wire offset 0 exactly
 like the sid. It replaces the two-MAC handshake header once a node is registered by device_id
 rather than by MAC.
@@ -70,7 +70,7 @@ class Packet_v3:
 
     # Typed packet kinds (VT low nibble). DATA/OK/CHUNK/METADATA are the transfer core;
     # GRANT (role-swap), CTRL (control commands), ACKMAP (selective-repeat) are reserved
-    # here and filled in by later increments — but they already have wire codes so the
+    # here and filled in by later increments, but they already have wire codes so the
     # format never has to break to add them.
     DATA = "DATA"
     OK = "OK"
@@ -165,7 +165,7 @@ class Packet_v3:
         return self._mac_decompress(self.dst)
 
     def set_did(self, did):
-        # device_id[:4] — the 4-byte first-contact address. Stored raw; whoever builds the
+        # device_id[:4]: the 4-byte first-contact address. Stored raw; whoever builds the
         # packet slices the fingerprint (or the registered token) to 4 bytes.
         did = bytes(did)
         if len(did) != 4:
@@ -225,7 +225,7 @@ class Packet_v3:
 
     def set_metadata(self, chunk_size, total_len, filename):
         # Typed METADATA: the receiver needs chunk_size to place positioned writes, and
-        # total_len to know the last chunk's exact length — neither of which v2 sent (it
+        # total_len to know the last chunk's exact length, neither of which v2 sent (it
         # carried only chunk_count + filename, so v2 leaned on both ends matching config).
         self.kind = self.METADATA
         self.payload = (struct.pack("<H", chunk_size)

@@ -193,6 +193,52 @@ def test_base_datasink_consume_is_abstract():
     raise AssertionError("DataSink.consume must be overridden, not silently no-op")
 
 
+def test_mqtt_sink_republishes_envelope_files_on_their_original_topic(tmp_path):
+    # The paired-bridge case: an MQTT_Datasource on the far side named the file with the
+    # envelope; the sink must republish on the embedded topic, payload byte-for-byte.
+    from AlLoRa.DataSources.mqtt_naming import encode_name
+    payload = b"21.5"
+    name = encode_name("sensors/greenhouse/temp", 7, 123)
+    f = _received_file(str(tmp_path / "recv"), name, payload, chunk_size=8)
+    fake = _FakeMQTTClient()
+    MQTT_DataSink(topic_prefix="allora", client=fake).consume(f, Reception(source=SOURCE_MAC))
+    assert fake.published[0] == ("sensors/greenhouse/temp", payload)
+
+
+def test_mqtt_sink_explicit_topic_for_still_wins_over_the_envelope(tmp_path):
+    # Precedence: explicit override > pairing convention > derived default. A topic_for
+    # deployment keeps full control (it can decode the envelope itself if it wants it).
+    from AlLoRa.DataSources.mqtt_naming import encode_name
+    f = _received_file(str(tmp_path / "recv"),
+                       encode_name("sensors/t", 1), b"x", chunk_size=8)
+    fake = _FakeMQTTClient()
+    sink = MQTT_DataSink(client=fake, topic_for=lambda source, name: "rerouted/all")
+    sink.consume(f, Reception(source=SOURCE_MAC))
+    assert fake.published[0][0] == "rerouted/all"
+
+
+def test_mqtt_sink_falls_back_to_derived_topic_for_malformed_envelope(tmp_path):
+    # A plain file that merely starts with the prefix must not publish to a garbage
+    # topic — it takes the normal <prefix>/<source>/<filename> route.
+    f = _received_file(str(tmp_path / "recv"), "mq!oops", b"x", chunk_size=8)
+    fake = _FakeMQTTClient()
+    MQTT_DataSink(topic_prefix="allora", client=fake).consume(f, Reception(source=SOURCE_MAC))
+    assert fake.published[0][0] == "allora/{}/mq!oops".format(SOURCE_MAC)
+
+
+def test_mqtt_sink_notes_published_messages_on_the_loop_guard(tmp_path):
+    # The other half of loop prevention: whatever the sink republishes is remembered, so
+    # the co-located datasource drops the echo instead of shipping it back.
+    from AlLoRa.DataSources.Loop_guard import Loop_guard
+    from AlLoRa.DataSources.mqtt_naming import encode_name
+    guard = Loop_guard()
+    payload = b"21.5"
+    f = _received_file(str(tmp_path / "recv"), encode_name("sensors/t", 3), payload, chunk_size=8)
+    sink = MQTT_DataSink(client=_FakeMQTTClient(), loop_guard=guard)
+    sink.consume(f, Reception(source=SOURCE_MAC))
+    assert guard.seen("sensors/t", payload)
+
+
 class _RecordingClient:
     def __init__(self):
         self.calls = []   # (args, kwargs)

@@ -1,14 +1,14 @@
 """Minimal pure-Python P-256 (secp256r1) for the ECDH handshake.
 
 Dependency-free elliptic-curve math so ephemeral-static ECDH runs on the AlLoRa firmware
-with no native crypto module — the asymmetric cost is paid once per session (a few hundred
+with no native crypto module. The asymmetric cost is paid once per session (a few hundred
 ms of scalar multiplication on-device), never per frame. Consolidated from the project's
 SecureAlLoRa reference implementation (the two hand-rolled P-256 files merged into one),
 carrying only what ECDH needs: keypair generation, SEC1 uncompressed points, on-curve
 validation, and the shared-secret computation. ECDSA verification for the control-root
 downlink is a separate, later addition.
 
-Public keys are always validated to be real points on the curve before use — accepting an
+Public keys are always validated to be real points on the curve before use. Accepting an
 off-curve point is a classic invalid-key attack that can leak the private scalar.
 """
 
@@ -60,11 +60,11 @@ def point_add(p1, p2):
 # --- Jacobian projective coordinates: the fast path for scalar_mult --------------------------
 # scalar_mult runs several times per handshake. In affine coordinates every point add/double
 # needs a modular inverse (inv_mod -> a 256-bit Fermat exponentiation), ~384 of them per scalar
-# multiplication — about 13 s on the ESP32, which overruns the handshake's receive window and
+# multiplication, about 13 s on the ESP32, which overruns the handshake's receive window and
 # blocks the radio loop. Jacobian coordinates, where affine (x, y) = (X/Z^2, Y/Z^3), let the
 # whole double-and-add ladder run with NO inverses; a single inverse converts the result back to
 # affine at the very end. The curve points are identical, so public keys and shared secrets are
-# byte-for-byte unchanged (pinned by the NIST known-answer test) — only the speed differs.
+# byte-for-byte unchanged (pinned by the NIST known-answer test). Only the speed differs.
 # Formulas: EFD "dbl-2007-bl" / "add-2007-bl" (general a; here a = A).
 
 _JAC_INF = (1, 1, 0)   # the identity has Z = 0
@@ -135,7 +135,7 @@ def scalar_mult(k, point):
         x, y = point
         return scalar_mult(-k, (x, (-y) % P))
     # Right-to-left double-and-add (same structure as the original affine loop, which avoids
-    # int.bit_length() — not available on MicroPython — just with the point ops in Jacobian).
+    # int.bit_length(), not available on MicroPython, just with the point ops in Jacobian).
     R = _JAC_INF
     addend = (point[0] % P, point[1] % P, 1)     # affine base -> Jacobian (Z = 1)
     while k:

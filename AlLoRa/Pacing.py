@@ -1,20 +1,20 @@
-"""Pacing — one home for the timing the protocol adapts as it runs.
+"""Pacing: one home for the timing the protocol adapts as it runs.
 
 A pure policy object: no radio, no I/O. It is fed the Time-on-Air-derived bounds by whoever
 owns the RF config (the `Connector` for the window; the `Requester` for the sleep), so the
-adaptation is unit-testable off-device — which it never was while it lived scattered on the
+adaptation is unit-testable off-device, which it never was while it lived scattered on the
 `Connector` and on the `Requester`.
 
-Two adaptive controllers live here — the two halves of the "one home":
+Two adaptive controllers live here, the two halves of the "one home":
 
   * The **adaptive receive window** (v2's `adaptive_timeout`): it starts wide (`max`) and
     tightens toward the observed round-trip on each good reply (EWMA), then jitter-grows back
-    toward `max` on a timeout — floored by the ToA `min` and the best round-trip yet seen,
+    toward `max` on a timeout, floored by the ToA `min` and the best round-trip yet seen,
     capped at `max`. Driven by `set_bounds` / `on_timeout` / `on_reply`.
 
   * The **inter-request sleep controller** (v2's `NEXT_ACTION_TIME_SLEEP`): the gap the
     initiator waits between rounds. It starts at the sf/bw-derived `min` and hunts for the
-    shortest gap the link tolerates — probing shorter after a run of successes, backing off
+    shortest gap the link tolerates, probing shorter after a run of successes, backing off
     (exponential below a threshold, jittered above it) on failure, and pinning a floor once
     it has found the edge. Driven by `set_sleep_bounds` / `on_success` / `on_failure`, read
     via `next_sleep`.
@@ -50,12 +50,12 @@ class Pacing:
         self.window = max_timeout
 
     def on_timeout(self):
-        """No reply arrived within the window — jitter-grow it back toward `max`."""
+        """No reply arrived within the window. Jitter-grow it back toward `max`."""
         random_factor = int.from_bytes(urandom(2), "little") / 2**16
         self.window = min(self.window * (1 + random_factor), self.max_timeout)
 
     def on_reply(self, td):
-        """A reply arrived in `td` seconds — tighten the window toward it (EWMA), floored by
+        """A reply arrived in `td` seconds. Tighten the window toward it (EWMA), floored by
         the ToA `min` and the best round-trip yet seen."""
         new_window = self.window * (1 - _SMOOTHING) + td * _SMOOTHING
         self.observed_min_timeout = min(self.observed_min_timeout, td)
@@ -85,7 +85,7 @@ class Pacing:
         return max(0, self.sleep)
 
     def on_success(self):
-        """A round completed — count it, and after a run of successes probe a shorter sleep,
+        """A round completed. Count it, and after a run of successes probe a shorter sleep,
         remembering the pre-probe value to fall back to if the probe fails."""
         self.successful_interactions_count += 1
         if self.successful_interactions_count >= self.successful_interactions_required:
@@ -95,7 +95,7 @@ class Pacing:
             self.failure_count = 0
 
     def on_failure(self):
-        """A round failed — back the sleep off. If the failure immediately followed a probe
+        """A round failed. Back the sleep off. If the failure immediately followed a probe
         decrease, treat the pre-probe value as the newly-found floor; after enough consecutive
         failures, pin the floor to the current sleep so we stop probing below it."""
         self._increase_sleep()

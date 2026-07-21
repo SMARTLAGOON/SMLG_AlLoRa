@@ -1,6 +1,6 @@
 """The ephemeral-static ECDH handshake that establishes a secure Session.
 
-Three role-named steps, decoupled from the wire — each produces or consumes an opaque
+Three role-named steps, decoupled from the wire: each produces or consumes an opaque
 payload of bytes, so the caller chooses how to frame them and no handshake wire-kind is
 fixed here:
 
@@ -11,7 +11,7 @@ fixed here:
 The initiator (a Source) makes a fresh ephemeral keypair per session; the responder (the
 Collector) holds a long-lived static keypair and assigns the session id. Each derives the
 same ECDH shared secret from its own private key and the peer's public key, and the KDF
-turns it into matching session keys — the secret itself never crosses the wire. A fresh
+turns it into matching session keys. The secret itself never crosses the wire. A fresh
 ephemeral key per session means a reboot re-handshakes into a distinct key.
 
 The two AEAD keys are combined into the Session's opaque ``key`` here; the frame layer
@@ -40,7 +40,7 @@ def responder_accept(static_priv, hello_payload, sid, send_sid=True):
     (session, welcome_payload). The welcome carries the responder's static public key, and the
     sid only when ``send_sid`` is set. With device_id addressing both ends derive the same sid
     (device_id[0]), so the byte is dropped by default; it is re-added only when the Collector
-    had to reassign the sid off its derived value to break a clash — the one case the initiator
+    had to reassign the sid off its derived value to break a clash, the one case the initiator
     can't reproduce on its own."""
     shared = ecdh_shared_secret(static_priv, hello_payload)
     session = _session_from(shared, sid, is_initiator=False)
@@ -54,7 +54,7 @@ def initiator_complete(state, welcome_payload, default_sid=None):
     """Source: read the responder's static public key from the welcome, derive the same shared
     secret with the ephemeral private key, and build the matching session. The sid is taken
     from the welcome when present (the Collector reassigned it); otherwise it falls back to
-    ``default_sid`` — the value both ends already agree on (device_id[0])."""
+    ``default_sid``, the value both ends already agree on (device_id[0])."""
     ephemeral_priv = state
     static_pub = welcome_payload[:_PUB_LEN]
     if len(welcome_payload) > _PUB_LEN:
@@ -69,7 +69,7 @@ def initiator_complete(state, welcome_payload, default_sid=None):
 
 def _session_from(shared_secret, sid, is_initiator):
     # One shared AES+HMAC key, two per-direction nonce prefixes. Each end seals with its own
-    # direction's prefix and opens the peer's with the other — so the two ends agree (the
+    # direction's prefix and opens the peer's with the other, so the two ends agree (the
     # initiator's send prefix is the responder's receive prefix, and vice versa) while their
     # nonce spaces stay disjoint.
     enc_key, mac_key, prefix_ab, prefix_ba = derive_session_material(shared_secret)

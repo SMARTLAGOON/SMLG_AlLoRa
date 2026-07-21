@@ -1,4 +1,4 @@
-"""WiFi_connector — a WiFi tunnel's logic-holder half.
+"""WiFi_connector: a WiFi tunnel's logic-holder half.
 
 Thin over Tunnel_connector: a split Connector whose transport verbs cross an HTTP link to a
 bridge (Adapter) running the radio. The tunnel logic lives in Tunnel_connector; this only

@@ -53,7 +53,7 @@ class Node:
         self._hs_state = None       # the initiator's ephemeral key, held between handshake rounds
 
         # Long-term identity (secure): the fingerprint of this key is the device_id. Distinct
-        # from the per-session ephemeral used in the ECDH — the ephemeral rotates every session,
+        # from the per-session ephemeral used in the ECDH: the ephemeral rotates every session,
         # so it can't be a stable identity. Loaded on demand (never in open mode).
         self.identity_priv = None
         self.identity_pub = None
@@ -74,19 +74,19 @@ class Node:
         from AlLoRa.Security.AEAD import detect_aead
         self.session_store = RAM_session_store()
         self.aead = detect_aead()
-        # A secure node always has a device_id — it is its wire identity (first-contact address
+        # A secure node always has a device_id: it is its wire identity (first-contact address
         # + sid seed), needed whether or not the sid is config-overridden.
         self._ensure_identity()
         if self.aead is not None:
             self.connector.set_secure(self.session_store.get, self.aead)
             return
-        # No crypto backend. A configured-secure node must NOT silently run plaintext — the
+        # No crypto backend. A configured-secure node must NOT silently run plaintext: the
         # operator believes the link is protected, so a silent degrade is the worst outcome.
         # It halts loudly, unless an explicit opt-in (tests / bring-up only) permits open.
         from AlLoRa.Security.AEAD import unavailable_reason
         reason = unavailable_reason()
         if self.config.get('allow_insecure_fallback', False):
-            print("WARNING: secure mode requested but no AEAD backend — running OPEN (insecure),",
+            print("WARNING: secure mode requested but no AEAD backend, running OPEN (insecure),",
                   "because allow_insecure_fallback is set:", reason)
             return
         raise RuntimeError(
@@ -112,7 +112,7 @@ class Node:
             self.identity_pub = public_key_uncompressed(self.identity_priv)
             self.device_id = device_id_from_pubkey(self.identity_pub)
             if self.debug:
-                print("no identity_file configured — using an ephemeral identity "
+                print("no identity_file configured, using an ephemeral identity "
                       "(device_id changes each boot)")
 
     def _resolve_session_id(self):
@@ -140,8 +140,8 @@ class Node:
 
     def _ctrl_packet(self, token, hs_kind, payload=b"", addressing="did"):
         # A first-contact v3 CTRL frame (no sid until the handshake assigns one); the hybrid
-        # codec puts it on the wire open. Addressed by device_id[:4] (v3, no MAC on the wire) —
-        # a single token stamped the same in both directions — or, for a MAC-registered peer,
+        # codec puts it on the wire open. Addressed by device_id[:4] (v3, no MAC on the wire),
+        # a single token stamped the same in both directions, or, for a MAC-registered peer,
         # by the retiring two-MAC shape.
         p = Packet_v3(mesh_mode=self.mesh_mode, addressing=addressing)
         if addressing == "did":
@@ -215,7 +215,7 @@ class Node:
 
     def is_for_me(self, packet):
         if self.protocol_version >= 3:
-            if packet.addressing == "did":   # v3 first contact — addressed to my device_id[:4]
+            if packet.addressing == "did":   # v3 first contact: addressed to my device_id[:4]
                 return self.device_id is not None and packet.get_did() == self.device_id[:4]
             if packet.addressing == "mac":   # legacy first-contact / handshake frame (no sid yet)
                 return packet.get_destination() == self.MAC

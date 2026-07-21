@@ -11,7 +11,7 @@ class Loopback_connector(Connector):
     The `Connector` is the v3 transport seam: the protocol engine (`Source` / `Collector`)
     talks only to `send` / `recv` / `send_and_wait_response`, never to a chip. This
     implementation backs that contract with a pair of in-process queues instead of a radio,
-    so a `Source` and a `Collector` can run a full file transfer in a test — the proof that
+    so a `Source` and a `Collector` can run a full file transfer in a test, the proof that
     the seam is clean.
 
     Build a connected pair with `Loopback_connector.create_pair(mac_a, mac_b)`:
@@ -19,7 +19,7 @@ class Loopback_connector(Connector):
     per-direction `loss` probability + a `seed` to drop frames deterministically and
     exercise the retransmission / coordinated-transition gates (lost-packet injection).
 
-    CPython-only (uses `queue` / `random` / threads) — it never freezes to firmware.
+    CPython-only (uses `queue` / `random` / threads). It never freezes to firmware.
     """
 
     def __init__(self, mac, inbox=None, outbox=None, loss=0.0, rng=None):
@@ -56,7 +56,7 @@ class Loopback_connector(Connector):
         # The wire carries the already-framed bytes, exactly as a radio would put on air.
         if self.loss and self._rng is not None and self._rng.random() < self.loss:
             # Lost in the channel: the transmitter still "sent" fine (returns True),
-            # the receiver simply never sees it — its recv will time out and the
+            # the receiver simply never sees it. Its recv will time out and the
             # protocol retransmits.
             self.dropped += 1
             return True

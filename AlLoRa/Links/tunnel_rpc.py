@@ -1,9 +1,9 @@
-"""tunnel_rpc — the host<->bridge line protocol for the split Connector.
+"""tunnel_rpc: the host<->bridge line protocol for the split Connector.
 
 The tunnel carries the *transport verbs* (transmit / listen / exchange + RF config) across a
 serial or WiFi link: the logic-holder half forwards a verb call *down*, the bridge (Interface)
 half runs it on the real radio and returns the result *up*. This module is the pure
-(de)serialization of those calls — no I/O, no radio, no codec, no keys — so it unit-tests on
+(de)serialization of those calls (no I/O, no radio, no codec, no keys), so it unit-tests on
 CPython and the transport Link only has to move the opaque request/reply bytes.
 
 The bytes *between* host and bridge are not the LoRa air wire: the LoRa frame rides inside as
@@ -15,7 +15,7 @@ lost reply stays distinct from a zero-length one.
 """
 from AlLoRa.utils.json_utils import json
 
-# Verbs — the transport surface a split Connector's Interface serves.
+# Verbs: the transport surface a split Connector's Interface serves.
 TRANSMIT = "tx"
 LISTEN = "ln"
 EXCHANGE = "xc"
