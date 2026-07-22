@@ -96,6 +96,12 @@ class Swap_base(Node):
         self._last_reply_kind = None
         self.yield_count = 0
 
+        # A control action deferred by a downlink sink (an RF-config switch or a reset). It must
+        # not run inside consume(): that fires before the transfer's final-OK reaches the air, so
+        # switching the radio or resetting there would break the acknowledgement. The Edge drains
+        # it after the pull completes (mirrors the serve path: reply on the old config, then switch).
+        self._pending_control = None
+
     def is_for_me(self, packet):
         if super().is_for_me(packet):
             return True
@@ -282,6 +288,21 @@ class Swap_base(Node):
         # Base: nothing to delegate. The Hub preset overrides this to hand the drive role
         # to an Edge (GRANT) when a downlink file is pending for it at a safe boundary.
         return False
+
+    def queue_control_action(self, action):
+        # A downlink control sink calls this from consume() to defer its actuation (a zero-arg
+        # thunk) instead of running it in place. Only the latest is kept: a control artifact is
+        # rare and one-at-a-time, and a superseding command should win.
+        self._pending_control = action
+
+    def _run_pending_control(self):
+        # Drain a deferred control action at a safe boundary (after the final-OK is on the air).
+        # Clear first, then invoke: a reset never returns, and clearing up front guarantees the
+        # action can never run twice even if invoking it re-enters here.
+        action = self._pending_control
+        self._pending_control = None
+        if action is not None:
+            action()
 
     def _heard_authority_poll(self):
         # Hub-authority tie-break. Only a *delegated* drive (an Edge granted the collector

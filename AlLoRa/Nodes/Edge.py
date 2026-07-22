@@ -59,6 +59,11 @@ class Edge(Swap_base):
                 # (a rebooted Hub restarts its counter), and going deaf to it costs
                 # a whole reclaim window with no log.
                 self._last_swap_id = swap_id
+                # The pull is done and its final-OK is on the air, so this is the safe
+                # boundary to apply any control action a downlink control sink deferred
+                # during consume() (an RF-config switch or a reset). Acting earlier would
+                # switch the radio (or reboot) before the Hub was acknowledged.
+                self._run_pending_control()
 
     def _pull_downlink(self):
         endpoint = self._capture_hub_endpoint()
