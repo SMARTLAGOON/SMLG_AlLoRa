@@ -4,9 +4,10 @@ Dependency-free elliptic-curve math so ephemeral-static ECDH runs on the AlLoRa 
 with no native crypto module. The asymmetric cost is paid once per session (a few hundred
 ms of scalar multiplication on-device), never per frame. Consolidated from the project's
 SecureAlLoRa reference implementation (the two hand-rolled P-256 files merged into one),
-carrying only what ECDH needs: keypair generation, SEC1 uncompressed points, on-curve
-validation, and the shared-secret computation. ECDSA verification for the control-root
-downlink is a separate, later addition.
+carrying what ECDH needs (keypair generation, SEC1 uncompressed points, on-curve validation,
+the shared-secret computation) plus ECDSA verification for the control-root downlink. Verify
+runs only on the rare downlink control artifact (config/OTA/model), never on the per-frame
+hot path; there is no signing here, since the field node only ever verifies.
 
 Public keys are always validated to be real points on the curve before use. Accepting an
 off-curve point is a classic invalid-key attack that can leak the private scalar.
@@ -184,3 +185,44 @@ def ecdh_shared_secret(priv_d, peer_pub_uncompressed):
         raise ValueError("degenerate shared secret")
     x, _ = shared
     return x.to_bytes(32, "big")
+
+
+_N_BITS = 256  # bit length of the group order N (fixed for P-256); int.bit_length() is absent on MicroPython.
+
+
+def _bits_to_int(digest):
+    """FIPS 186-4 bits2int: the leftmost ``_N_BITS`` bits of the message digest as an integer.
+    For a 32-byte SHA-256 digest this is the whole digest (256 bits, no truncation); a longer
+    hash is shifted right so only the top _N_BITS bits are used."""
+    z = int.from_bytes(digest, "big")
+    excess = 8 * len(digest) - _N_BITS
+    if excess > 0:
+        z >>= excess
+    return z
+
+
+def ecdsa_verify(public_key, digest, signature):
+    """Verify a P-256/SHA-256 ECDSA signature. Returns ``True`` only for a genuine signature.
+
+    ``public_key`` is a SEC1 uncompressed key (``0x04 || X || Y``, 65 B) whose authority the
+    caller has already established (the pinned control-root); a malformed or off-curve key is a
+    provisioning error and raises ``ValueError`` via ``decode_public_key``. ``digest`` is the
+    SHA-256 hash of the signed message; ``signature`` is the raw ``r || s`` pair (64 B). A
+    structurally invalid signature (wrong length, ``r`` or ``s`` outside ``[1, N)``) returns
+    ``False`` rather than raising: an unverifiable signature is simply not authentic, not an
+    error to handle. This runs only on the rare downlink control artifact, never per frame."""
+    if len(signature) != 64:
+        return False
+    r = int.from_bytes(signature[:32], "big")
+    s = int.from_bytes(signature[32:], "big")
+    if not (1 <= r < N and 1 <= s < N):
+        return False
+    Q = decode_public_key(public_key)
+    z = _bits_to_int(digest)
+    w = inv_mod(s, N)
+    u1 = (z * w) % N
+    u2 = (r * w) % N
+    point = point_add(scalar_mult(u1, G), scalar_mult(u2, Q))
+    if point is INF:
+        return False
+    return point[0] % N == r
