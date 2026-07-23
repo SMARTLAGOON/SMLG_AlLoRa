@@ -76,7 +76,8 @@ jobs:
       - name: Pin espressif/tinyusb (reproducible USB descriptors)
         working-directory: micropython/ports/esp32
         run: |
-          set -eux
+          set -e
+          . "$IDF_PATH/export.sh"   # put the ESP-IDF venv python (which has pyyaml) on PATH
           # MicroPython pins espressif/esp_tinyusb to 1.0.3, whose usb_descriptors.c references
           # CFG_TUD_CDC_EP_BUFSIZE. espressif/tinyusb 0.21.0 removed that macro, so a fresh
           # transitive resolve turns the build red on an untouched recipe. Pin tinyusb to the
