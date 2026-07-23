@@ -34,7 +34,10 @@ bridge, whose `Tunnel_interface` moves frames over a real UART or WiFi socket) t
 picks up a tunnel change on the next rebuild; a protocol-only push does not reach it. The current
 freeze additionally carries the `DataSources`/`DataSinks` application boundaries, Hub-commanded role
 reversal, and the two-ended RF_CONFIG coordination, so the `Nodes` and config-actuation paths
-likewise only reach the device on a rebuild.
+likewise only reach the device on a rebuild. It also carries the `backup_config` fix that makes a
+committed RF trial actually survive a reboot (the earlier freeze wrote the live RF back under keys
+the loader never read, so a committed sf7→sf9 came back as sf7 on the next boot); reboot-persistence
+therefore only works once the device runs a rebuild from this freeze.
 
 ## Adding a target (new device or new modem)
 
