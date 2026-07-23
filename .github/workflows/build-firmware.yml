@@ -73,6 +73,39 @@ jobs:
           cp -r "firmware/drivers/${{ matrix.driver }}" "$MP_BOARD_DIR/modules/"
           cp -r "$TARGET_DIR/modules/." "$MP_BOARD_DIR/modules/"
 
+      - name: Pin espressif/tinyusb (reproducible USB descriptors)
+        working-directory: micropython/ports/esp32
+        run: |
+          set -eux
+          # MicroPython pins espressif/esp_tinyusb to 1.0.3, whose usb_descriptors.c references
+          # CFG_TUD_CDC_EP_BUFSIZE. espressif/tinyusb 0.21.0 removed that macro, so a fresh
+          # transitive resolve turns the build red on an untouched recipe. Pin tinyusb to the
+          # last-good 0.19.0~3 (the version the last green firmware build used) so the managed
+          # component set is reproducible. Follow-up: move to the latest supported MicroPython +
+          # ESP-IDF pair, which ships a self-consistent esp_tinyusb/tinyusb and retires this pin.
+          python3 - <<'PY'
+          import os, yaml
+          PIN = "==0.19.0~3"
+          patched = []
+          for root, _dirs, files in os.walk("."):
+              if "idf_component.yml" not in files:
+                  continue
+              path = os.path.join(root, "idf_component.yml")
+              with open(path) as f:
+                  text = f.read()
+              if "esp_tinyusb" not in text:
+                  continue
+              doc = yaml.safe_load(text) or {}
+              deps = doc.setdefault("dependencies", {})
+              deps["espressif/tinyusb"] = PIN
+              with open(path, "w") as f:
+                  yaml.safe_dump(doc, f, sort_keys=False)
+              patched.append(path)
+          if not patched:
+              raise SystemExit("no idf_component.yml declared esp_tinyusb; tinyusb pin not applied")
+          print("pinned espressif/tinyusb", PIN, "in:", patched)
+          PY
+
       - name: Compatibility patch (ESP-IDF v5.1.2 WIFI_AUTH_MAX)
         if: matrix.apply_wifi_auth_patch == 'true'
         run: |
