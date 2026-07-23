@@ -47,6 +47,7 @@ class Edge(Swap_base):
                 # metadata poll would serve the same file over and over.
                 self.file = None
             self._service_grant()
+            self._service_trial_window()
             gc.collect()
 
     def _service_grant(self):

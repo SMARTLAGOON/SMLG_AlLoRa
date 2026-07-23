@@ -20,7 +20,15 @@ class Node:
         self.LAST_SEEN_IDS = list()         # IDs from others
         self.MAX_IDS_CACHED = 30            # Max number of IDs saved
 
+        # An RF-config change arms a trial: run on the new config, and either commit it (a full
+        # exchange proves it works) or self-restore to the last-known-good on a silent/stalled
+        # window. `sf_trial` is the armed flag; the window is time-based (seconds), carried in
+        # the signed RF_CONFIG payload (`trial`) with a ToA-scaled default. The deadline is armed
+        # lazily by the serve/drive loop so the window counts from when the node starts running
+        # on the new config, not from the flash write.
         self.sf_trial = None
+        self._trial_window_s = None
+        self._trial_deadline = None
 
         self.subscribers = []
         self.status = {}
@@ -382,7 +390,13 @@ class Node:
             print("Chunk size too big, changing to: ", self.chunk_size)
             
         if changed:
-            self.sf_trial = 15
+            # Arm the trial. The window rides the (signed) payload as `trial` seconds; absent,
+            # a ToA-scaled default sized off the new config's receive window. The deadline is
+            # armed lazily on the loop's first service (so it counts from running on the new
+            # config), so only clear it here.
+            self.sf_trial = True
+            self._trial_window_s = new_config.get("trial", None)
+            self._trial_deadline = None
             self.status["Freq"] = self.connector.frequency
             self.status["SF"] = self.connector.sf
             self.status["BW"] = self.connector.bw

@@ -4,6 +4,7 @@ role-reversal review confirmed in the shared engine — behaviors both an Edge s
 its uplink and a Hub serving a delegated downlink rely on.
 """
 import json
+import threading
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
@@ -196,3 +197,168 @@ def test_v2_poll_ok_is_always_answered(tmp_path):
 
     assert reply is not None and reply.get_command() == Packet.OK
     assert edge.file.sent
+
+
+# --- RF_CONFIG trial: the serve-side commit criterion is a full-payload exchange ----
+#
+# A verified RF_CONFIG switch arms a trial: the node runs on the new config and must
+# decide whether it STICKS (commit: persist the new config as last-known-good) or is
+# unreachable (restore: fall back to last-known-good). v2 committed on the FIRST served
+# frame (a metadata/OK poll), a false-positive: a short control frame closing does not
+# prove a full max-payload chunk (long time-on-air) will land. The commit criterion is a
+# COMPLETED full-payload exchange — the Hub asking for the *next* chunk (the prior full
+# chunk demodulated) or the fire-and-forget final-OK (the whole file landed).
+
+
+class _Trial_spy_edge(Edge):
+    """An Edge that records the trial's terminal transitions — commit (backup_config,
+    the new config persisted as last-known-good) and restore (revert to last-known-good)
+    — so a test can assert which one a request stream drove, without reaching inside."""
+
+    def __init__(self, *args, **kwargs):
+        self.committed = 0
+        self.restored = 0
+        super().__init__(*args, **kwargs)
+
+    def backup_config(self):
+        self.committed += 1
+        super().backup_config()
+
+    def restore_rf_config(self):
+        self.restored += 1
+        super().restore_rf_config()
+
+
+def _make_spy_edge(tmp_path):
+    config_path = str(tmp_path / "edge_trial.json")
+    _write_config(config_path)
+    conn, _ = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
+    return _Trial_spy_edge(conn, config_file=config_path)
+
+
+def _armed_edge_with_file(tmp_path, chunks_bytes=500):
+    # An Edge that has just applied a verified RF_CONFIG (trial armed) and is serving a
+    # multi-chunk uplink on the new config.
+    edge = _make_spy_edge(tmp_path)
+    edge.set_file(AlLoRa_File(name="up.bin", content=bytearray(bytes(chunks_bytes)),
+                              chunk_size=edge.get_chunk_size()))
+    edge.change_rf_config({"sf": 9})     # arms the trial (connector now on sf9)
+    edge.committed = 0                   # ignore any bookkeeping the arm itself did
+    assert edge.sf_trial, "change_rf_config must arm the trial"
+    return edge
+
+
+def test_trial_does_not_commit_on_the_first_served_frame(tmp_path):
+    # The metadata poll and the first chunk request are short exchanges: neither proves a
+    # full max-payload chunk will land, so serving them must leave the trial armed.
+    edge = _armed_edge_with_file(tmp_path)
+
+    edge.response(_request(Packet_v3.ask_metadata))
+    edge.response(_chunk_request(0))
+
+    assert edge.committed == 0, "a short first exchange must not commit the trial"
+    assert edge.sf_trial, "the trial must stay armed until a full exchange completes"
+
+
+def test_trial_commits_when_the_hub_asks_for_the_next_chunk(tmp_path):
+    # Serving chunk 0, then the Hub asking for chunk 1: the request for a later chunk
+    # proves the prior full-payload chunk was demodulated on the new config. Commit —
+    # the new config becomes last-known-good (persisted), the trial ends.
+    edge = _armed_edge_with_file(tmp_path)
+
+    edge.response(_chunk_request(0))
+    assert edge.committed == 0, "one chunk is not yet proof — the Hub has not advanced"
+
+    edge.response(_chunk_request(1))
+
+    assert edge.committed == 1, "advancing to the next chunk must commit the trial once"
+    assert not edge.sf_trial, "a committed trial is over"
+    assert edge.restored == 0, "commit must not also restore"
+
+
+def test_trial_commit_is_idempotent_across_further_chunks(tmp_path):
+    # Once committed, later chunk requests must not re-commit (no repeated config persists).
+    edge = _armed_edge_with_file(tmp_path)
+
+    edge.response(_chunk_request(0))
+    edge.response(_chunk_request(1))
+    edge.response(_chunk_request(2))
+
+    assert edge.committed == 1, "the trial commits exactly once, not on every later chunk"
+
+
+def test_trial_does_not_commit_on_a_re_requested_chunk(tmp_path):
+    # A stalled transfer (the Hub re-asking the SAME chunk, its last one never landing)
+    # is not progress: the trial must stay armed, later to be resolved by the window.
+    edge = _armed_edge_with_file(tmp_path)
+
+    edge.response(_chunk_request(0))
+    edge.response(_chunk_request(0))
+    edge.response(_chunk_request(0))
+
+    assert edge.committed == 0, "re-requesting the same chunk is a stall, not a commit"
+    assert edge.sf_trial, "a stalled trial stays armed"
+
+
+def _armed_edge_single_chunk(tmp_path):
+    # A one-chunk uplink (smaller than chunk_size): no "next chunk" is ever asked, so the
+    # only full-exchange proof is the final-OK after the tail.
+    edge = _make_spy_edge(tmp_path)
+    edge.set_file(AlLoRa_File(name="tiny.bin", content=bytearray(bytes(100)),
+                              chunk_size=edge.get_chunk_size()))
+    edge.change_rf_config({"sf": 9})
+    edge.committed = 0
+    assert edge.get_chunk_size() > 100 and edge.file.get_length() == 1
+    return edge
+
+
+def test_trial_commits_on_the_final_ok_after_the_tail_chunk(tmp_path):
+    # A single-chunk file: serve the (tail) chunk 0, then the fire-and-forget final-OK.
+    # The whole file landed on the new config — commit.
+    edge = _armed_edge_single_chunk(tmp_path)
+
+    edge.response(_chunk_request(0))
+    assert edge.committed == 0, "serving the only chunk is not yet proof it was demodulated"
+
+    reply, _ = edge.response(_request(Packet_v3.set_ok))
+
+    assert reply is None, "the final-OK after the tail is fire-and-forget (no reply)"
+    assert edge.committed == 1, "the final-OK proves the file landed — commit"
+    assert not edge.sf_trial
+
+
+def test_trial_holds_on_a_mid_transfer_ok_poll(tmp_path):
+    # A multi-chunk file, one chunk served, then an OK that is a connection poll (not the
+    # final-OK — the tail was never served). That proves nothing about a full chunk landing:
+    # the trial must stay armed (hold pending).
+    edge = _armed_edge_with_file(tmp_path)
+
+    edge.response(_chunk_request(0))
+    reply, _ = edge.response(_request(Packet_v3.set_ok))
+
+    assert reply is not None and reply.get_command() == Packet_v3.OK, "a poll gets its keepalive"
+    assert edge.committed == 0, "a mid-transfer OK poll is not a full-exchange commit"
+    assert edge.sf_trial, "the trial holds pending until a real full exchange resolves it"
+
+
+# --- RF_CONFIG trial: the serve loop self-restores on a silent (unreachable) window -----
+
+def test_serve_restores_last_known_good_after_a_silent_trial_window(tmp_path):
+    # The deployed Edge home loop (serve) had NO trial→restore — only the legacy send_file
+    # loop did (Swap_base). A verified RF_CONFIG that makes the Edge unreachable (nothing is
+    # heard on the new config) must still self-heal: after the trial window of silence, the
+    # serve loop falls back to the last-known-good config. The `trial` seconds ride the
+    # (signed) payload; change_rf_config reads them.
+    edge = _make_spy_edge(tmp_path)
+    edge.change_rf_config({"sf": 9, "trial": 1})     # new config sf9, window 1s
+    assert edge.connector.get_rf_config()[1] == 9 and edge.sf_trial
+
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 4},
+                              name="edge-serve", daemon=True)
+    server.start()
+    server.join(timeout=8)
+    assert not server.is_alive(), "serve did not return"
+
+    assert edge.restored == 1, "a silent trial window must restore the last-known-good config"
+    assert edge.connector.get_rf_config()[1] == 7, "the connector reverted to last-known-good sf7"
+    assert not edge.sf_trial, "a restored trial is over"

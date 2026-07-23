@@ -146,6 +146,37 @@ def test_service_grant_is_a_noop_when_nothing_is_pending(tmp_path):
     assert edge._pending_control is None
 
 
+# --- Slice: the (signed) `trial` seconds ride the payload into the node's trial window -----
+
+def test_draining_an_rf_config_with_trial_sets_the_node_trial_window(tmp_path):
+    # The trial window is authoritative and carried in the signed RF_CONFIG payload as `trial`
+    # (seconds). The actuator hands the whole parsed config to change_rf_config, which arms the
+    # trial and reads the window from it — so a reconfig on a slow SF gets the backend-sized
+    # window it needs, not a node-global guess.
+    edge = _make_edge(tmp_path)
+    sink = Node_Control_Sink(edge)
+
+    sink.apply(RF_CONFIG, b'{"sf":9,"bw":125,"tx_power":14,"trial":45}')
+    edge._pending_control()      # drain, as the Edge does after the pull's final-OK
+
+    assert edge.sf_trial, "draining a verified RF_CONFIG must arm the trial"
+    assert edge._trial_window_s == 45, "the payload's `trial` seconds must become the window"
+
+
+def test_rf_config_without_trial_falls_back_to_a_toa_scaled_default(tmp_path):
+    # An omitted `trial` is legal: the node self-sizes a ToA-scaled default so a window-less
+    # command neither commits on noise nor rolls back too eagerly.
+    edge = _make_edge(tmp_path)
+    sink = Node_Control_Sink(edge)
+
+    sink.apply(RF_CONFIG, b'{"sf":9}')
+    edge._pending_control()
+
+    assert edge.sf_trial
+    assert edge._trial_window_s is None, "no explicit window was carried"
+    assert edge._default_trial_window() >= 30.0, "the fallback window is a sane ToA-scaled floor"
+
+
 # --- Slice 6: end-to-end gate -> actuator, on the frozen signed vectors ---------------------
 
 def test_verified_envelope_through_the_gate_reaches_the_actuator_and_queues(tmp_path):

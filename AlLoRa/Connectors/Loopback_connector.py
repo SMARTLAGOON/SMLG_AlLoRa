@@ -69,3 +69,22 @@ class Loopback_connector(Connector):
             return self.inbox.get(timeout=focus_time)
         except queue.Empty:
             return None
+
+    # RF setters: the base Connector stubs these for a real radio to override (configure the
+    # chip, then update the field). With no chip, the loopback just updates the field, so
+    # change_rf_config actually moves this connector's (freq, sf, bw, cr, tx_power) — the
+    # RF-config coordination tests need a loopback that models a real reconfiguration.
+    def set_frequency(self, frequency):
+        self.frequency = frequency
+
+    def set_sf(self, sf):
+        self.sf = sf
+
+    def set_bw(self, bw):
+        self.bw = bw
+
+    def set_cr(self, cr):
+        self.cr = cr
+
+    def set_transmission_power(self, tx_power):
+        self.tx_power = tx_power

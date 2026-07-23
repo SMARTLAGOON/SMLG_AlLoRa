@@ -289,6 +289,12 @@ class Swap_base(Node):
         # to an Edge (GRANT) when a downlink file is pending for it at a safe boundary.
         return False
 
+    def _probe_visit_end(self, digital_endpoint, heard, completed):
+        # Base: nothing to probe. The Hub preset overrides this to advance a {new, old}
+        # RF-config trial once per visit: locate/commit the Edge on the config it answered,
+        # or swap the probe to the other config when a visit heard nothing.
+        pass
+
     def queue_control_action(self, action):
         # A downlink control sink calls this from consume() to defer its actuation (a zero-arg
         # thunk) instead of running it in place. Only the latest is kept: a control artifact is
@@ -318,6 +324,64 @@ class Swap_base(Node):
             return True
         return False
 
+    def _default_trial_window(self):
+        # ToA-scaled fallback when the payload carried no `trial`: a generous multiple of the
+        # new config's receive window, so a slow SF gets a proportionally longer trial. The
+        # backend is expected to size `trial` to exceed one Hub rotation; this only keeps a
+        # window-less command from either committing on noise or restoring too eagerly.
+        _, max_window = self.calculate_sleep_time_bounds()
+        return max(30.0, max_window * 60)
+
+    def _commit_trial(self):
+        # The RF-config trial succeeded: a full-payload exchange completed on the new config,
+        # so it becomes the last-known-good. Persist it (a reboot must land on the config that
+        # works) and re-seed Pacing, whose sf/bw-derived bounds were computed on the old config.
+        if not self.sf_trial:
+            return
+        self.sf_trial = False
+        self._trial_deadline = None
+        if self.debug:
+            print("RF trial committed: new config is last-known-good")
+        self.backup_config()
+        self.reset_sleep_time()
+
+    def _restore_trial(self):
+        # The RF-config trial failed (the new config was unreachable): fall back to the
+        # last-known-good the connector snapshotted when the change was applied, and re-seed
+        # Pacing on the restored config.
+        if not self.sf_trial:
+            return
+        self.sf_trial = False
+        self._trial_deadline = None
+        if self.debug:
+            print("RF trial restored: reverting to last-known-good")
+        self.restore_rf_config()
+        self.reset_sleep_time()
+
+    def _service_trial_window(self):
+        # The self-restore backstop, called each turn of every serve/drive loop. An armed trial
+        # that neither commits (a full exchange, resolved in `response`) nor is held alive by a
+        # reachability poll must fall back to last-known-good once its window elapses. Silence
+        # (unreachable) and a stalled transfer (requests heard, no progress) both land here. The
+        # deadline is armed lazily so the window counts from the first turn on the new config.
+        if not self.sf_trial:
+            return
+        if self._trial_deadline is None:
+            window = self._trial_window_s or self._default_trial_window()
+            self._trial_deadline = ticks_add(time(), int(window * 1000))
+            return
+        if ticks_diff(self._trial_deadline, time()) <= 0:
+            self._restore_trial()
+
+    def _hold_trial(self):
+        # A short control frame (metadata / OK connection poll) heard on the new config proves
+        # the peer can still reach us: hold the provisional config and push the restore deadline
+        # out, rather than rolling back a reachable link that simply had no data to move. A
+        # stalled data transfer (repeated chunk requests) does NOT hold — only the window there.
+        if self.sf_trial and self._trial_deadline is not None:
+            window = self._trial_window_s or self._default_trial_window()
+            self._trial_deadline = ticks_add(time(), int(window * 1000))
+
     def _serve(self, packet):
         # The serve side's responder handler: build the reply for this request, send it, and
         # apply any accepted RF change (after the confirming reply is on the wire).
@@ -336,11 +400,7 @@ class Swap_base(Node):
         while not self.file.sent:
             packet = self.respond(self._respond_handler)
             self._service_grant()
-            if packet is None and self.sf_trial:
-                self.sf_trial -= 1
-                if self.sf_trial <= 0:
-                    self.restore_rf_config()
-                    self.sf_trial = False
+            self._service_trial_window()
 
             if ticks_diff(time(), t0) > timeout:
                 last_sent = self.file.last_chunk_sent
@@ -383,11 +443,9 @@ class Swap_base(Node):
                     response_packet.disable_sleep()
 
         new_sf = None
-        if self.sf_trial:
-            if self.debug:
-                print("SF Trial ended successfully")
-            self.sf_trial = False
-            self.backup_config()
+        # An armed RF-config trial does NOT commit on this short first exchange: the commit
+        # criterion is a completed full-payload exchange (a later chunk asked for, or the
+        # final-OK), decided in the CHUNK / OK branches below.
 
         if not v3 and packet.get_debug_hops():
             response_packet.set_data("")
@@ -402,6 +460,12 @@ class Swap_base(Node):
                 # poller times out and retries, exactly the pre-transfer behavior.
                 return None, new_sf
             requested_chunk = packet.get_chunk_index() if v3 else int(packet.get_payload().decode())
+            # RF trial commit signal: the peer asking for a chunk LATER than the last one we
+            # served means the prior full-payload chunk was demodulated on the new config.
+            # A re-request of the same (or an earlier) chunk is a stall, not progress.
+            prev_sent = self.file.last_chunk_sent
+            if self.sf_trial and prev_sent is not None and requested_chunk > prev_sent:
+                self._commit_trial()
             response_packet.set_data(self.file.get_chunk(requested_chunk))
             if self.subscribers:
                 self.status['Chunk'] = self.file.get_length() - requested_chunk
@@ -416,6 +480,10 @@ class Swap_base(Node):
             return response_packet, new_sf
 
         if command == Packet.METADATA:    # handle for new file
+            # A metadata request heard on the new config proves the peer can still reach us:
+            # hold the trial (a reachable-but-idle Edge must not roll back a good config just
+            # because no data moved). A stalled CHUNK loop, by contrast, does not hold.
+            self._hold_trial()
             if self.file is None:
                 return None, new_sf
             filename = self.file.get_name()
@@ -443,6 +511,10 @@ class Swap_base(Node):
 
         if command == Packet.OK:
             response_packet.set_ok()
+            # An OK connection poll heard on the new config proves reachability: hold the trial
+            # (superseded below if this turns out to be the fire-and-forget final-OK, which
+            # commits instead).
+            self._hold_trial()
 
             if (not v3) and packet.get_change_rf():
                 new_sf = packet.get_config()
@@ -461,6 +533,10 @@ class Swap_base(Node):
                     # re-polling after a reboot) and gets its keepalive answer below:
                     # a half-sent file must never be marked sent by a poll.
                     self.file.sent_ok()
+                    # The final-OK is the whole file landing on the new config: the
+                    # full-exchange proof for a single-chunk file, which never triggers the
+                    # next-chunk commit signal.
+                    self._commit_trial()
                     return None, new_sf
             return response_packet, new_sf
 
@@ -672,6 +748,11 @@ class Swap_base(Node):
         else:
             end_time = ticks_add(t0, listening_time * 1000)
 
+        # RF-config probe bookkeeping for this visit: did we hear the peer at all (locate), and
+        # did a full uplink file complete (commit)? Consumed by _probe_visit_end at visit end.
+        probe_heard = False
+        probe_completed = False
+
         while end_time is None or ticks_diff(end_time, time()) > 0:
             t0 = time()
             delegated = False
@@ -745,6 +826,10 @@ class Swap_base(Node):
                             sleep(1)
                             self.send_lora(final_ok)
                             self.status['Chunk'] = "DONE"
+                            # A full uplink file completed on the active config: the RF-config
+                            # probe's commit signal (the peer is here AND the link carries a
+                            # max-payload chunk, not just a poll).
+                            probe_completed = True
                             if one_file:
                                 stop = True
 
@@ -755,11 +840,17 @@ class Swap_base(Node):
                     t0 = time()
                     digital_endpoint.connected(ok, hop, self.mesh_mode)
 
-                if self.sf_trial:
-                    if self.debug:
-                        print("SF Trial ended successfully")
-                    self.sf_trial = False
-                    self.backup_config()
+                # Any reply this visit locates the peer on the active config (the RF-config
+                # probe's re-acquisition signal); silence advances the probe to the other config.
+                if not delegated and self._last_reply_kind is not None:
+                    probe_heard = True
+
+                if self.sf_trial and self.protocol_version < 3:
+                    # Legacy v2 drive-side trial (a Collector changing its own config via
+                    # ask_change_rf): commit on the first successful round, as v2 always did.
+                    # In v3 the trial is owned by the serve role and resolved by a full-payload
+                    # exchange (see `response`); the drive loop only carries the window backstop.
+                    self._commit_trial()
 
                 if not delegated:
                     # A delegation round served nobody a request: it says nothing about
@@ -770,19 +861,16 @@ class Swap_base(Node):
             except Exception as e:
                 if self.debug:
                     print("LISTEN_TO_ENDPOINT ERROR: {} Node {}".format(e, mac))
-                if self.sf_trial:
-                    self.sf_trial -= 1
-                    if self.sf_trial <= 0:
-                        if self.debug:
-                            print("Restoring RF config")
-                        self.restore_rf_config()
-                        self.sf_trial = False
 
                 dt = ticks_diff(time(), t0) / 1000
 
                 self.pacing.on_failure()
 
             finally:
+                # The self-restore backstop runs every drive turn (success or failure): an armed
+                # trial that never confirms falls back to last-known-good once its window elapses.
+                self._service_trial_window()
+
                 if self.subscribers:
                     self.status['Status'] = digital_endpoint.state
                     self.notify_subscribers()
@@ -804,6 +892,11 @@ class Swap_base(Node):
             # notify/gc/sleep cleanup, is behavior-identical and safe.
             if stop:
                 break
+
+        # Visit over: advance any RF-config probe once (round-robin fairness — one probe per
+        # visit, never starve other endpoints to chase one reconfig). No-op unless this is a
+        # Hub with a live {new, old} trial for this endpoint.
+        self._probe_visit_end(digital_endpoint, probe_heard, probe_completed)
 
         # True only when a one_file drive completed (its file reached the sink):
         # a granted pull uses this to tell a delivered delegation from a dead one.
