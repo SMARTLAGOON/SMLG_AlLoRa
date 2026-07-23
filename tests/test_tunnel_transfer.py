@@ -68,7 +68,7 @@ def _run_tunneled_transfer(tmp_path, source_conn, bridge_radio, payload, filenam
 
     def serve():
         try:
-            source.send_file(timeout=30000)
+            source.send_file(timeout=30)
         except Exception as e:  # pragma: no cover - surfaced via the assert below
             errors.append(e)
 

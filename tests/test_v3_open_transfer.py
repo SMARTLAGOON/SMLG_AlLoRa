@@ -64,7 +64,7 @@ def _run_transfer(tmp_path, source_conn, collector_conn, payload, filename):
 
     def serve():
         try:
-            source.send_file(timeout=30000)
+            source.send_file(timeout=30)
         except Exception as e:  # pragma: no cover - surfaced via the assert below
             errors.append(e)
 

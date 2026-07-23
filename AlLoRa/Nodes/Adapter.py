@@ -1,5 +1,5 @@
 import gc
-from AlLoRa.Nodes.Node import Node, Packet, urandom, loads, dumps
+from AlLoRa.Nodes.Node import Node, Packet, urandom, loads
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.Interfaces.Interface import Interface
@@ -24,15 +24,9 @@ class Adapter(Node):
         config_interface = lora_config['interface']
         self.interface.setup(self.connector, self.debug, config_interface)
 
-    def backup_config(self):
-        conf = {"name": self.name,
-                "chunk_size": self.chunk_size,
-                "mesh_mode": self.mesh_mode,
-                "debug": self.debug,
-                "connector" : self.connector.backup_config(),
-                "interface": self.interface.backup_config()}
-        with open(self.config_file, "w") as f:
-            f.write(dumps(conf))
+    # backup_config is inherited from Node: the lossless round-trip re-reads the whole config
+    # file and overlays only the runtime-changed fields, so the "interface" block (and the v3 /
+    # security / session posture) survives without an Adapter-specific rebuild.
 
     def run(self):
         THREAD_EXIT = False

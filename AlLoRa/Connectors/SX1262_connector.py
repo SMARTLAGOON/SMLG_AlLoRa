@@ -63,16 +63,19 @@ class SX1262_connector(Connector):
                 print("SF Changed to: ", self.sf)
 
     def set_bw(self, bw):
-        if self.config_parameters.get('bw') != bw:
+        # Track the live value on self.bw (what get_rf_config / backup_config read), not a
+        # 'bw' key in config_parameters that the config loader never reads back (it reads
+        # 'bandwidth'): otherwise a committed bandwidth change is lost on reboot.
+        if self.bw != bw:
             self.lora.setBandwidth(bw)
-            self.config_parameters['bw'] = bw
+            self.bw = bw
             if self.debug:
                 print("BW Set to: ", bw)
 
     def set_cr(self, cr):
-        if self.config_parameters.get('cr') != cr:
+        if self.cr != cr:
             self.lora.setCodingRate(cr)
-            self.config_parameters['cr'] = cr
+            self.cr = cr
             if self.debug:
                 print("CR Set to: ", cr)
 

@@ -66,7 +66,7 @@ def _run_transfer(tmp_path, source_conn, collector_conn, payload, filename):
 
     def serve():
         try:
-            source.send_file(timeout=30000)  # ms — safety net so the thread can't hang
+            source.send_file(timeout=30)  # seconds — safety net so the thread can't hang
         except Exception as e:  # pragma: no cover - surfaced via the assert below
             errors.append(e)
 

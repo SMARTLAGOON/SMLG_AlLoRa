@@ -92,6 +92,43 @@ def test_send_file_timeout_after_only_chunk_zero_reports_partial(tmp_path):
     assert edge.send_file(timeout=0) is True
 
 
+class _Stepping_loopback(Loopback_connector):
+    """A loopback whose every receive window consumes a fixed slice of (fake) time and
+    hands back a junk frame, so a serve loop spins deterministically without real blocking."""
+
+    def __init__(self, mac, clock, step_ms=300):
+        super().__init__(mac)
+        self._clock = clock
+        self._step_ms = step_ms
+
+    def recv(self, focus_time=12):
+        self._clock["now"] += self._step_ms   # a receive window took step_ms of wall time
+        return b"\xff"                          # junk -> unparseable -> respond returns None
+
+
+def test_send_file_timeout_is_measured_in_seconds(tmp_path, monkeypatch):
+    # send_file(timeout=) must be SECONDS, like serve()/listen_to_endpoint() — not the v2-era
+    # milliseconds. A 1-second timeout has to let ~1s of receive windows pass before giving up;
+    # under the old ms reading it would bail after the very first window (~300 ms).
+    clock = {"now": 100000}
+    monkeypatch.setattr("AlLoRa.Nodes.Swap_base.time", lambda: clock["now"])
+
+    config_path = str(tmp_path / "edge.json")
+    _write_config(config_path)
+    conn = _Stepping_loopback(EDGE_MAC, clock, step_ms=300)
+    edge = Edge(conn, config_file=config_path)
+    edge.set_file(AlLoRa_File(name="up.bin", content=bytearray(bytes(500)),
+                              chunk_size=edge.get_chunk_size()))
+
+    start = clock["now"]
+    edge.send_file(timeout=1)
+    elapsed_ms = clock["now"] - start
+
+    assert 1000 < elapsed_ms < 2000, (
+        "timeout=1 elapsed {} ms; expected ~1 s of windows (seconds), not a "
+        "sub-second bail (milliseconds)".format(elapsed_ms))
+
+
 # --- idle serving must survive a v2 RF-change request -------------------------
 
 def test_v2_rf_change_while_idle_does_not_crash_serve(tmp_path):

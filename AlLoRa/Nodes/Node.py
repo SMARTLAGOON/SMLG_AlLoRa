@@ -190,12 +190,24 @@ class Node:
             print(self.config)
 
     def backup_config(self):
-        conf = {"name": self.name,
-                "chunk_size": self.chunk_size,
-                "mesh_mode": self.mesh_mode,
-                "short_mac": self.short_mac,
-                "debug": self.debug,
-                "connector" : self.connector.backup_config()}
+        # Lossless round-trip: re-read the persisted config and overlay ONLY what changes at
+        # runtime (the chunk size and the live RF params), then write the whole dict back.
+        # Rebuilding a hand-picked subset instead dropped protocol_version / security_mode /
+        # session_id / identity_file / result_path — so a registered secure node that
+        # committed an RF-config change came back on reboot as an open v2 node, off its own
+        # network. The live RF values come from the connector (change_rf_config moved the
+        # radio without touching the on-disk values), written under their canonical keys.
+        with open(self.config_file, "r") as f:
+            conf = loads(f.read())
+        conf["chunk_size"] = self.chunk_size
+        freq, sf, bw, cr, tx_power = self.connector.get_rf_config()
+        connector = conf.get("connector", {})
+        connector["freq"] = freq
+        connector["sf"] = sf
+        connector["bandwidth"] = bw
+        connector["coding_rate"] = cr
+        connector["tx_power"] = tx_power
+        conf["connector"] = connector
         with open(self.config_file, "w") as f:
             f.write(dumps(conf))
 

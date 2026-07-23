@@ -396,13 +396,16 @@ class Swap_base(Node):
                 self.file.change_chunk_size(self.chunk_size)
 
     def send_file(self, timeout=float('inf')):
+        # timeout is in SECONDS, matching serve() / listen_to_endpoint() and every other v3
+        # public timeout; the wrap-safe deadline math below runs in ms, so scale it here.
         t0 = time() # Start time in ms
+        timeout_ms = timeout * 1000
         while not self.file.sent:
             packet = self.respond(self._respond_handler)
             self._service_grant()
             self._service_trial_window()
 
-            if ticks_diff(time(), t0) > timeout:
+            if ticks_diff(time(), t0) > timeout_ms:
                 last_sent = self.file.last_chunk_sent
                 del(self.file)
                 gc.collect()

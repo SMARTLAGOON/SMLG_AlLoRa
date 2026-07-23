@@ -144,7 +144,18 @@ class Connector:
         return t_air
 
     def backup_config(self):
-        return self.config_parameters
+        # Report the LIVE RF config, not the values first loaded from disk. change_rf_config
+        # moves the radio (self.frequency/sf/bw/cr/tx_power) without touching config_parameters,
+        # so persisting the raw config_parameters would drop a committed trial: the node would
+        # reboot on the old radio config. Overlay the live values under their canonical
+        # LoRa.json keys, preserving every other connector key (timeouts, transport sub-config).
+        conf = dict(self.config_parameters) if self.config_parameters else {}
+        conf["freq"] = self.frequency
+        conf["sf"] = self.sf
+        conf["bandwidth"] = self.bw
+        conf["coding_rate"] = self.cr
+        conf["tx_power"] = self.tx_power
+        return conf
 
     def get_mac(self):
         return self.MAC

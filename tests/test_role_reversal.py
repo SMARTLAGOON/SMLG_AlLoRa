@@ -325,7 +325,7 @@ def test_grant_honored_from_legacy_send_file_loop(tmp_path):
             if not edge.got_file():
                 edge.set_file(AlLoRa_File(name="up.bin", content=bytearray(up),
                                           chunk_size=edge.get_chunk_size()))
-            edge.send_file(timeout=5000)    # ms, as the raw loop compares
+            edge.send_file(timeout=5)       # seconds
 
     server = threading.Thread(target=fielded_main, name="edge-legacy", daemon=True)
     server.start()

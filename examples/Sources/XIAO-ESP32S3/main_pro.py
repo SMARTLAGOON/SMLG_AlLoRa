@@ -85,7 +85,7 @@ def run():
     lora_node.register_subscriber(logger)
     lora_node.notify_subscribers()
 
-    sending_timeout = 2 * 60 * 1000 # 2 minutes in milliseconds
+    sending_timeout = 2 * 60 # 2 minutes in seconds
     t0 = utime.ticks_ms()
     try:
         lora_node.establish_connection()
@@ -99,8 +99,8 @@ def run():
                     t_0_send = utime.ticks_ms()
                     sucess = lora_node.send_file(timeout=sending_timeout)
                     if sucess:
-                        td = utime.ticks_diff(utime.ticks_ms(), t_0_send)
-                        if td > sending_timeout:
+                        td = utime.ticks_diff(utime.ticks_ms(), t_0_send)  # elapsed in ms
+                        if td > sending_timeout * 1000:
                             print("Timeout sending file")
                     else:
                         print("Error sending file")

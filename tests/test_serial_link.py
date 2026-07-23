@@ -176,7 +176,7 @@ def test_full_v3_transfer_over_serial_link(tmp_path):
 
     def serve():
         try:
-            source.send_file(timeout=30000)
+            source.send_file(timeout=30)
         except Exception as e:  # pragma: no cover
             errors.append(e)
 
