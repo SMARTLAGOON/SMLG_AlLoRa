@@ -31,7 +31,10 @@ target (they're coupled — a MicroPython release supports specific ESP-IDF vers
 The freeze copies the **live** `AlLoRa/` tree at build time — including `AlLoRa/Links/` (the
 `Serial_link` / `WiFi_link` tunnel transports). A device that runs tunnel code (the Adapter
 bridge, whose `Tunnel_interface` moves frames over a real UART or WiFi socket) therefore only
-picks up a tunnel change on the next rebuild; a protocol-only push does not reach it.
+picks up a tunnel change on the next rebuild; a protocol-only push does not reach it. The current
+freeze additionally carries the `DataSources`/`DataSinks` application boundaries, Hub-commanded role
+reversal, and the two-ended RF_CONFIG coordination, so the `Nodes` and config-actuation paths
+likewise only reach the device on a rebuild.
 
 ## Adding a target (new device or new modem)
 
