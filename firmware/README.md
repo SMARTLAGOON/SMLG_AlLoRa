@@ -92,3 +92,12 @@ coordinates; the earlier affine version took ~13 s and overran the handshake rec
 peer looped `Handshake failed`). This is a one-off per-session cost, never per frame, but it does
 block the radio loop while it runs, so keep the handshake receive window comfortably larger than a
 single scalar multiplication.
+
+**Session recovery after a peer reboot.** A session lives in RAM, so an endpoint that reboots comes
+back with none, and only the authority can offer a new one. The authority now notices by itself: a
+run of silent visits re-arms the connection poll (the one request an endpoint always replies to),
+and an endpoint that stays silent through that poll has its session dropped so the next visit
+re-handshakes. Silence alone is deliberately not enough, since an endpoint with no file answers a
+metadata poll with nothing at all and would otherwise be re-keyed while merely idle. The budget is
+`session_recovery_after` (default 3 visits) on the Hub ctor. This matters most for the RESET control
+artifact, which reboots an endpoint on purpose: rebuild to reach it.
