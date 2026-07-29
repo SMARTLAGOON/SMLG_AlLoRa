@@ -673,6 +673,11 @@ class Swap_base(Node):
     def ask_ok(self, packet: Packet):
         packet.set_ok()
         response_packet = self.send_request(packet)
+        # A round that heard nothing back is an ordinary outcome on a lossy link, not an
+        # error. Report it as the same "no usable answer" the other arms return, so the
+        # caller retries on its normal cadence instead of raising from every lost frame.
+        if response_packet is None:
+            return None, None
         if self.save_hops(response_packet):
             return  (1, "hop_catch.json"), response_packet.get_hop()
         if response_packet.get_command() == Packet.OK:
@@ -683,6 +688,8 @@ class Swap_base(Node):
     def ask_metadata(self, packet: Packet):
         packet.ask_metadata()
         response_packet = self.send_request(packet)
+        if response_packet is None:      # nothing came back
+            return None, None
         if self.save_hops(response_packet):
             return  (1, "hop_catch.json"), response_packet.get_hop()
         if response_packet.get_command() == Packet.METADATA:
@@ -702,6 +709,8 @@ class Swap_base(Node):
     def ask_data(self, packet: Packet, next_chunk):
         packet.ask_data(next_chunk)
         response_packet = self.send_request(packet)
+        if response_packet is None:      # nothing came back
+            return None, None
         if self.save_hops(response_packet):
             return b"0", response_packet.get_hop()
         if response_packet.get_command() == Packet.DATA:
@@ -865,9 +874,12 @@ class Swap_base(Node):
                     t0 = time()
                     digital_endpoint.connected(ok, hop, self.mesh_mode)
 
-                # Any reply this visit locates the peer on the active config (the RF-config
-                # probe's re-acquisition signal); silence advances the probe to the other config.
-                if not delegated and self._last_reply_kind is not None:
+                # Did this round hear anything back? The one signal both the RF-config probe
+                # and the sleep controller read: a reply locates the peer on the active config
+                # (silence advances the probe to the other one) and says the inter-request gap
+                # is one the link tolerates.
+                heard = self._last_reply_kind is not None
+                if not delegated and heard:
                     probe_heard = True
                     self._peer_alive_this_visit = True
 
@@ -881,8 +893,12 @@ class Swap_base(Node):
                 if not delegated:
                     # A delegation round served nobody a request: it says nothing about
                     # the inter-request gap this link tolerates, so it must not feed
-                    # the sleep controller's hunt.
-                    self.pacing.on_success()
+                    # the sleep controller's hunt. A round that did go out and heard
+                    # nothing back is exactly the failed round that hunt backs off from.
+                    if heard:
+                        self.pacing.on_success()
+                    else:
+                        self.pacing.on_failure()
 
             except Exception as e:
                 if self.debug:
@@ -1004,7 +1020,7 @@ class Swap_base(Node):
                     packet.disable_sleep()
             response_packet = self.send_request(packet)
             try:
-                if response_packet.get_command() == Packet.OK:
+                if response_packet is not None and response_packet.get_command() == Packet.OK:
                     new_config = response_packet.get_config()
                     if self.debug:
                         print("OK and changing config to: ", new_config)
