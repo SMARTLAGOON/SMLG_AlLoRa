@@ -10,7 +10,8 @@ from json import loads, dumps
 class Gateway(Requester):
 
     def __init__(self, connector=None, config_file="LoRa.json", debug_hops=False,
-                    NEXT_ACTION_TIME_SLEEP=0.1, nodes_file="Nodes.json", data_sink=None):
+                    NEXT_ACTION_TIME_SLEEP=0.1, nodes_file="Nodes.json", data_sink=None,
+                    **kwargs):
         #JSON Example:
         # {
         #     "name": "G",
@@ -27,8 +28,13 @@ class Gateway(Requester):
 
         # NEXT_ACTION_TIME_SLEEP is accepted for legacy callers but ignored, as it
         # has been since v2.0: the adaptive sleep controller owns the gap.
+        #
+        # Everything else is forwarded rather than enumerated. This is the multi-endpoint
+        # deployment of the same collector, so a knob worth exposing on the single-endpoint
+        # one is worth exposing here; naming them one by one is how they went missing, and
+        # left the fielded node pinned to defaults it had no way to override.
         super().__init__(connector,  config_file, debug_hops=debug_hops,
-                            data_sink=data_sink)
+                            data_sink=data_sink, **kwargs)
         self.nodes_file = nodes_file
         self.digital_endpoints = []
         self.add_digital_endpoints(self.nodes_file)
