@@ -91,6 +91,12 @@ class Swap_base(Node):
         # (the Edge's), not this node's own; is_for_me accepts that one sid for the duration.
         self._delegated_sid = None
 
+        # Any evidence the peer answered during the current drive visit, whether as a reply to
+        # a poll or as a delegated pull that ran to completion. Kept separate from the
+        # RF-config probe's `heard`, which asks the narrower question of whether the peer was
+        # located on the config this visit polled on.
+        self._peer_alive_this_visit = False
+
         # Hub-authority tie-break bookkeeping: the kind of the last frame that landed in the
         # reply slot, and how often this node yielded a delegated drive to the authority.
         self._last_reply_kind = None
@@ -293,6 +299,12 @@ class Swap_base(Node):
         # Base: nothing to probe. The Hub preset overrides this to advance a {new, old}
         # RF-config trial once per visit: locate/commit the Edge on the config it answered,
         # or swap the probe to the other config when a visit heard nothing.
+        pass
+
+    def _session_visit_end(self, digital_endpoint):
+        # Base: nothing to check. The Hub preset overrides this to tear down a secure session
+        # its endpoint has stopped being able to use, so the next visit re-handshakes. Reads
+        # `_peer_alive_this_visit`, which is any evidence the peer answered during the visit.
         pass
 
     def queue_control_action(self, action):
@@ -740,6 +752,15 @@ class Swap_base(Node):
         # there is nothing to protect the transfer with, so give up this endpoint for now.
         if self.security_mode == 'secure' and self.session_store is not None \
                 and self.session_store.get(digital_endpoint.session_id) is None:
+            if self.home_role == "source":
+                # Only the authority drives the handshake: it holds the static key and assigns
+                # the sid. A source-home node is driving only because it was delegated, and it
+                # knows its peer solely through the live session, so with no session there is
+                # neither a party to be here nor an address to reach. Come home and let the
+                # authority reclaim and re-handshake on its own poll.
+                if self.debug:
+                    print("No session for the delegated pull; coming home")
+                return False
             if self.perform_handshake(digital_endpoint) is None:
                 if self.debug:
                     print("Handshake failed with endpoint: ", mac)
@@ -755,6 +776,7 @@ class Swap_base(Node):
         # did a full uplink file complete (commit)? Consumed by _probe_visit_end at visit end.
         probe_heard = False
         probe_completed = False
+        self._peer_alive_this_visit = False
 
         while end_time is None or ticks_diff(end_time, time()) > 0:
             t0 = time()
@@ -847,6 +869,7 @@ class Swap_base(Node):
                 # probe's re-acquisition signal); silence advances the probe to the other config.
                 if not delegated and self._last_reply_kind is not None:
                     probe_heard = True
+                    self._peer_alive_this_visit = True
 
                 if self.sf_trial and self.protocol_version < 3:
                     # Legacy v2 drive-side trial (a Collector changing its own config via
@@ -900,6 +923,10 @@ class Swap_base(Node):
         # visit, never starve other endpoints to chase one reconfig). No-op unless this is a
         # Hub with a live {new, old} trial for this endpoint.
         self._probe_visit_end(digital_endpoint, probe_heard, probe_completed)
+
+        # Also visit-scoped: is the secure session we hold for this endpoint still usable? A
+        # peer that rebooted lost its half and cannot tell us, so the authority has to notice.
+        self._session_visit_end(digital_endpoint)
 
         # True only when a one_file drive completed (its file reached the sink):
         # a granted pull uses this to tell a delivered delegation from a dead one.

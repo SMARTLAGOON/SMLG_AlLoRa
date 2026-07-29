@@ -10,6 +10,7 @@ Edge's pull, and reclaims control the moment the pull ends (or its reclaim timer
 import gc
 from os import urandom
 from AlLoRa.Nodes.Swap_base import Swap_base
+from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.DataSources.DataSource import DataSource
 from AlLoRa.utils.time_utils import current_time_ms as time, ticks_add, ticks_diff
 from AlLoRa.utils.debug_utils import print
@@ -34,7 +35,8 @@ class Hub(Swap_base):
                  data_sink=None,
                  reclaim_timeout=10,
                  probe_swap_after=1,
-                 probe_give_up_after=6):
+                 probe_give_up_after=6,
+                 session_recovery_after=3):
         super().__init__(connector, config_file,
                          debug_hops=debug_hops,
                          max_sleep_time=max_sleep_time,
@@ -68,6 +70,13 @@ class Hub(Swap_base):
         #   _endpoint_trial[sid] = {"old": [f,sf,bw,cr,txp], ...} while a trial is live.
         self._pending_mirror = {}
         self._endpoint_trial = {}
+        # Secure-session liveness, counted in visits. A peer that reboots loses its RAM-held
+        # session and has no way to say so, and only this side can offer a new one, so the
+        # authority has to notice by itself. How that is decided (and why silence alone does
+        # not decide it) is in _session_visit_end. Per sid: (consecutive silent visits,
+        # whether the confirming connection poll is already armed).
+        self.session_recovery_after = session_recovery_after
+        self._session_silent_visits = {}
 
     def set_downlink_source(self, digital_endpoint, datasource):
         """Plug a live input boundary (e.g. an MQTT_Datasource) as this Edge's downlink:
@@ -176,6 +185,68 @@ class Hub(Swap_base):
             if self.debug:
                 print("RF probe swapped endpoint {} to {}".format(sid, target[:3]))
 
+    def _session_visit_end(self, digital_endpoint):
+        # Decide whether the session held for this endpoint is still usable, and tear it down
+        # if it is not, so the next visit handshakes from scratch. That puts a rebooted
+        # endpoint back in exactly the state of one never contacted, which the drive loop
+        # already knows how to bootstrap, instead of leaving the pair stranded on half a
+        # session until this node restarts.
+        #
+        # Silence on its own is NOT evidence of a dead session. An Edge with no file answers
+        # nothing at all: it stays quiet through a metadata poll rather than spend airtime
+        # saying "nothing yet", so an idle sensor and a rebooted one look identical from here.
+        # Treating silence as proof would re-key every idle endpoint every few visits, and an
+        # ECDH is the most expensive thing either end ever does.
+        #
+        # So a run of silence only raises the question, and the answer comes from the one
+        # request an Edge always replies to: the connection poll. Re-arm it, and let the next
+        # visit ask. Answered means the endpoint was merely idle. Silent again means it is not
+        # answering anything it can hear, which is the signal worth spending a session on.
+        if self.security_mode != 'secure' or self.session_store is None:
+            return
+        sid = digital_endpoint.session_id
+        if self._peer_alive_this_visit:
+            self._session_silent_visits.pop(sid, None)
+            return
+        if self.session_store.get(sid) is None:
+            return          # nothing held, so nothing to tear down
+        silent, polled = self._session_silent_visits.get(sid, (0, False))
+        silent += 1
+        if polled:
+            # The connection poll went unanswered too: not idle, out of step.
+            self._session_silent_visits.pop(sid, None)
+            self.session_store.drop(sid)
+            # Every delegation that failed while the session was dead failed for that one
+            # reason, so the skip they earned is now measuring a condition that no longer
+            # exists. Left in place it outlives the repair and keeps deferring the very
+            # downlink the repair was for, which on this direction can be a queued command.
+            self._delegation_backoff.pop(sid, None)
+            if self.debug:
+                print("Endpoint {} did not answer a connection poll after {} silent visits; "
+                      "dropping the session so the next visit re-handshakes".format(sid, silent))
+            return
+        if silent < self.session_recovery_after:
+            self._session_silent_visits[sid] = (silent, False)
+            return
+        # Budget reached: ask the question rather than assume the answer.
+        self._session_silent_visits[sid] = (silent, True)
+        self._rearm_connection_poll(digital_endpoint)
+        if self.debug:
+            print("Endpoint {} silent for {} visits; re-arming the connection poll to tell "
+                  "idle from out of step".format(sid, silent))
+
+    @staticmethod
+    def _rearm_connection_poll(digital_endpoint):
+        # Send the endpoint back to its pre-contact state so the next visit opens with an OK
+        # poll. A reassembly still in flight is already dead if the peer has gone this quiet,
+        # and its buffer holds an open file handle nothing else will close, so release it
+        # here rather than leak it (the on-device descriptor table is tiny).
+        in_flight = digital_endpoint.get_current_file()
+        if in_flight is not None:
+            in_flight.discard()
+            digital_endpoint.set_current_file(None)
+        digital_endpoint.state = Digital_Endpoint.OK
+
     def downlink_pending(self, digital_endpoint):
         source = self._downlink.get(digital_endpoint.session_id)
         return source is not None and source.has_pending()
@@ -220,6 +291,9 @@ class Hub(Swap_base):
         if delivered:
             source.confirm_file()
             self._delegation_backoff.pop(sid, None)
+            # A pull that ran to completion is the strongest liveness evidence there is, and a
+            # visit whose only exchange was that pull would otherwise look silent.
+            self._peer_alive_this_visit = True
             # The Edge acknowledged the reconfig downlink (final-OK heard): it will apply the
             # new config after its pull's final-OK, so the Hub mirrors now and starts probing.
             mirror = self._pending_mirror.pop(sid, None)
