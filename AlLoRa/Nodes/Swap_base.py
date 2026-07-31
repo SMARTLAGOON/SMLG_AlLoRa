@@ -206,9 +206,9 @@ class Swap_base(Node):
 
                         self.send_response(response_packet)
 
-                        if self.subscribers:
+                        if self.status.subscribers:
                             self.status['Status'] = 'OK'
-                            self.notify_subscribers()
+                            self.status.notify()
 
                         if new_sf:
                             response_packet.set_change_rf(new_sf)
@@ -482,7 +482,7 @@ class Swap_base(Node):
             if self.sf_trial and prev_sent is not None and requested_chunk > prev_sent:
                 self._commit_trial()
             response_packet.set_data(self.file.get_chunk(requested_chunk))
-            if self.subscribers:
+            if self.status.subscribers:
                 self.status['Chunk'] = self.file.get_length() - requested_chunk
                 self.status['Status'] = 'CHUNK'
                 self.status['Retransmission'] = self.file.retransmission
@@ -517,7 +517,7 @@ class Swap_base(Node):
             else:
                 self.file.metadata_sent = True
 
-            if self.subscribers:
+            if self.status.subscribers:
                 self.status['File'] = filename
                 self.status['Status'] = 'Metadata'
                 self.status['Chunk'] = self.file.get_length()
@@ -595,7 +595,7 @@ class Swap_base(Node):
         else:
             self._last_reply_kind = response_packet.get_command()
 
-        if self.subscribers:
+        if self.status.subscribers:
             self.status['PSizeS'] = packet_size_sent
             self.status['PSizeR'] = packet_size_received
             self.status['TimePR'] = time_pr * 1000  # Time in ms
@@ -699,7 +699,7 @@ class Swap_base(Node):
                 hop = response_packet.get_hop()
                 length = metadata["LENGTH"]
                 filename = metadata["FILENAME"]
-                if self.subscribers:
+                if self.status.subscribers:
                     self.status['File'] = filename
                 return (length, filename), hop
             except:
@@ -744,7 +744,7 @@ class Swap_base(Node):
         mac = digital_endpoint.get_mac_address()
         self.source_mac = mac
 
-        if self.subscribers:
+        if self.status.subscribers:
             self.status['SMAC'] = mac
         save_to = self.result_path + "/" + mac
         sleep_mesh = digital_endpoint.get_sleep()
@@ -913,9 +913,9 @@ class Swap_base(Node):
                 # trial that never confirms falls back to last-known-good once its window elapses.
                 self._service_trial_window()
 
-                if self.subscribers:
+                if self.status.subscribers:
                     self.status['Status'] = digital_endpoint.state
-                    self.notify_subscribers()
+                    self.status.notify()
 
                 gc.collect()
                 dt = ticks_diff(time(), t0) / 1000
@@ -1028,7 +1028,7 @@ class Swap_base(Node):
                     if not changed:
                         return False
 
-                    self.notify_subscribers()
+                    self.status.notify()
                     self.reset_sleep_time()
                     return True
                 else:

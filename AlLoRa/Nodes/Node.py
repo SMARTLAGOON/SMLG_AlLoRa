@@ -1,6 +1,7 @@
 from AlLoRa.Packet import Packet
 from AlLoRa.Packet_v3 import Packet_v3
 from AlLoRa.Connectors.Connector import Connector
+from AlLoRa.Status import Status
 from AlLoRa.utils.time_utils import current_time_ms as time, sleep
 from AlLoRa.utils.debug_utils import print
 from AlLoRa.utils.os_utils import os
@@ -30,8 +31,10 @@ class Node:
         self._trial_window_s = None
         self._trial_deadline = None
 
-        self.subscribers = []
-        self.status = {}
+        # The observability surface: the live values plus the subscribers they are pushed to.
+        # It is a plain holder with no protocol in it, so a bridge board can be observed the
+        # same way without being a node.
+        self.status = Status()
 
         self.config_connector()
 
@@ -328,11 +331,11 @@ class Node:
             time_reply = tf - self.tr
             if self.debug:
                 print("Time Send: ", time_send, " Time Reply: ", time_reply)
-            if self.subscribers:
+            if self.status.subscribers:
                 self.status['PSizeS'] = len(response_packet.get_content())
                 self.status['TimePS'] = time_send
                 self.status['TimeBtw'] = time_reply
-                self.notify_subscribers()
+                self.status.notify()
 
     def forward(self, packet: Packet):
         try:
@@ -434,15 +437,13 @@ class Node:
     def restore_rf_config(self):
         self.connector.restore_rf_config()
 
-    # Subscribers stuff:
+    # Subscribers stuff: the surface itself lives on `status`; these stay because they are
+    # what a deployment's main.py calls (a screen, a logger, a benchmark probe).
     def register_subscriber(self, subscriber):
-        if subscriber not in self.subscribers:
-            self.subscribers.append(subscriber)
+        self.status.register(subscriber)
 
     def unregister_subscriber(self, subscriber):
-        if subscriber in self.subscribers:
-            self.subscribers.remove(subscriber)
+        self.status.unregister(subscriber)
 
     def notify_subscribers(self):
-        for subscriber in self.subscribers:
-            subscriber.update(self.status)
+        self.status.notify()

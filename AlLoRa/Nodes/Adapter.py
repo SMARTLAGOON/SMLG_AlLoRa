@@ -38,7 +38,7 @@ class Adapter(Node):
                 if success:
                     self.status["RSSI"] = self.connector.get_rssi()
                     self.status["SNR"] = self.connector.get_snr()
-                    self.notify_subscribers()
+                    self.status.notify()
                     gc.collect()
                 sleep(0.1)
 

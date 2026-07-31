@@ -24,6 +24,7 @@ _ON_DEVICE_SECURE = [
     "AlLoRa/Security/Session_store.py",
     "AlLoRa/Security/Replay_window.py",
     "AlLoRa/Codec.py",
+    "AlLoRa/Status.py",
     "AlLoRa/Nodes/Node.py",
     "AlLoRa/Nodes/Swap_base.py",
     "AlLoRa/Nodes/Edge.py",

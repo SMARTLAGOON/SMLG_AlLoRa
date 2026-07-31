@@ -108,7 +108,7 @@ class Gateway(Requester):
 
     def update_subscribers(self, digital_endpoint):
         self.status["Digital_Endpoints"][digital_endpoint.get_mac_address()] = digital_endpoint.file_reception_info
-        self.notify_subscribers()
+        self.status.notify()
 
 
                    
