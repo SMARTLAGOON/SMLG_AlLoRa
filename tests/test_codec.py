@@ -307,12 +307,32 @@ def test_build_codec_picks_secure_when_fully_provisioned():
     assert isinstance(codec, V3SecureCodec)
 
 
+def test_build_codec_refuses_secure_over_the_native_flooding_mesh():
+    # Secure framing is sid-addressed P2P only: the sealed header has no seq field, so a node
+    # asking for secure + AlLoRa's own mesh would frame P2P while believing it forwards, and
+    # fail looking like a radio fault. Reject the configuration at startup instead.
+    with pytest.raises(ValueError) as exc:
+        build_codec(protocol_version=3, addressing="sid", security_mode="secure",
+                    mesh_mode=True, session_resolver=lambda sid: None, aead=detect_aead())
+    assert "mesh" in str(exc.value).lower()
+
+
 def test_build_codec_degrades_to_open_without_a_backend():
     # A secure posture but no AEAD backend / resolver falls back to open — the node has
     # already decided that is acceptable for its posture before reaching here.
     codec = build_codec(protocol_version=3, addressing="sid", security_mode="secure",
                         session_resolver=None, aead=None)
     assert isinstance(codec, V3OpenCodec)
+
+
+def test_the_mesh_refusal_does_not_reach_the_degraded_open_codec():
+    # The refusal belongs to the secure codec, not to the secure *posture*: open mesh is a
+    # supported, built configuration. A posture that degrades for want of a backend must still
+    # get its mesh, so this pins the guard inside the fully-provisioned branch.
+    codec = build_codec(protocol_version=3, addressing="sid", security_mode="secure",
+                        mesh_mode=True, session_resolver=None, aead=None)
+    assert isinstance(codec, V3OpenCodec)
+    assert codec.payload_overhead() == 8      # the mesh header, seq included
 
 
 # --- payload_overhead (what caps the chunk size) -------------------------------------------

@@ -176,18 +176,24 @@ class V3SecureCodec:
     session the data path needs, and a Gateway does it with different Sources over its
     lifetime. Framing is routed by the packet's own addressing; parsing try-parses (the wire
     format has both frame shapes but no marker to tell them apart), using the AEAD tag / the
-    24-bit integrity already on the wire as the validity check, no new wire field."""
+    24-bit integrity already on the wire as the validity check, no new wire field.
 
-    def __init__(self, session_resolver, aead, mesh_mode=False, addressing="sid",
-                 my_mac="00000000"):
+    P2P only, and unlike the other two codecs it takes no `mesh_mode`: the sealed header has
+    no sequence number, so AlLoRa's own flooding mesh has no secure frame shape to travel in.
+    The intended route to secure multi-hop is to ride a Meshtastic mesh instead (that connector
+    is not built yet), and it needs nothing from this class: Meshtastic carries its routing in
+    its own frame, so an AlLoRa frame inside one stays P2P exactly as it is here."""
+
+    def __init__(self, session_resolver, aead, addressing="sid", my_mac="00000000"):
         self._resolve = session_resolver   # sid -> Session | None
         self._aead = aead
-        self._mesh = mesh_mode
         self._addressing = addressing
         self._my_mac = my_mac
 
     def _new(self, addressing):
-        return Packet_v3(mesh_mode=self._mesh, addressing=addressing)
+        # No mesh_mode to pass: unlike the other two codecs this one takes none, because it
+        # could not honour one. Every frame it builds is P2P, sealed or handshake alike.
+        return Packet_v3(addressing=addressing)
 
     def frame(self, packet):
         # First-contact handshake frames go on the wire open (public keys, nothing secret),
@@ -266,6 +272,18 @@ def build_codec(protocol_version=2, addressing="mac", mesh_mode=False, short_mac
     if protocol_version >= 3:
         if (security_mode in ("secure", "strict")
                 and session_resolver is not None and aead is not None):
-            return V3SecureCodec(session_resolver, aead, mesh_mode, addressing, my_mac)
+            if mesh_mode:
+                # Secure framing is sid-addressed P2P only: the sealed header carries no seq
+                # field, so this node would frame P2P while believing it forwards, and fail in
+                # a shape that looks like a radio fault. Refuse at startup, where a
+                # misconfiguration belongs, rather than at the first exchange. Only AlLoRa's
+                # own flooding mesh is at stake: riding a Meshtastic mesh keeps this frame P2P
+                # (the routing lives in the Meshtastic frame), so it needs no mesh header here.
+                raise ValueError(
+                    "secure mode does not support AlLoRa's own flooding mesh: the sealed "
+                    "header has no sequence number, so this node would frame point to point "
+                    "while believing it forwards. Clear mesh_mode to run secure point to "
+                    "point, or use open mode if you need the flooding mesh.")
+            return V3SecureCodec(session_resolver, aead, addressing, my_mac)
         return V3OpenCodec(mesh_mode, addressing)
     return V2Codec(mesh_mode, short_mac, my_mac)
