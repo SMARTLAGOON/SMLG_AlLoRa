@@ -18,7 +18,7 @@ Two things move against the old design's fused override:
 """
 from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.Codec import build_codec
-from AlLoRa.Links import tunnel_rpc
+from AlLoRa.Links import tunnel_codec
 from AlLoRa.utils.debug_utils import print
 
 
@@ -45,15 +45,15 @@ class Tunnel_connector(Connector):
     # --- transport verbs, forwarded to the bridge radio over the link ---
 
     def transmit(self, wire):
-        reply = self.link.rpc(tunnel_rpc.encode_transmit(wire), timeout=self._rpc_timeout)
-        return tunnel_rpc.decode_bool_reply(reply) if reply else False
+        reply = self.link.rpc(tunnel_codec.encode_transmit(wire), timeout=self._rpc_timeout)
+        return tunnel_codec.decode_bool_reply(reply) if reply else False
 
     def listen(self, window):
-        reply = self.link.rpc(tunnel_rpc.encode_listen(window),
+        reply = self.link.rpc(tunnel_codec.encode_listen(window),
                               timeout=window + self._link_margin)
         if not reply:
             return None, window          # link gave up: treat as a radio timeout of ~one window
-        return tunnel_rpc.decode_listen_reply(reply)
+        return tunnel_codec.decode_listen_reply(reply)
 
     def recv(self, focus_time=12):
         return self.listen(focus_time)[0]
@@ -62,11 +62,11 @@ class Tunnel_connector(Connector):
         # The bridge runs the whole match loop at its radio; we send only the keyless prefix
         # down and get the matching reply (or a timeout) + the radio-measured td back up.
         prefix = match_key.wire_prefix()
-        reply = self.link.rpc(tunnel_rpc.encode_exchange(wire, window, prefix),
+        reply = self.link.rpc(tunnel_codec.encode_exchange(wire, window, prefix),
                               timeout=window + self._link_margin)
         if not reply:
             return None, window, "timeout"
-        return tunnel_rpc.decode_exchange_reply(reply)
+        return tunnel_codec.decode_exchange_reply(reply)
 
     def send_and_wait_response(self, packet):
         """The initiator round over the tunnel: frame here, match at the radio via `exchange`,
@@ -114,9 +114,9 @@ class Tunnel_connector(Connector):
     def change_rf_config(self, frequency=None, sf=None, bw=None, cr=None, tx_power=None,
                          backup=True):
         reply = self.link.rpc(
-            tunnel_rpc.encode_set_rf(freq=frequency, sf=sf, bw=bw, cr=cr, tx=tx_power),
+            tunnel_codec.encode_set_rf(freq=frequency, sf=sf, bw=bw, cr=cr, tx=tx_power),
             timeout=self._rpc_timeout)
-        if not reply or not tunnel_rpc.decode_bool_reply(reply):
+        if not reply or not tunnel_codec.decode_bool_reply(reply):
             return False
         # Keep the logic-holder's RF view in sync so Pacing sizes the window `D` from the live
         # sf/bw (in a tunnel there is no local chip to read them back from).
@@ -135,19 +135,19 @@ class Tunnel_connector(Connector):
         return True
 
     def get_rf_config(self):
-        reply = self.link.rpc(tunnel_rpc.encode_get_rf(), timeout=self._rpc_timeout)
+        reply = self.link.rpc(tunnel_codec.encode_get_rf(), timeout=self._rpc_timeout)
         if not reply:
             return []
-        return tunnel_rpc.decode_get_rf_reply(reply)
+        return tunnel_codec.decode_get_rf_reply(reply)
 
     def request_mac(self, retries=3):
         """Fetch the bridge radio's MAC (the real on-air address the peer answers to), cache it
         as this connector's identity, and rebuild the codec so its reply-matching uses it. The
         bridge may still be booting when a tunnel Collector comes up, so retry a few times."""
         for _ in range(max(1, retries)):
-            reply = self.link.rpc(tunnel_rpc.encode_get_mac(), timeout=self._rpc_timeout)
+            reply = self.link.rpc(tunnel_codec.encode_get_mac(), timeout=self._rpc_timeout)
             if reply:
-                mac = tunnel_rpc.decode_get_mac_reply(reply)
+                mac = tunnel_codec.decode_get_mac_reply(reply)
                 if mac and mac != self.MAC:
                     self.MAC = mac
                     self._rebuild_codec()

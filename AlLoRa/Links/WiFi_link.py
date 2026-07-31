@@ -4,7 +4,7 @@ The concrete `Link` under a WiFi tunnel: the logic-holder half POSTs an opaque r
 to the bridge (Adapter) and reads the reply frame back as the HTTP body; the bridge half
 accepts one connection, hands the posted body up as the request, and writes the reply body
 back on the same socket. Like every Link it carries opaque bytes only: the LoRa frame rides
-as hex inside the `tunnel_rpc` JSON body, so the bridge never parses it and holds no key.
+as hex inside the `tunnel_codec` JSON body, so the bridge never parses it and holds no key.
 
 The request/reply lockstep maps onto one HTTP round trip per verb: `read_request` accepts and
 reads the body, `write_reply` answers on the held socket and closes it. Client and bridge use
@@ -140,7 +140,7 @@ class WiFi_link(Link):
 
     def _recv_http_request(self, sock):
         # Read headers, then exactly Content-Length body bytes. Our client always sends a
-        # Content-Length, and the body (tunnel_rpc JSON) never contains a CRLF-CRLF, so the
+        # Content-Length, and the body (tunnel_codec JSON) never contains a CRLF-CRLF, so the
         # header split is unambiguous.
         data = b""
         while b"\r\n\r\n" not in data:

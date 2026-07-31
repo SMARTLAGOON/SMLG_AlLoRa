@@ -4,7 +4,7 @@ The concrete `Link` under a serial tunnel: it moves opaque request/reply frames 
 logic-holder (a Raspberry-Pi/host over `pyserial`) and the bridge (an ESP32 over
 `machine.UART`), and knows nothing about the verbs, the LoRa air wire, or session keys. A
 frame is delimited on the wire by a sentinel; the frame bytes themselves are the JSON that
-`tunnel_rpc` produces, which is pure printable ASCII (the LoRa blob rides as hex inside it),
+`tunnel_codec` produces, which is pure printable ASCII (the LoRa blob rides as hex inside it),
 so the sentinel `<<END>>\\n` can never occur mid-frame and a text-only UART is safe.
 
 `text_safe` keeps the printable-only filter the old Serial adapter relied on: UART line noise

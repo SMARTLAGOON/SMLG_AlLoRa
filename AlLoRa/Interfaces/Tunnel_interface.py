@@ -8,7 +8,7 @@ bridge serve v2, v3-open and v3-secure alike, and what "Adapter is the server ha
 Connector, not a node type" means in practice.
 """
 from AlLoRa.Interfaces.Interface import Interface
-from AlLoRa.Links import tunnel_rpc
+from AlLoRa.Links import tunnel_codec
 from AlLoRa.utils.debug_utils import print
 
 
@@ -47,34 +47,34 @@ class Tunnel_interface(Interface):
         if request is None:
             return False
         try:
-            verb, args = tunnel_rpc.decode_request(request)
+            verb, args = tunnel_codec.decode_request(request)
             self._dispatch(verb, args)
         except Exception as e:
             if self.debug:
                 print("Tunnel_interface error: {}".format(e))
             # Reply so a client rpc never blocks forever on a malformed/failed request.
-            self.link.write_reply(tunnel_rpc.encode_bool_reply(False))
+            self.link.write_reply(tunnel_codec.encode_bool_reply(False))
         return True
 
     def _dispatch(self, verb, args):
-        if verb == tunnel_rpc.TRANSMIT:
+        if verb == tunnel_codec.TRANSMIT:
             ok = self.connector.transmit(args["wire"])
-            self.link.write_reply(tunnel_rpc.encode_bool_reply(ok))
-        elif verb == tunnel_rpc.LISTEN:
+            self.link.write_reply(tunnel_codec.encode_bool_reply(ok))
+        elif verb == tunnel_codec.LISTEN:
             wire, td = self.connector.listen(args["window"])
-            self.link.write_reply(tunnel_rpc.encode_listen_reply(wire, td))
-        elif verb == tunnel_rpc.EXCHANGE:
+            self.link.write_reply(tunnel_codec.encode_listen_reply(wire, td))
+        elif verb == tunnel_codec.EXCHANGE:
             reply, td, status = self.connector.exchange(
                 args["wire"], args["window"], _PrefixMatch(args["match_prefix"]))
-            self.link.write_reply(tunnel_rpc.encode_exchange_reply(reply, td, status))
-        elif verb == tunnel_rpc.SET_RF:
+            self.link.write_reply(tunnel_codec.encode_exchange_reply(reply, td, status))
+        elif verb == tunnel_codec.SET_RF:
             ok = self.connector.change_rf_config(
                 frequency=args.get("freq"), sf=args.get("sf"), bw=args.get("bw"),
                 cr=args.get("cr"), tx_power=args.get("tx"))
-            self.link.write_reply(tunnel_rpc.encode_bool_reply(bool(ok)))
-        elif verb == tunnel_rpc.GET_RF:
-            self.link.write_reply(tunnel_rpc.encode_get_rf_reply(self.connector.get_rf_config()))
-        elif verb == tunnel_rpc.GET_MAC:
-            self.link.write_reply(tunnel_rpc.encode_get_mac_reply(self.connector.get_mac()))
+            self.link.write_reply(tunnel_codec.encode_bool_reply(bool(ok)))
+        elif verb == tunnel_codec.GET_RF:
+            self.link.write_reply(tunnel_codec.encode_get_rf_reply(self.connector.get_rf_config()))
+        elif verb == tunnel_codec.GET_MAC:
+            self.link.write_reply(tunnel_codec.encode_get_mac_reply(self.connector.get_mac()))
         else:
-            self.link.write_reply(tunnel_rpc.encode_bool_reply(False))
+            self.link.write_reply(tunnel_codec.encode_bool_reply(False))

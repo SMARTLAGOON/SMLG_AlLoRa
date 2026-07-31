@@ -1,17 +1,27 @@
-"""tunnel_rpc: the host<->bridge line protocol for the split Connector.
+"""tunnel_codec: how a transport call is spoken on the tunnel link.
 
-The tunnel carries the *transport verbs* (transmit / listen / exchange + RF config) across a
-serial or WiFi link: the logic-holder half forwards a verb call *down*, the bridge (Interface)
-half runs it on the real radio and returns the result *up*. This module is the pure
-(de)serialization of those calls (no I/O, no radio, no codec, no keys), so it unit-tests on
-CPython and the transport Link only has to move the opaque request/reply bytes.
+`Codec` speaks `Packet`s on the LoRa air wire. This speaks *transport calls* on the link
+joining the two halves of a split Connector. Same job on a different pipe, which is why it
+carries the same name: encode the thing, move it, decode it on the far side.
 
-The bytes *between* host and bridge are not the LoRa air wire: the LoRa frame rides inside as
-an opaque hex blob, so v2 / v3-open / v3-secure all cross unchanged (the bridge never parses
-it, holds no key). JSON keeps it debuggable and lets the serial and WiFi links serialize the
-same dict; the radio payload is <=255 B, so hex-doubling on the local link (fast relative to
-airtime) is cheap. `null` in a wire field means "no frame" (a radio timeout), which is why a
-lost reply stays distinct from a zero-length one.
+What crosses is a **remote procedure call (RPC)**: a call that looks local to whoever makes it
+but actually runs on another machine, with its arguments and its return value shipped across a
+wire in between. The logic-holder calls `connector.transmit(wire)` as though it owned a radio.
+It does not. This module encodes that call, the Link carries the bytes, and the bridge half
+decodes it, runs the real method on the real radio, and sends the return value back the same
+way. Six procedures, matching the Connector's transport surface: transmit / listen / exchange,
+plus get/set RF config and get MAC.
+
+This module is only the (de)serialization of those calls: no I/O, no radio, no crypto, no
+keys. So it unit-tests on CPython, and a Link has only to move the opaque request/reply bytes
+it produces, whatever medium that Link happens to run on.
+
+The bytes between the halves are *not* the LoRa air wire: the LoRa frame rides inside as an
+opaque hex blob, so v2 / v3-open / v3-secure all cross unchanged and the bridge never parses
+one or holds a key. JSON keeps it debuggable and lets every Link serialize the same dict; the
+radio payload is <=255 B, so hex-doubling on the local link (fast relative to airtime) is
+cheap. `null` in a wire field means "no frame" (a radio timeout), which is why a lost reply
+stays distinct from a zero-length one.
 """
 from AlLoRa.utils.json_utils import json
 
