@@ -313,3 +313,32 @@ def test_build_codec_degrades_to_open_without_a_backend():
     codec = build_codec(protocol_version=3, addressing="sid", security_mode="secure",
                         session_resolver=None, aead=None)
     assert isinstance(codec, V3OpenCodec)
+
+
+# --- payload_overhead (what caps the chunk size) -------------------------------------------
+
+def test_v2_overhead_is_the_two_mac_header():
+    assert V2Codec(short_mac=True).payload_overhead() == 12
+
+
+def test_v3_open_overhead_is_the_session_id_header():
+    # sid + VT + FL + 3-byte integrity. The 6 bytes that session-id addressing bought.
+    assert V3OpenCodec(addressing="sid").payload_overhead() == 6
+
+
+def test_v3_open_mesh_overhead_adds_the_sequence_number():
+    assert V3OpenCodec(addressing="sid", mesh_mode=True).payload_overhead() == 8
+
+
+def test_v3_secure_overhead_is_the_sealed_header_plus_tag():
+    # sid + VT + counter(2), then the 4-byte AEAD tag that replaces the integrity trailer.
+    codec = V3SecureCodec(lambda sid: None, detect_aead(), addressing="sid")
+    assert codec.payload_overhead() == 8
+
+
+def test_every_v3_posture_beats_v2():
+    # The point of the v3 header work: a v3 node must never be held to v2's ceiling.
+    v2 = V2Codec(short_mac=True).payload_overhead()
+    assert V3OpenCodec(addressing="sid").payload_overhead() < v2
+    assert V3SecureCodec(lambda sid: None, detect_aead(),
+                         addressing="sid").payload_overhead() < v2

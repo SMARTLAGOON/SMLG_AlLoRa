@@ -10,6 +10,12 @@ one narrow interface so the transfer engine never branches on version or posture
     frame(packet)      -> wire bytes                (serialize; picks the open/secure body)
     deframe(wire)      -> packet | None             (parse; None = unparseable/corrupt/forged)
     match_spec(request)-> a spec whose .matches(reply) says "is this the reply to my request?"
+    payload_overhead() -> bytes a frame costs around its payload (what caps the chunk size)
+
+`payload_overhead` is here because the cost is a property of the framing and nothing else:
+v2 spends 12 bytes on two MAC addresses, v3 addresses by session id in 6, and secure trades
+the integrity trailer for a sealed header plus a tag. A node that derived it any other way
+would be re-deriving this dispatch, and would drift from it.
 
 There is one implementation per (version x posture). A new version or security mode is a new
 implementation, never a wider interface:
@@ -128,6 +134,10 @@ class V2Codec:
     def match_spec(self, request):
         return _MacMatchSpec(request.get_destination(), self._my_mac, self._short_mac)
 
+    def payload_overhead(self):
+        # Built rather than looked up so the number cannot drift from the header table.
+        return Packet(self._mesh, self._short_mac).HEADER_SIZE
+
 
 class V3OpenCodec:
 
@@ -152,6 +162,11 @@ class V3OpenCodec:
         if request.addressing == "did":
             return _DidMatchSpec(request.get_did())
         return _SidMatchSpec(request.get_session())
+
+    def payload_overhead(self):
+        # HEADER_SIZE already includes the 24-bit integrity trailer, so it is the whole cost
+        # of a frame around its payload.
+        return self._new().HEADER_SIZE
 
 
 class V3SecureCodec:
@@ -231,6 +246,13 @@ class V3SecureCodec:
         if request.addressing == "mac":
             return _MacMatchSpec(request.get_destination(), self._my_mac, short_mac=True)
         return _SidMatchSpec(request.get_session())
+
+    def payload_overhead(self):
+        # The sealed sid-addressed shape, because that is what carries chunks: the open
+        # first-contact frames this codec also speaks are handshakes, whose payloads are keys
+        # of a fixed size, not file data. Sealed cost is the authenticated header plus the tag
+        # (which replaces open mode's integrity trailer).
+        return Packet_v3.SECURE_HEADER_SIZE_SID_P2P + Packet_v3.SECURE_TAG_LEN
 
 
 def build_codec(protocol_version=2, addressing="mac", mesh_mode=False, short_mac=False,

@@ -418,19 +418,18 @@ class Node:
         return False
 
     def calculate_max_chunk_size(self):
-        if self.mesh_mode:
-            if self.short_mac:
-                header_size = Packet.HEADER_SIZE_MESH_SM
-            else:
-                header_size = Packet.HEADER_SIZE_MESH_LM
-            #header_size = Packet.HEADER_SIZE_MESH
-        else:
-            if self.short_mac:
-                header_size = Packet.HEADER_SIZE_P2P_SM
-            else:
-                header_size = Packet.HEADER_SIZE_P2P_LM
-            #header_size = Packet.HEADER_SIZE_P2P
-        return self.connector.get_max_payload_size() - header_size
+        # How many payload bytes fit beside the framing, for whatever this node actually
+        # speaks. The cost differs a lot by version and posture (v2 spends 12 bytes on two
+        # MAC addresses; v3 addresses by session id in 6; secure trades the integrity trailer
+        # for a sealed header and a tag, 8), so the codec is asked rather than assumed. It was
+        # previously hardcoded to the v2 header, which silently held every v3 node at v2's
+        # ceiling and made the whole point of session-id addressing unreachable.
+        #
+        # Safe to read here: the secure codec is installed during Node.__init__, before any
+        # caller of this method runs, and a node that fell back to open reports the open cost,
+        # which is what it will really put on the wire.
+        return (self.connector.get_max_payload_size()
+                - self.connector.codec.payload_overhead())
 
     def restore_rf_config(self):
         self.connector.restore_rf_config()

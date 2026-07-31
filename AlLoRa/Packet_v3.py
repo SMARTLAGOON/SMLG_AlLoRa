@@ -26,6 +26,11 @@ Header layouts (P2P shown; mesh inserts a 2-byte `seq` before `integ`):
     FL   = mesh|sleep|hop|debug_hops|role_token|auth|cfg_epoch|spare
     integ = sha256(payload)[:3]
 
+Secure mode swaps the integrity trailer for an AEAD tag and adds an anti-replay counter,
+and carries no FL byte (every flag is mesh-scoped or unbuilt, and secure is P2P only):
+
+    sid-addressed  [sid1][VT1][ctr2] + sealed(payload) + [tag4]   = 8 B overhead
+
 The did token is device_id[:4], one 4-byte identity address, the same in both directions
 (the Collector polls it, the Source answers under it), so it matches at wire offset 0 exactly
 like the sid. It replaces the two-MAC handshake header once a node is registered by device_id
@@ -58,13 +63,24 @@ class Packet_v3:
     HEADER_SIZE_SID_MESH = 8
 
     # Secure-mode serialization. A secure frame replaces the open-mode 24-bit integrity
-    # trailer with an AEAD-sealed payload: an authenticated header [sid|VT|FL|counter2],
-    # then the AES-CTR ciphertext, then a 4-byte tag. The header is bound as the AEAD's AAD
-    # so it can't be forged; the counter is the anti-replay token. sid-addressed P2P only for
-    # now (mesh secure is a later add). This exact byte layout + the nonce assembly are a
+    # trailer with an AEAD-sealed payload: an authenticated header [sid|VT|counter2], then
+    # the AES-CTR ciphertext, then a 4-byte tag. The header is bound as the AEAD's AAD so it
+    # can't be forged; the counter is the anti-replay token. sid-addressed P2P only for now
+    # (mesh secure is a later add). This exact byte layout + the nonce assembly are a
     # defensible provisional default, deliberately left to a crypto-review pass, not frozen.
-    SECURE_HEADER_FORMAT_SID_P2P = "!BBBH"   # sid, VT, FL, counter(2) = 5 B
-    SECURE_HEADER_SIZE_SID_P2P = 5
+    #
+    # No FL byte here, unlike the open header. Every flag it carries is either mesh-scoped
+    # (mesh, sleep, hop, debug_hops: read only behind a mesh guard, and secure mode is P2P
+    # only) or unbuilt (role_token, auth, cfg_epoch: no producer, and `auth` is redundant in
+    # a frame that is authenticated by construction). It was measured shipping the identical
+    # constant 0x02 on 438 of 439 sealed frames, so it cost a byte per frame to transmit no
+    # information at all. That byte is worth about 4.5% of the usable payload at SF12, where
+    # the whole PHY frame is 30 bytes. Secure mesh, when it lands, needs its own header shape
+    # anyway (open mesh already inserts a 2-byte seq), so it can define FL back in there.
+    # In the meantime get_secure_content refuses to seal a frame whose flags could not travel,
+    # so a flag cannot go missing quietly.
+    SECURE_HEADER_FORMAT_SID_P2P = "!BBH"    # sid, VT, counter(2) = 4 B
+    SECURE_HEADER_SIZE_SID_P2P = 4
     SECURE_TAG_LEN = 4
     _SECURE_ENC_KEY_LEN = 16                  # session.key = enc(16) || mac(16)
 
@@ -417,14 +433,26 @@ class Packet_v3:
     def get_secure_content(self, session, aead):
         """Serialize as a secure frame: an authenticated header + the AEAD-sealed payload.
 
-        The header (sid, version+kind, flags, a fresh monotonic counter) is bound as the
-        AEAD's AAD so it cannot be forged; the payload is encrypted and tagged. Consumes one
-        send counter from the session, so it must be called exactly once per transmitted
-        frame.
+        The header (sid, version+kind, a fresh monotonic counter) is bound as the AEAD's AAD
+        so it cannot be forged; the payload is encrypted and tagged. Consumes one send counter
+        from the session, so it must be called exactly once per transmitted frame.
+
+        Carries no flag byte: see the header-format comment above for why, and for what to do
+        when secure mesh needs one.
         """
+        # A secure frame has nowhere to put a flag, so anything set here would vanish between
+        # the two ends without a word. Refuse instead. `sleep` is exempt because it defaults on
+        # and is only ever read behind a mesh guard, so in P2P it means nothing either way;
+        # every other bit would be a real instruction going missing.
+        if (self.mesh or self.hop or self.debug_hops or self.role_token
+                or self.auth or self.cfg_epoch):
+            raise ValueError(
+                "secure frames carry no flag byte, so this flag would be silently lost. "
+                "Secure mode is sid-addressed P2P only; a mesh-capable secure frame needs a "
+                "header of its own before any of these bits can travel.")
         counter = session.next_counter()
         header = struct.pack(self.SECURE_HEADER_FORMAT_SID_P2P,
-                             self.sid, self._pack_vt(), self._pack_fl(), counter)
+                             self.sid, self._pack_vt(), counter)
         # Seal under my send-direction prefix (the peer opens with its matching recv prefix).
         nonce = session.send_nonce_prefix + struct.pack("!H", counter)   # prefix || 2-B counter
         enc_key = session.key[:self._SECURE_ENC_KEY_LEN]
@@ -444,7 +472,7 @@ class Packet_v3:
             return False
         header = wire[:self.SECURE_HEADER_SIZE_SID_P2P]
         try:
-            sid, vt, fl, counter = struct.unpack(self.SECURE_HEADER_FORMAT_SID_P2P, header)
+            sid, vt, counter = struct.unpack(self.SECURE_HEADER_FORMAT_SID_P2P, header)
         except Exception:
             self.check = False
             return False
@@ -471,7 +499,8 @@ class Packet_v3:
 
         self.sid = sid
         self.kind = self.KIND_NAMES[kind_code]
-        self._unpack_fl(fl)
+        # No flags to unpack. They keep their constructor defaults, which is exactly the state
+        # the sender was in: the send side refuses to seal a frame carrying any other flag.
         self.payload = plaintext
         self.content = wire
         self.check = True
