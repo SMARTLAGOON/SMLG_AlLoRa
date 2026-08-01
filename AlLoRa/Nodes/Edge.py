@@ -34,10 +34,15 @@ class Edge(Swap_base):
             return    # malformed, or a duplicate of a delegation already completed
         self._grant_pending = swap_id
 
-    def serve(self, timeout=None):
-        """The Edge's home loop: answer the Hub's polls and uplink pulls (serve role), and
+    def run(self, timeout=None):
+        """The Edge's main loop: answer the Hub's polls and uplink pulls (serve role), and
         honor a GRANT by temporarily driving one downlink pull, then come home. `timeout`
-        is in seconds; None runs forever (the deployed main loop)."""
+        is in seconds; None runs forever (the deployed main loop).
+
+        Both node types run with the same verb: `Edge(...).run()` and `Hub(...).run()`. It is
+        deliberately not called `serve` here, even though serving is what an Edge mostly does,
+        because "serve" already names a *role* both node types take in turn, and an Edge that
+        honors a GRANT spends part of this very loop driving instead."""
         end_time = None if timeout is None else ticks_add(time(), timeout * 1000)
         while end_time is None or ticks_diff(end_time, time()) > 0:
             self._pump_datasource()
@@ -49,6 +54,10 @@ class Edge(Swap_base):
             self._service_grant()
             self._service_trial_window()
             gc.collect()
+
+    def serve(self, timeout=None):
+        """Deprecated name for `run()`, kept so existing Edge main loops call it unchanged."""
+        return self.run(timeout=timeout)
 
     def _service_grant(self):
         if self._grant_pending is not None:

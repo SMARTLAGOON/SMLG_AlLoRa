@@ -1,18 +1,22 @@
-"""Hub: the center-placement authority (formerly `Requester`/`Collector`).
+"""Hub: the center-placement authority (formerly `Requester`/`Collector`/`Gateway`).
 
 Named by where it sits: the Hub is the permanent controller of its Edges. It polls, pulls
 their uplink files, and never surrenders control. Its home role is "collector" (the drive
 loop); it also carries the serve loop because a downlink temporarily reverses the roles:
 the Hub delegates the drive role to an Edge with a GRANT, serves the pending file to the
 Edge's pull, and reclaims control the moment the pull ends (or its reclaim timer fires).
-`Gateway` remains the multi-endpoint preset built on top of this.
+
+A Hub holds one or more endpoints and runs the visit loop over them itself (`run()`). One
+endpoint is the 1:1 collector, many is the gateway deployment: the same class either way,
+which is why `Requester` and `Gateway` are now presets rather than separate nodes.
 """
 import gc
 from os import urandom
+from json import loads
 from AlLoRa.Nodes.Swap_base import Swap_base
-from AlLoRa.Digital_Endpoint import Digital_Endpoint
+from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids
 from AlLoRa.DataSources.DataSource import DataSource
-from AlLoRa.utils.time_utils import current_time_ms as time, ticks_add, ticks_diff
+from AlLoRa.utils.time_utils import current_time_ms as time, sleep, ticks_add, ticks_diff
 from AlLoRa.utils.debug_utils import print
 
 
@@ -33,6 +37,7 @@ class Hub(Swap_base):
                  max_sleep_time=3,
                  successful_interactions_required=5,
                  data_sink=None,
+                 nodes_file="Nodes.json",
                  reclaim_timeout=10,
                  probe_swap_after=1,
                  probe_give_up_after=6,
@@ -43,6 +48,13 @@ class Hub(Swap_base):
                          successful_interactions_required=successful_interactions_required,
                          data_sink=data_sink,
                          home_role="collector")
+        # The endpoints this Hub polls, registered from a Nodes.json-shaped file. Registration
+        # fails soft: a Hub with none is a node with nothing to poll, not a boot failure.
+        self.nodes_file = nodes_file
+        self.digital_endpoints = []
+        self.status["Digital_Endpoints"] = {}
+        if nodes_file:
+            self.add_digital_endpoints(nodes_file)
         # RF-config probe budgets (in visits): swap {new, old} after this many silent visits on
         # a config, and give up (restore to old) after this many silent visits in total. A
         # reconfig is rare and non-urgent, so one probe per visit keeps working Edges un-starved.
@@ -77,6 +89,121 @@ class Hub(Swap_base):
         # whether the confirming connection poll is already armed).
         self.session_recovery_after = session_recovery_after
         self._session_silent_visits = {}
+
+    # --- the endpoints this Hub holds -----------------------------------------------------
+
+    def add_digital_endpoints(self, path):
+        """Register the active endpoints listed in a Nodes.json-shaped file.
+
+        Returns how many endpoints the Hub holds afterwards, or False if the file could not
+        be read (an absent or malformed file leaves the Hub running with nothing to poll)."""
+        try:
+            with open(path, "r") as f:
+                nodes_config = loads(f.read())
+            for node in nodes_config:
+                if node['active']:
+                    active_node = Digital_Endpoint(node)
+                    self.digital_endpoints.append(active_node)
+                    if self.debug:
+                        print("Node {} ({}) added with frequency {}s and listening time {}s.".format(
+                            active_node.get_name(), active_node.get_mac_address(),
+                            active_node.asking_frequency, active_node.listening_time))
+            self._register_endpoints()
+            return len(self.digital_endpoints)
+        except Exception as e:
+            if self.debug:
+                print("Could not load nodes from file: {}, error: {}".format(path, e))
+            return False
+
+    def set_digital_endpoints(self, digital_endpoints):
+        self.digital_endpoints = digital_endpoints
+        self._register_endpoints()
+
+    def _register_endpoints(self):
+        # Give every endpoint a unique 1-byte sid, breaking any device_id[0] clash before
+        # first contact (a Hub serving many Edges is where a clash can arise), then rebuild
+        # the map subscribers read. Run on every change to the collection, so an endpoint
+        # registered after boot is as addressable, and as visible, as one loaded from file.
+        assign_session_ids(self.digital_endpoints)
+        self.status["Digital_Endpoints"] = {ep.get_mac_address(): ep.file_reception_info
+                                            for ep in self.digital_endpoints}
+
+    def update_subscribers(self, digital_endpoint):
+        self.status["Digital_Endpoints"][digital_endpoint.get_mac_address()] = \
+            digital_endpoint.file_reception_info
+        self.status.notify()
+
+    # --- the visit loop -------------------------------------------------------------------
+
+    def run(self, timeout=None, print_file_content=False, save_files=False):
+        """The Hub's main loop: visit each endpoint in turn, the most overdue one first.
+
+        A visit is one listening window on that endpoint, extended once when it is locked on
+        a file that still has chunks missing. `asking_frequency` (seconds, set per endpoint
+        in Nodes.json) is how long before it comes up again. `timeout` is in seconds; None
+        runs forever, which is what a deployed main.py wants.
+        """
+        print("Listening to {} endpoints!".format(len(self.digital_endpoints)))
+        end_time = None if timeout is None else ticks_add(time(), timeout * 1000)
+        # Everything is due on entry. Seeded with the current tick rather than 0 because
+        # these are wrapping counters: a fixed 0 is not "the past", it is half a period away.
+        next_visit = {ep.get_mac_address(): time() for ep in self.digital_endpoints}
+
+        while end_time is None or ticks_diff(end_time, time()) > 0:
+            if not self.digital_endpoints:
+                sleep(self.NEXT_ACTION_TIME_SLEEP)
+                continue
+            pass_start = time()
+            for endpoint in sorted(self.digital_endpoints,
+                                   key=lambda ep: ticks_diff(next_visit[ep.get_mac_address()],
+                                                             pass_start)):
+                if end_time is not None and ticks_diff(end_time, time()) <= 0:
+                    return
+                mac = endpoint.get_mac_address()
+                if ticks_diff(time(), next_visit[mac]) >= 0:
+                    try:
+                        self._visit(endpoint, print_file_content, save_files)
+                    except Exception as e:
+                        if self.debug:
+                            print("Error listening to endpoint {} ({}): {}".format(
+                                endpoint.get_name(), mac, e))
+                    finally:
+                        # Reschedule whether the visit worked or threw: an endpoint that
+                        # fails every time must not be retried without pause, which would
+                        # starve every other endpoint of the channel.
+                        next_visit[mac] = ticks_add(time(), endpoint.asking_frequency * 1000)
+                sleep(self.NEXT_ACTION_TIME_SLEEP)
+
+    def check_digital_endpoints(self, print_file_content=False, save_files=False, timeout=None):
+        """Deprecated name for `run()`, kept so fielded main.py files call it unchanged.
+
+        It described a check; what it does is run the node. New code says `Hub(...).run()`."""
+        return self.run(timeout=timeout, print_file_content=print_file_content,
+                        save_files=save_files)
+
+    def _visit(self, digital_endpoint, print_file_content, save_files):
+        if self.debug:
+            print("Listening to endpoint {} ({}) for {}s".format(
+                digital_endpoint.get_name(), digital_endpoint.get_mac_address(),
+                digital_endpoint.listening_time))
+        self.listen_to_endpoint(digital_endpoint, digital_endpoint.listening_time,
+                                print_file=print_file_content, save_file=save_files)
+        self.update_subscribers(digital_endpoint)
+
+        # A locked endpoint caught mid-file gets one extra window now, rather than holding
+        # a half-received file for a whole asking_frequency before asking for the rest.
+        if not digital_endpoint.lock_on_file_receive:
+            return
+        in_flight = digital_endpoint.get_current_file()
+        if in_flight is None or not in_flight.get_missing_chunks():
+            return
+        if self.debug:
+            print("Listening to endpoint {} ({}) for {}s due to missing chunks".format(
+                digital_endpoint.get_name(), digital_endpoint.get_mac_address(),
+                digital_endpoint.max_listen_time_when_locked))
+        self.listen_to_endpoint(digital_endpoint, digital_endpoint.max_listen_time_when_locked,
+                                print_file=print_file_content, save_file=save_files)
+        self.update_subscribers(digital_endpoint)
 
     def set_downlink_source(self, digital_endpoint, datasource):
         """Plug a live input boundary (e.g. an MQTT_Datasource) as this Edge's downlink:
