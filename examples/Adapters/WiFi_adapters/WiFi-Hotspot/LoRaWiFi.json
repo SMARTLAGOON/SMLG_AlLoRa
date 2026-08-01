@@ -11,7 +11,7 @@
     "max_timeout": 12
     },
 
-  "interface": {
+  "adapter": {
     "mode": "hotspot",
     "ssid": "AlLoRa_Network",
     "psw": "AlLoRa_Network",

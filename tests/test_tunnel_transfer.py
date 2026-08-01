@@ -2,8 +2,8 @@
 
 test_v3_open_transfer proved a v3 transfer over a single local radio. This proves the same
 transfer when the Collector's logic runs on one device and its radio on another: the Requester
-drives a Tunnel_connector, whose transport verbs cross a Loopback_link to a Tunnel_interface
-that runs them on the real (loopback) radio. The Source is a standalone board on the far side.
+drives a Tunnel_connector, whose transport verbs cross a Loopback_link to an Adapter that runs
+them on the real (loopback) radio. The Source is a standalone board on the far side.
 
 The point the split closes: the bridge is dumb + keyless — it ferries opaque wire and matches
 replies on a cleartext prefix at the radio, so the *engine* (File, Digital_Endpoint, the
@@ -17,7 +17,7 @@ import threading
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
-from AlLoRa.Interfaces.Tunnel_interface import Tunnel_interface
+from AlLoRa.Adapters.Adapter import Adapter
 from AlLoRa.Links.Loopback_link import Loopback_link
 from AlLoRa.Nodes.Source import Source
 from AlLoRa.Nodes.Requester import Requester
@@ -47,13 +47,12 @@ def _run_tunneled_transfer(tmp_path, source_conn, bridge_radio, payload, filenam
     config_file = str(tmp_path / "LoRa.json")
     config = _write_config(config_file, result_path)
 
-    # The bridge (Adapter) side: a Tunnel_interface wrapping the real radio, pumped in a thread.
+    # The bridge (Adapter) side: an Adapter wrapping the real radio, pumped in a thread.
     bridge_radio.config(config["connector"])          # its RF, so get_rf_config/timeouts are set
     client_link, bridge_link = Loopback_link.create_pair()
-    iface = Tunnel_interface(link=bridge_link)
-    iface.setup(bridge_radio, debug=False, config={})
+    bridge = Adapter(bridge_radio, link=bridge_link)
     stop = threading.Event()
-    pump = threading.Thread(target=lambda: iface.serve(should_stop=stop.is_set), daemon=True)
+    pump = threading.Thread(target=lambda: bridge.serve(should_stop=stop.is_set), daemon=True)
     pump.start()
 
     # The Source is a standalone node; the Collector drives its radio over the tunnel.

@@ -1,15 +1,10 @@
-# Main for Adaper in Gateway Side AlLoRa
+# Main for the Adapter on the Collector side of AlLoRa
 # HW: TTGO LoRa 32
 
-from AlLoRa.Nodes.Adapter import Adapter
+from AlLoRa.Adapters.Serial_adapter import Serial_adapter
 from AlLoRa.Connectors.SX127x_connector import SX127x_connector
-from AlLoRa.Interfaces.Serial_interface import Serial_Interface
 
 if __name__ == "__main__":
 
-	serial_iface = Serial_Interface()
-	lora_adapter = Adapter(SX127x_connector(), serial_iface)
+	lora_adapter = Serial_adapter(SX127x_connector())
 	lora_adapter.run()
-
-
-

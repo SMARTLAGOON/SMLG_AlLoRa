@@ -1,7 +1,7 @@
 """Unit — the split Connector's transport verbs across a tunnel (opaque wire, match at radio).
 
 A Tunnel_connector (logic-holder) forwards transmit / listen / exchange / rf / mac over a
-Loopback_link to a Tunnel_interface (bridge) that runs them on a Loopback_connector radio. A
+Loopback_link to an Adapter (bridge) that runs them on a Loopback_connector radio. A
 third Loopback_connector is the far peer. This pins the tunnel contract without a UART/socket:
 opaque bytes cross unparsed, the match loop runs at the bridge radio, and only the matching
 reply comes back — the CPython-testable core of the hardware tunnel.
@@ -10,7 +10,7 @@ import threading
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
-from AlLoRa.Interfaces.Tunnel_interface import Tunnel_interface
+from AlLoRa.Adapters.Adapter import Adapter
 from AlLoRa.Links.Loopback_link import Loopback_link
 from AlLoRa.Codec import V3OpenCodec
 from AlLoRa.Packet_v3 import Packet_v3
@@ -20,15 +20,14 @@ CONNCFG = {"name": "bridge", "sf": 7, "freq": 868, "bandwidth": 125, "coding_rat
 
 
 def _tunnel():
-    # peer <-air-> bridge_radio ; bridge_radio <-Interface/Link-> tunnel_conn (logic-holder)
+    # peer <-air-> bridge_radio ; bridge_radio <-Adapter/Link-> tunnel_conn (logic-holder)
     peer, bridge_radio = Loopback_connector.create_pair("a1a1a1a1", "b2b2b2b2")
     bridge_radio.config(CONNCFG)
     client_link, bridge_link = Loopback_link.create_pair()
-    iface = Tunnel_interface(link=bridge_link)
-    iface.setup(bridge_radio, debug=False, config={})
+    bridge = Adapter(bridge_radio, link=bridge_link)
     stop = threading.Event()
     pump = threading.Thread(
-        target=lambda: iface.serve(should_stop=stop.is_set), daemon=True)
+        target=lambda: bridge.serve(should_stop=stop.is_set), daemon=True)
     pump.start()
     conn = Tunnel_connector(link=client_link)
     conn.config(CONNCFG)

@@ -2,19 +2,21 @@
 config, so a committed RF-config trial (and a v3/secure posture) survives a reboot.
 
 Two defects this pins:
-  1. Node/Adapter.backup_config rebuilt a hand-picked subset, dropping protocol_version /
-     security_mode / session_id / result_path / identity_file / the interface block: a
-     secure v3 node came back as an open v2 node off its own network.
+  1. Node.backup_config rebuilt a hand-picked subset, dropping protocol_version /
+     security_mode / session_id / result_path / identity_file: a secure v3 node came back as
+     an open v2 node off its own network.
   2. The connector block came from connector.backup_config(), which returned the STALE
      config_parameters dict: a change_rf_config (the committed trial) never reached it, so
      the node rebooted on the OLD radio config.
+
+A bridge board persists nothing at runtime, so it has no backup_config; what matters for one
+is that it reads its config the same way a node does. Seam B covers that.
 """
 import json
 
+from AlLoRa.Adapters.Adapter import Adapter
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Nodes.Adapter import Adapter
 from AlLoRa.Nodes.Edge import Edge
-from AlLoRa.Interfaces.Interface import Interface
 
 
 def _connector_config():
@@ -92,25 +94,31 @@ def test_a_node_rebuilt_from_the_backup_still_boots_as_v3(tmp_path):
     assert rebuilt.session_id == 42
 
 
-# --- Seam B: an Adapter round-trips the same way, keeping its interface block --------------
+# --- Seam B: a bridge reads the same LoRa.json, and never writes to it ---------------------
 
-def test_adapter_backup_config_preserves_the_interface_block_and_v3_posture(tmp_path):
+def test_an_adapter_reads_its_v3_posture_and_link_block_without_persisting(tmp_path):
     path = str(tmp_path / "LoRa.json")
     config = {
         "name": "T", "chunk_size": 235, "mesh_mode": False, "short_mac": True,
         "protocol_version": 3, "security_mode": "open", "session_id": 7, "debug": False,
         "connector": _connector_config(),
-        "interface": {"uartid": 0, "baud": 9600},
+        "adapter": {"uartid": 0, "baud": 9600},
     }
     with open(path, "w") as f:
         json.dump(config, f)
 
-    adapter = Adapter(Loopback_connector("c3c3c3c3"), Interface(), config_file=path)
-    adapter.change_rf_config({"sf": 9})
-    adapter.backup_config()
+    seen = {}
 
-    reloaded = json.load(open(path))
-    assert reloaded["interface"] == {"uartid": 0, "baud": 9600}
-    assert reloaded["protocol_version"] == 3
-    assert reloaded["session_id"] == 7
-    assert reloaded["connector"]["sf"] == 9
+    class _Probe(Adapter):
+        def setup_link(self, cfg):
+            seen.update(cfg)
+
+    radio = Loopback_connector("c3c3c3c3")
+    _Probe(radio, config_file=path)
+
+    # The v3 posture reaches the radio, and the link block reaches the medium.
+    assert radio.protocol_version == 3 and radio.addressing == "sid"
+    assert seen == {"uartid": 0, "baud": 9600}
+    # And the file is untouched: a bridge holds no state worth persisting, so the whole
+    # round-trip hazard above simply does not apply to it.
+    assert json.load(open(path)) == config

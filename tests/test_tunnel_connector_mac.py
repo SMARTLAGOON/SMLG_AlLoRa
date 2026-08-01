@@ -12,7 +12,7 @@ import threading
 from AlLoRa.Codec import V2Codec, V3OpenCodec
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
-from AlLoRa.Interfaces.Tunnel_interface import Tunnel_interface
+from AlLoRa.Adapters.Adapter import Adapter
 from AlLoRa.Links.Loopback_link import Loopback_link
 
 BRIDGE_MAC = "b2b2b2b2"
@@ -23,10 +23,9 @@ def _bridge(mac, config):
     radio = Loopback_connector(mac)
     radio.config(config)
     client_link, bridge_link = Loopback_link.create_pair()
-    iface = Tunnel_interface(link=bridge_link)
-    iface.setup(radio, debug=False, config={})
+    bridge = Adapter(radio, link=bridge_link)
     stop = threading.Event()
-    pump = threading.Thread(target=lambda: iface.serve(should_stop=stop.is_set), daemon=True)
+    pump = threading.Thread(target=lambda: bridge.serve(should_stop=stop.is_set), daemon=True)
     pump.start()
     return client_link, stop, pump
 

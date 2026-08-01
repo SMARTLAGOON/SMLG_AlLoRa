@@ -11,7 +11,7 @@
       "max_timeout": 12
       },
 	
-	"interface":{
+	"adapter":{
 		"uartid":0,
 		"baud": 9600,
     "tx": 12,

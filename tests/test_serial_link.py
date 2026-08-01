@@ -12,7 +12,7 @@ import threading
 from AlLoRa.Links.Serial_link import Serial_link
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
-from AlLoRa.Interfaces.Tunnel_interface import Tunnel_interface
+from AlLoRa.Adapters.Adapter import Adapter
 from AlLoRa.Nodes.Source import Source
 from AlLoRa.Nodes.Requester import Requester
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
@@ -159,10 +159,9 @@ def test_full_v3_transfer_over_serial_link(tmp_path):
     bridge_radio.config(config["connector"])
 
     client_link, bridge_link = _serial_pair()
-    iface = Tunnel_interface(link=bridge_link)
-    iface.setup(bridge_radio, debug=False, config={})
+    bridge = Adapter(bridge_radio, link=bridge_link)
     stop = threading.Event()
-    pump = threading.Thread(target=lambda: iface.serve(should_stop=stop.is_set), daemon=True)
+    pump = threading.Thread(target=lambda: bridge.serve(should_stop=stop.is_set), daemon=True)
     pump.start()
 
     source = Source(source_conn, config_file=config_file)

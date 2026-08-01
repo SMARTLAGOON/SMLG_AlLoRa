@@ -10,7 +10,7 @@ The request/reply lockstep maps onto one HTTP round trip per verb: `read_request
 reads the body, `write_reply` answers on the held socket and closes it. Client and bridge use
 the same BSD socket surface, so `socket` (host/CPython) and `usocket` (ESP32/MicroPython)
 both drive it; the module to use is injected, defaulting to whichever is importable. Network
-bring-up (AP/STA) is the WiFi_Interface's job. This link only moves bytes over an
+bring-up (AP/STA) is the WiFi_adapter's job. This link only moves bytes over an
 already-up network, whose final proof is on hardware.
 """
 from AlLoRa.Links.Link import Link

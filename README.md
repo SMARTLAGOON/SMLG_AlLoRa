@@ -164,7 +164,7 @@ This connector was developed to use in a Raspberry Pi connected to a Dragino LoR
 
 ### [Wifi_connector.py](AlLoRa/Connectors/Wifi_connector.py)
 
-Is the counterpart of the [AlLoRa-WiFi_interface](AlLoRa/Interfaces/WiFi_interface.py), developed to use in a Raspberry Pi, but also tested on computers running macOS and Windows. 
+Is the counterpart of the [WiFi_adapter](AlLoRa/Adapters/WiFi_adapter.py) that runs on the bridge board, developed to use in a Raspberry Pi, but also tested on computers running macOS and Windows. 
 
 </details>
     
