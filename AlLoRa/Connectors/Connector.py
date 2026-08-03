@@ -193,7 +193,7 @@ class Connector:
         foreign frame across the link. Returns `(reply_wire, td, status)` with status in
         matched / timeout / exhausted / send_error.
 
-        This is the transport verb a split Connector's Interface will serve (D↓/td↑). The
+        This is the transport verb a split Connector's bridge half (an Adapter) serves (D↓/td↑). The
         local engine keeps composing transmit/listen with the codec directly, so its
         corrupt-vs-foreign error taxonomy (which needs the codec) is unchanged.
         """

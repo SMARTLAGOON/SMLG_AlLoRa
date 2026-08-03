@@ -25,7 +25,7 @@ stays distinct from a zero-length one.
 """
 from AlLoRa.utils.json_utils import json
 
-# Verbs: the transport surface a split Connector's Interface serves.
+# Verbs: the transport surface a split Connector's bridge half (an Adapter) serves.
 TRANSMIT = "tx"
 LISTEN = "ln"
 EXCHANGE = "xc"
@@ -80,7 +80,7 @@ def encode_get_mac():
 
 def decode_request(frame):
     """Parse a request frame -> (verb, args). `args` normalises the wire fields back to bytes
-    (`wire`, `match_prefix`) and exposes the window as `window`, so the Interface dispatches
+    (`wire`, `match_prefix`) and exposes the window as `window`, so the Adapter dispatches
     without touching the JSON shape."""
     d = _loads(frame)
     verb = d.get("v")

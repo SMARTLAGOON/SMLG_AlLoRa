@@ -89,18 +89,18 @@ In order to run an example, if you are using a Python compatible device, you sho
 
             - Pysense 2
 
-                ![Untitled](readme_assets/Hardware_Setup/Untitled.png)
+                ![Untitled](../../../readme_assets/Hardware_Setup/Untitled.png)
 
             - Pygate
 
-                ![Untitled](readme_assets/Hardware_Setup/Untitled%201.png)
+                ![Untitled](../../../readme_assets/Hardware_Setup/Untitled%201.png)
 
 
             Wait 1 second, release the DFU button and press enter in the terminal to run the code.
 
             As a result, you should expect something like this:
 
-            ![Untitled](readme_assets/Hardware_Setup/Untitled%202.png)
+            ![Untitled](../../../readme_assets/Hardware_Setup/Untitled%202.png)
 
         4. Check it with:
 
@@ -158,25 +158,25 @@ In order to run an example, if you are using a Python compatible device, you sho
        2. Connect your LoPy4 + expansion board to your computer. PyMakr should recognise it and show you something like this:
         
     <p align="center">
-     <img width="500" src="readme_assets/Hardware_Setup/Untitled%203.png">
+     <img width="500" src="../../../readme_assets/Hardware_Setup/Untitled%203.png">
     </p>
 
      - If it doesn’t do it automatically, you can open the “Connect Device” option and manually select your Port:
 
      <p align="center">
-     <img width="400" src="readme_assets/Hardware_Setup/Untitled%204.png">
+     <img width="400" src="../../../readme_assets/Hardware_Setup/Untitled%204.png">
      </p>
 
        3. Press Ctrl+Alt/Opt + s or the “Upload Project to Device” button to upload the code to the LoPy4
 
-    ![Untitled](readme_assets/Hardware_Setup/Untitled%205.png)
+    ![Untitled](../../../readme_assets/Hardware_Setup/Untitled%205.png)
 
     With this, the code will boot automatically each time the LoPy4 is on.
 
        4. If everything is ok, you should see something like this on the terminal:
 
     <p align="center">
-    <img width="400" src="readme_assets/Hardware_Setup/Untitled%207.png">
+    <img width="400" src="../../../readme_assets/Hardware_Setup/Untitled%207.png">
     </p>
 
 </details>

@@ -1,15 +1,18 @@
-# ****AlLoRa:**** Advanced layer LoRa
+# **AlLoRa:** Advanced layer LoRa
 
 Cite this repository: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7741245.svg)](https://doi.org/10.5281/zenodo.7741245)
-
 
 <p align="center">
     <img src="readme_assets/logo.png"  width="50%">
 </p>
 
-The code in this repository contains a toolbox that allows transferring content over a LoRa channel. It’s based on the original [LoRaCTP](https://github.com/pmanzoni/loractp), adding a more modular design with mesh capabilities and larger packet sizes for faster transfers. 
+AlLoRa turns a raw LoRa radio, which can only move a couple of hundred bytes at a time and drops
+frames whenever the air is bad, into a link that transfers **whole files** reliably over long
+distances. It is a Python / MicroPython library, so the same code runs on an ESP32-class board, a
+Raspberry Pi, or a laptop. It is based on the original [LoRaCTP](https://github.com/pmanzoni/loractp),
+adding a modular design, mesh capabilities, larger packets and faster transfers.
 
-Details of the protocol can be found in these articles: 
+Details of the protocol can be found in these articles:
 
 * [AlLoRa: Empowering environmental intelligence through an advanced LoRa-based IoT solution](https://www.sciencedirect.com/science/article/pii/S0140366424000641?via%3Dihub)
 
@@ -17,252 +20,427 @@ Details of the protocol can be found in these articles:
 
 * [AI*LoRa: Enabling Efficient Long-Range Communication with Machine Learning at the Edge](https://dl.acm.org/doi/10.1145/3641512.3690040)
 
-
-We're also developing a custom GPT, [AlLoRa Genius](https://chat.openai.com/g/g-rOGxxA1BZ-allora-genius), to assist in understanding and utilizing the AlLoRa protocol.
+We're also developing a custom GPT, [AlLoRa Genius](https://chat.openai.com/g/g-rOGxxA1BZ-allora-genius),
+to assist in understanding and utilizing the AlLoRa protocol.
 
 -----
-## Learn by doing with these examples:
 
-Check the [examples folder](examples) for more information about how to run the examples. 
+# The model in one page
 
-Links of interest:
+AlLoRa v3 separates three things that v2 fused into its node names: **where a node sits**, **what it
+does in a given transfer**, and **who is in command**.
+
+```
+ Application │ DataSource ─▶ │             │ ─▶ DataSink
+             │ (feeds files) │             │   (store / forward / website)
+ ────────────┼───────────────┼─────────────┼───────────────────────────────
+ Protocol    │     Edge ─────┤             ├──── Hub
+             │ (source role) │             │  (collector role)
+ ────────────┼───────────────┼─────────────┼───────────────────────────────
+ Transport   │  Connector ───┤ ⇄ Packets ⇄ ├─── Connector
+             │ (radio · tunnel · loopback) │   (… · Adapter bridge)
+```
+
+**There are exactly two node types, and they are named by placement.**
+
+- **`Edge`** is the deployed, on-site node: it lives with the sensors and it *serves* what it has.
+- **`Hub`** is the aggregation node and the permanent authority: it polls its Edges and *pulls*
+  their files. One Edge or fifty, it is the same class.
+
+**The role is a separate, swappable axis.** The **collector role** drives each round (it sets the
+pace: polls, asks for metadata and chunks, reassembles) and the **source role** serves (it holds the
+data and answers). By default the Hub is the collector and the Edge is the source, which is the
+uplink. For a downlink the Hub *delegates* the collector role to one Edge, that Edge pulls the file,
+and the Hub reclaims. Only the drive moves: the Hub stays in command throughout, and it is always
+the authenticated peer and key holder.
+
+That is why the type names say nothing about data direction. `Source` and `Collector` named a node by
+what it did with data, and data direction is exactly what role reversal flips, so the old names
+misdescribed the node half the time it mattered.
+
+**Both ends carry both application boundaries.** A `DataSource` feeds files *in* to whoever is
+serving; a `DataSink` drains completed files *out* of whoever is collecting. The diagram shows the
+uplink; on a downlink they mirror.
+
+## Coming from v2
+
+| v2 / early-v3 term | v3 term | Kind of thing |
+|---|---|---|
+| `Source` node | **`Edge`** node | type (placement) |
+| `Collector` node | **`Hub`** node | type (placement + authority) |
+| `Requester` | a `Hub` with one Edge and a trivial sink | deprecated alias |
+| `Gateway` | a `Hub` with many Edges and a cloud sink | deprecated alias |
+| `source` / `collector` | the **role** names (the words that used to be type names) | role |
+| `initiator` / `responder` | unchanged, but demoted to the per-round mechanic, not a role name | round / wire |
+| `Adapter` node | transport: the far half of a split Connector | **not** a node type |
+| `Interface` | absorbed into `Adapter` | deleted, not renamed |
+| `CTP_File` | **`AlLoRa_File`** | core piece |
+| `Gateway.check_digital_endpoints()` | **`Hub.run()`** | main-loop verb |
+| `DataSource` / `DataSink` | unchanged, now present on **both** types | app boundary |
+
+`Source`, `Requester` and `Gateway` still import and run: they are aliases kept so a year of student
+code, examples and fielded firmware keep working. New code says `Edge` and `Hub`.
+
+Two verbs are worth keeping straight, because they are **not** a second pair of role names: the
+collector role **drives** a round, the source role **serves** it. A node has a drive loop and a serve
+loop; a role says which one it is running.
+
+-----
+
+# Learn by doing
+
+Check the [examples folder](examples) for the full set. The shortest path:
 
 - [Setting up AlLoRa in LilyGo T3S3 devices](firmware/T3S3/)
+- [An Edge on a T3S3](examples/Edges/T3S3) and the [Hub that polls it](examples/Hubs/One-Edge/T3S3)
 - [Setting up AlLoRa in LoPy4 devices](examples/Hubs/One-Edge/LoPy4)
-- [Setting up AlLoRa in Raspberry Pi or other computers](examples/Hubs/Many-Edges)
+- [A Hub on a Raspberry Pi or a computer, polling many Edges](examples/Hubs/Many-Edges)
+- [Adapters](examples/Adapters), for a device with no radio of its own
 
-
-----
-# Folders
-
-Inside the repository, you will find the following folders:
-
-## **AlLoRa**
-
-
-<details>
-<summary>It contains all the code necessary to setup a communication network between devices, from a point-to-point to a mesh with a gateway and multiple Source nodes.</summary>
-    
-### [Nodes](AlLoRa/Nodes)
-
-<details>
-<summary>A node is the element in charge of managing the communication logic for the Content Transfer Protocol.</summary>
-
-  ### [Node.py](AlLoRa/Nodes/Node.py)
-
-  It is the parent class from whom the other nodes inherits them base and common attributes and methods.
-  It receives a boolean to indicate if the system is working on **mesh mode** or not and a **Connector**
-
-  The Base Node is not supposed to be instantiated, it acts like an abstract class for the other Nodes (MicroPython doesn't support abstract classes, so we used a Parent class instead...)
-
-  The main methods in this class are send_request and send_response.
-
-  ### [Source.py](AlLoRa/Nodes/Source.py)
-
-  It is a structure whose purpose, as its name implies, is to send one or more **Files**. It waits and listens for requests from a **Requester** or **Gateway** Node and syncs with them to send blocks (we call them chunks) of bytes of a File, until it finishes and is ready to send another one.  
-
-   <details>
-   <summary><b><u>Usage</u></b></summary>
-
-   ### [Source](AlLoRa/Nodes/Source.py) usage:
-   1. Instantiation:
-
-      For the user, the Source must be instantiated with the same parameters explained in **Node**, plus:
-
-      -name: A nickname for the Node, it shouldn’t be too large, we recommend a maximum of 3 characters, for the testing we used one letter (Nodes “A”, “B”, “C”…)
-      
-      -chunk_size (optional): It is the size of the payload of actual content to be sent in each ***Packet**. The maximum and default chunk_size is 235 for p2p mode and 233 for mesh mode, but if for some reason the user prefers to make it smaller, this is the parameter to change.
-
- 1. Establish Connection: 
-
-    The first thing to do with the Source is to use the establish_connection method. It will wait until a message for itself arrives, in order to sync with the Requester/Gateway Node.
-
- 2. Set a File:
-
-    Now, we can start using the Node to send **Files**. For this, we use the set_file method, that receives a previously instantiated object of the class **File** (more about it above…). Another way to set a file to sent is with the restore_file method, but this is only supposed to be used when the code had some type of interruption, and we need to continue sending a File “mid-chunk”.
-
- 3. Send the File:
-
-    After this, we call the send_file method, and it will manage the transfer of all the chunks  of the File to be sent.
-
-
- ### Example:
-
- ```python
- from AlLoRa.Nodes.Source import Source
-
- lora_node = AlLoRa_Source(name = "A", connector = connector,
-          chunk_size = 235, mesh_mode = True, debug = False)
-
- lora_node.establish_connection()
- lora_node.set_file(file_to_send)
- lora_node.send_file()
- ```
- </details>
-
- ### [Requester.py](AlLoRa/Nodes/Requester.py)
-
- It is a structure whose purpose, as its name implies, is to receive **Files**. It asks information to a **Source** and listens for the responses. In order to communicate with an specific Node, the Requester must have the information of this endpoint, for this,  we use the **Digital_Endpoint** class, who contains the MAC Address of the endpoint and manages the states of the communication and generates the complete **File** when the Requester finishes collecting all the chunks.
-
- <details>
- <summary><b><u>Usage</u></b></summary>
-
- ### **Requester** usage:
-
- 1. Instantiation:
-
- For the user, the Requester must be instantiated with the same parameters explained in **Node**, plus:
-
-- debug_hops (optional):  If True, the Sources will override the message to be sent and register the message path (or hops between Nodes), more information about this below. The default is False.
-  
-- NEXT_ACTION_TIME_SLEEP (deprecated, ignored): the fixed gap between requests was replaced by an adaptive controller that finds the shortest gap the link tolerates on its own, so this value is accepted for compatibility but has no effect. To tune the gap at runtime, use `node.pacing.set_sleep_bounds(min_sleep, max_sleep)`.
-
-1. Listen to endpoint:
-
-    Once instantiated, we can use the method listen_to_endpoint, who needs a **Digital_Endpoint** to operate and a listening_time. We can use a loop to ensure that the **File** to be received arrives completely, but we can also use this listening_time to avoid getting stuck for too long while waiting for it to arrive.
-
-### Example:
+A minimal Edge, serving a file to whoever asks:
 
 ```python
-from AlLoRa.Nodes.Requester import Requester
+from AlLoRa.Nodes.Edge import Edge
+from AlLoRa.File import AlLoRa_File
+from AlLoRa.Connectors.SX127x_connector import SX127x_connector
 
-lora_node = Requester(connector = connector, mesh_mode = True, debug = False)
-
-lora_node.listen_to_endpoint(digital_endpoint, 300)
-
-#We can access the file like this:
-ctp_file = digital_endpoint.get_current_file()
-content = ctp_file.get_content()
+edge = Edge(SX127x_connector(), config_file="LoRa.json")
+edge.set_file(AlLoRa_File(name="hello.bin", content=payload,
+                          chunk_size=edge.get_chunk_size()))
+edge.run()
 ```
-</details>
 
-### [Gateway.py](AlLoRa/Nodes/Gateway.py)
+And the Hub that pulls it:
 
-It is a practically a **Requester Node** (actually, it inherits from it) but it has the capability to manage multiple **Source Nodes**, receiving a list of **Digital_Endpoints** to check.
-    
-    
-</details>    
-    
-### [Connectors](AlLoRa/Connectors)
-    
-<details>
-<summary>A connector is the element that gives and manages the access to LoRa to a Node. The main objective of the connector is to make AlLoRa available to as many type of devices as possible. Many devices have embedded LoRa capabilities, while others maybe not, so the connector is a class that acts as a bridge to LoRa.</summary>
-        
-### [Connector.py](AlLoRa/Connectors/Connector.py)
+```python
+from AlLoRa.Nodes.Hub import Hub
+from AlLoRa.Connectors.SX127x_connector import SX127x_connector
+from AlLoRa.Digital_Endpoint import Digital_Endpoint
 
-It is the parent class from whom the connectors inherits them base attributes and methods.
+hub = Hub(SX127x_connector(), config_file="LoRa.json")
+hub.set_digital_endpoints([Digital_Endpoint(name="edge-1", mac_address="9eeff0dc",
+                                            active=True, session_id=42)])
+hub.run(save_files=True)
+```
 
-It manages the methods to send and receive data using raw LoRa, gives access to the RSSI of the last received package and the MAC address of the device. It also contains the method send_and_wait_response, whose function is to send a packet (usually with a request) and wait for a predefined period of time (WAIT_MAX_TIMEOUT).
-
-### [LoPy4_connector.py](AlLoRa/Connectors/LoPy4_connector.py)
-
-This type of connector is very straightforward, it uses the native library for using LoRa from the LoPy4 (Only tested in LoPy4)
-
-### [SX127x_connector](AlLoRa/Connectors/SX127x_connector.py)
-
-This connector was developed to use in a Raspberry Pi connected to a Dragino LoRa/HPS HAT for RPi v1.4. It uses the SX127x library to manage the Raspberry Pi’s GPIOs in order to control the Dragino and send packages using a LoRa channel. It also works with ESP32 that uses the SX127x.
-
-### [WiFi_connector.py](AlLoRa/Connectors/WiFi_connector.py)
-
-Is the counterpart of the [WiFi_adapter](AlLoRa/Adapters/WiFi_adapter.py) that runs on the bridge board, developed to use in a Raspberry Pi, but also tested on computers running macOS and Windows. 
-
-</details>
-    
-### → [DataSources/](AlLoRa/DataSources/DataSource.py)
-
-A DataSource is a handy class that can be use to manage the files to be send. It is supposed to be used to feed Files to send to a Source Nodes. The base class lives in the DataSources package (the old `AlLoRa.DataSource` import path still works), and a node serving data can take one directly (`Source(..., datasource=...)`): its serve loop will pump the datasource and send whatever it queues.
-
-The package also contains [MQTT_DataSource.py](AlLoRa/DataSources/MQTT_DataSource.py), which subscribes to an MQTT broker and turns each received message into a File to send. Paired with an [MQTT_DataSink.py](AlLoRa/DataSinks/MQTT_DataSink.py) on the other side of the link, the original topic travels inside the file name (the payload crosses untouched, byte for byte) and the message is republished on that same topic at the far broker. Together they form a bidirectional, topic-preserving MQTT bridge over AlLoRa, with role reversal carrying the downlink direction and a shared Loop_guard preventing a republished message from being bridged back again.
-
-### → [Digital_Endpoint.py](AlLoRa/Digital_Endpoint.py)
-
-Contains the MAC Address of the endpoint to communicate with and manages the states of the communication. It also manages the generation of the complete **File** when the Requester finishes collecting all the chunks.
-
-It also manages the “state” or phase in which the transfer is. 
-
-### → [File.py](AlLoRa/File.py)
-
-It is the class who focus on the actual File to be sent or received. It can be used to obtain the chunks of the content to transfer to the Source Nodes and also assembly all the blocks received to obtain the complete File in the Requester/Gateway side.
-
-It can be instantiated with content (byte array) to be used by the Source to transmit the content, or it can also be instantiated as a “container”, in order to receive the chunks and finally assemble it to obtain the whole content, in the Requester side.
-
-### → [Packet.py](AlLoRa/Packet.py)
-
-This class structures the actual packet to be sent through LoRa. It manages the creation of the message to be sent and also is capable of load the data received by LoRa in order to check that the message was correctly received (with checksum). 
-It is composed by a header and the actual payload. 
-
-</details>
-
-
-## Examples
-
-Contain examples of uses of the AlLoRa code with different types of devices and levels of complexity.
-
-## Firmware
-
-Contains the necessary firmware to setup devices to work with AlLoRa.
+Both node types run with the same verb. `run()` without a `timeout` is the deployed main loop: it
+never returns. A Hub with several endpoints registered in `Nodes.json` visits each in turn, most
+overdue first, for that endpoint's own listening window.
 
 -----
-# **How does it work?**
+
+# The pieces
+
+## Nodes
+
+<details>
+<summary>Two types on one shared base, plus the endpoint handle a Hub keeps per Edge.</summary>
+
+### [Node.py](AlLoRa/Nodes/Node.py)
+
+The shared base: identity and config, one exchange round, **both** loops (drive and serve), the
+handshake, and the RF-config trial machinery. It is not meant to be instantiated. MicroPython has no
+abstract classes, so a parent class does the job.
+
+### [Edge.py](AlLoRa/Nodes/Edge.py)
+
+The far-placement node. Home role `source`. `run()` answers its Hub's polls and uplink pulls, and
+honors a delegation by driving one downlink pull before coming home. It holds one
+`Digital_Endpoint`, for its Hub, so a downlink has somewhere to land.
+
+An Edge never self-promotes and yields the instant it hears its Hub polling again.
+
+### [Hub.py](AlLoRa/Nodes/Hub.py)
+
+The center-placement node and the permanent authority. Home role `collector`. It holds a
+`Digital_Endpoint` per registered Edge and `run()` is the visit loop over them. It also carries the
+serve loop, because delegating a downlink means serving the file the delegated Edge then pulls.
+
+One endpoint is the 1:1 case, many is the gateway deployment. Same class, which is why the old split
+between a `Requester` and a `Gateway` dissolved: the difference was only how many endpoints and which
+sink.
+
+### [Digital_Endpoint.py](AlLoRa/Digital_Endpoint.py)
+
+A Hub's **session handle for one remote Edge**: its identity and RF settings, the state machine of
+the transfer, the mesh-retransmission state, the file currently in flight, and the secure session.
+It also assembles the complete `AlLoRa_File` once every chunk has arrived. An Edge holds one too, for
+its Hub.
+
+</details>
+
+## Transport: Connector, Link, Adapter
+
+Three names sit at this layer and they are not synonyms:
+
+- **Connector** = my access to the channel
+- **Link** = the byte pipe joining two halves of a split Connector
+- **Adapter** = the far half, the one on the bridge
+
+> A node reaches the LoRa channel through a **Connector**. Usually that Connector owns a radio on the
+> same board. When the radio sits on a *different* board (a Raspberry Pi has no LoRa), the Connector
+> is **split in two halves**: the node holds the near half (`WiFi_connector`, `Serial_connector`) and
+> the bridge board runs the far half inside an **Adapter**, which drives the real radio Connector.
+> The halves exchange transport verbs (transmit, listen, exchange, get and set RF) over a **Link**: a
+> dumb byte pipe with no knowledge of packets, sessions, or keys. The bridge holds no protocol logic,
+> no files, and no keys; it just serves the channel on the node's orders. Adding a new medium means
+> writing one new Link, never new protocol logic.
+
+<details>
+<summary>The Connectors, and what a Link actually has to implement.</summary>
+
+### [Connectors/](AlLoRa/Connectors)
+
+One contract (`transmit`, `listen`, `exchange`, plus RF config and `mac` / `rssi`), swappable, so
+AlLoRa reaches as many kinds of device as possible.
+
+| Connector | For |
+|---|---|
+| [`SX127x_connector`](AlLoRa/Connectors/SX127x_connector.py) | ESP32 boards with an SX127x, and a Raspberry Pi with a Dragino LoRa HAT |
+| [`SX1262_connector`](AlLoRa/Connectors/SX1262_connector.py) | Boards with an SX1262 (LilyGo T3S3) |
+| [`LoPy4_connector`](AlLoRa/Connectors/LoPy4_connector.py) | Pycom LoPy4, using its native LoRa library |
+| [`E5_connector`](AlLoRa/Connectors/E5_connector.py) | A Seeed E5 module driven over AT commands |
+| [`Serial_connector`](AlLoRa/Connectors/Serial_connector.py) | The near half of a tunnel over UART or USB |
+| [`WiFi_connector`](AlLoRa/Connectors/WiFi_connector.py) | The near half of a tunnel over the network |
+| [`Loopback_connector`](AlLoRa/Connectors/Loopback_connector.py) | Two nodes in one process, for tests |
+
+The name is deliberate: the *channel* is the physical medium, usually the LoRa channel, while the
+Connector is the medium-agnostic **access** to it.
+
+### [Links/](AlLoRa/Links)
+
+A Link is defined by its **contract**, not by a list of media: `rpc(request)` on the client half,
+`read_request()` and `write_reply(reply)` on the bridge half, plus `close()`. It moves opaque
+request and reply frames and knows nothing about verbs, the air wire, or keys.
+
+There are three link **shapes**, and each covers a family of media rather than a single one:
+
+| shape | class | media |
+|---|---|---|
+| byte stream, sentinel-framed | [`Serial_link`](AlLoRa/Links/Serial_link.py) | UART, **USB-CDC**, likely BLE over a stream profile |
+| request and reply, natively framed | [`WiFi_link`](AlLoRa/Links/WiFi_link.py) | HTTP over TCP |
+| in-process | [`Loopback_link`](AlLoRa/Links/Loopback_link.py) | CPython tests |
+
+`Serial_link` hardcodes no UART. It takes any `port` object exposing write, read and
+bytes-available, duck-typing pyserial's `in_waiting` or `machine.UART`'s `any()`, so a direct USB
+connection already works with no new Link. A new medium needs a new Link only when its transport does
+not fit one of the three shapes.
+
+### [Adapters/](AlLoRa/Adapters)
+
+The deployment name for the bridge device: the far half of the split Connector plus the radio
+Connector it drives. `Serial_adapter` and `WiFi_adapter` mirror the connector names on the node side,
+so the medium is in the class name at both ends and the radio stays an argument:
+
+```python
+# node side                             # bridge side
+connector = WiFi_connector()            adapter = WiFi_adapter(SX1262_connector())
+connector = Serial_connector()          adapter = Serial_adapter(SX127x_connector())
+```
+
+An Adapter is a **runner**: what a bridge board's `main.py` instantiates to boot a link and serve the
+channel forever. It holds no protocol logic, no pacing, no keys, no files and no session, which is
+exactly why it is transport and not a third node type.
+
+</details>
+
+## Application boundaries: DataSource and DataSink
+
+<details>
+<summary>Where a deployment plugs in: files in one side, files out the other.</summary>
+
+### [DataSources/](AlLoRa/DataSources/DataSource.py)
+
+A `DataSource` feeds `AlLoRa_File`s to whoever is in the source role: a sensor reading becomes a
+file, an MQTT message becomes a file. Hand one to a node and its serve loop pumps it and sends
+whatever it queues. The base class lives in the `DataSources` package; the old `AlLoRa.DataSource`
+import path still works.
+
+[`MQTT_DataSource`](AlLoRa/DataSources/MQTT_DataSource.py) subscribes to a broker and turns each
+received message into a file. Paired with an [`MQTT_DataSink`](AlLoRa/DataSinks/MQTT_DataSink.py) on
+the other side of the link, the original topic travels inside the file name (the payload crosses
+untouched, byte for byte) and the message is republished on that same topic at the far broker.
+Together they are a bidirectional, topic-preserving MQTT bridge over AlLoRa, with role reversal
+carrying the downlink direction and a shared `Loop_guard` preventing a republished message from being
+bridged back again.
+
+### [DataSinks/](AlLoRa/DataSinks/DataSink.py)
+
+A `DataSink` takes ownership of each completed file: `consume(file, reception)`, where `Reception` is
+a frozen snapshot of who sent it and how it arrived (RSSI, SNR, chunk count, session and device ids).
+[`Disk_DataSink`](AlLoRa/DataSinks/Disk_DataSink.py) is the default and saves under a folder named
+after the sender. A management website is a `DataSink`. So is a cloud uploader, or a database writer.
+
+Before this seam existed, the collector hardwired a disk save, so "what to do with the data" leaked
+into the node and every deployment re-invented it.
+
+### [Control/](AlLoRa/Control)
+
+The one application boundary that pushes **inward**, back down the stack, instead of outward to a
+card or a broker. It is two objects on purpose:
+
+- [`Control_Root_DataSink`](AlLoRa/DataSinks/Control_Root_DataSink.py) is the **verify gate**, and a
+  genuine `DataSink`: it is what an Edge registers to receive downlink control artifacts. It parses
+  the envelope off the reassembled file, checks the signature against the control root and the
+  addressing against this device, and passes on only what is authentic and meant for this node. All
+  crypto, no device knowledge, so it is the same class on every node.
+- [`Control_Actuator`](AlLoRa/Control/Control_Actuator.py) is what the gate hands a **verified**
+  artifact to: `apply(control_type, payload)`, where the effect happens. Device-specific, and it owns
+  the one thing the gate cannot know, which is *when it is safe to act*. Acting immediately would
+  break the acknowledgement the node is still sending, so `Node_Control_Actuator` queues a deferred
+  action and the run loop drains it once the final OK is on the air.
+
+A deployment adds an effect by subclassing the actuator and touching no protocol code. The control
+types are a closed enum riding inside the signed region: `RF_CONFIG`, `RESET`, `MODEL`, `OTA`.
+
+</details>
+
+## Core pieces
+
+<details>
+<summary>File, Packet, Codec, Pacing.</summary>
+
+### [File.py](AlLoRa/File.py)
+
+`AlLoRa_File` is the unit being transferred. It can be instantiated **with content**, to be chunked
+and served, or **as an empty container**, to receive chunks and be assembled once they have all
+arrived. Writes are positioned and idempotent, so a re-sent chunk costs nothing and arrival order
+does not matter.
+
+### [Packet.py](AlLoRa/Packet.py) and [Packet_v3.py](AlLoRa/Packet_v3.py)
+
+The typed wire unit: what a frame *means* (kind, session, flags, payload), as opposed to how it is
+encoded. `Packet` is the v2 format, kept untouched so a v3 node can still fall back to a legacy peer.
+`Packet_v3` is the current one. See [Packet structure](#-packet-structure).
+
+### [Codec.py](AlLoRa/Codec.py)
+
+The narrow seam that *speaks* a Packet on the wire: `frame`, `deframe`, plus a keyless `match_spec`
+for matching a reply to its request and `payload_overhead()` for what the framing costs. Protocol
+version and security posture both hide behind this one interface (v2, v3-open, v3-secure today), so a
+new version or a new security mode is a new implementation and never a wider interface.
+
+### [Pacing.py](AlLoRa/Pacing.py)
+
+The one home for adaptive timing: the receive window, the gap between requests, and the airtime
+budget. Pure policy, no I/O. The fixed inter-request sleep of early versions is gone; the controller
+finds the shortest gap the link tolerates on its own. To bound it at runtime, use
+`node.pacing.set_sleep_bounds(min_sleep, max_sleep)`.
+
+</details>
+
+-----
+
+# How does it work?
 
 <p align="center">
   <img width="700" src="readme_assets/figures/Modules-AlLoRa.png">
 </p>
 
-As we can see in the image above, the protocol is structured in a symmetrical way. At the left we have the Source side, with a **Source Node** that receives an **AlLoRa File** to be sent from a **Data Source**, and uses a **Connector** to access LoRa to send **AlLoRa Packets**. 
+The protocol is structured symmetrically. On the left is the Edge, holding an `AlLoRa_File` fed to it
+by a `DataSource` and reaching LoRa through a `Connector`. On the right is the Hub, holding a
+`Digital_Endpoint` per Edge, reaching LoRa through its own `Connector`, and handing each completed
+file to a `DataSink`.
 
-At the right we have the Requester side, with a **Requester Node** that receives a **Digital Endpoint**, that provides the Source information, in order to listen to it to receive the **AlLoRa File**, it also uses a **Connector** to access LoRa to receive the **AlLoRa Packets**, that contains the chunks (blocks of bytes) of the content transmitted.
+*(The figure is from the v2 papers and still shows the old `Source` and `Requester` names. The
+[mapping table](#coming-from-v2) reads it into the current vocabulary.)*
 
 ## → Communication logic
 
-The system follow a logic of requests from the Requester to the Source. Depending of the state of the state of the **Digital Endpoint**, the Requester will send requests to the specific Source and wait a time for an answer or reply. If the answer does not arrive or it arrives with corruptions, the Requester Node will repeat the request until the message arrives correctly (with a timeout when necessary).
-
-The **Digital Endpoints** operates with the following states or phases of the communication:
+The transfer runs on requests from the collector-role node to the source-role node. Depending on the
+state of the `Digital_Endpoint`, the collector sends a request and waits for a reply. If nothing
+arrives, or it arrives corrupted, the request is repeated until it lands, with a timeout where one is
+needed.
 
 <img align="right" width="400" src="readme_assets/figures/Untitled%201.png">
 
-1. **Establish connection**
-    
-    Every Digital Endpoint start in this state, is sends a simple packet with the command “ok” and waits until a “ok” from the Source is received, then, it continues to the next state. 
-    
-2. **Ask metadata**:
-    
-    This is the first step for receiving an **AlLoRa File**, it asks the Source for the metadata of the content to be received and waits until a Packet arrives with the name and the number of chunks of the content. In this stage, the **Digital Endpoint** creates an empty **AlLoRa File** object that will act as a container for the incoming chunks. If successful, it continues to the next state.
-    
-3. **Ask for data**
-    
-    In this state, the Requester will sequentially ask for the chunks necessary to obtain the whole content. When a chunk arrives, it will feed the **AlLoRa File** object until it collected all. When the **AlLoRa File** is complete, it will be assembled and the content will be ready to access or saved.
-    
-4. **Final acknowledge**
-    
-    In order to maintain the synchronization between the Nodes, a final acknowledge will be sent, and the system will wait until the Source replies with an “ok” command.
+A `Digital_Endpoint` moves through these states:
 
-**More information about how the commands work in the Packet Structure section**
+1. **Establish connection.** Every endpoint starts here. A simple OK packet goes out and the endpoint
+   waits for an OK back. In secure mode this is also where the handshake happens.
 
-## → Packet Structure
+2. **Ask metadata.** The first step of receiving a file: ask what is coming, and how much of it. The
+   endpoint creates an empty `AlLoRa_File` to act as the container. v3's typed metadata also carries
+   the sender's chunk size, so the receiver can place each arrival at the right offset instead of
+   assuming both ends chose the same size.
 
-The [Packet](AlLoRa/Packet.py) is the fundamental data unit transmitted via LoRa. It is designed to optimize the payload size while ensuring reliable reception by the designated Node. Each Packet has a maximum size of 255 bytes, which is the maximum payload supported by LoRa.
+3. **Ask for data.** Chunks are requested until the container is full. Each arrival is written into
+   place; once every chunk is in, the file is assembled and handed to the `DataSink`.
 
-### Header Composition
+4. **Final acknowledge.** A closing OK keeps the two nodes in step, and the source-role node waits
+   for it before considering the file delivered and re-arming for the next one.
 
-The header size varies depending on the communication mode (point-to-point or mesh), but it follows a standard structure:
+## → Packet structure
 
-- **MAC Addresses (16 bytes):** The first 8 bytes are allocated for the source Node’s MAC address, and the next 8 bytes are for the destination Node’s MAC address.
-- **Command and Flags (1 byte):** This byte encodes the command type and several flags that dictate packet behavior.
-- **Checksum (3 bytes):** These bytes verify content integrity by checking for corruption using the last 3 bytes of the SHA-256 hash digest.
-- **Message ID (2 bytes, mesh mode only):** Used to manage retransmissions and prevent chunk duplication. The ID is a random number between 0 and 65,535.
+The Packet is the fundamental unit on the air. A LoRa frame carries at most 255 bytes at SF7 through
+SF10 (less at SF11 and SF12), so every byte of header is a byte of payload lost, and the header is
+where AlLoRa spends its optimisation effort.
 
-### Packet Types
+### v3
 
-The header size impacts the payload capacity:
+v3 makes the format **self-describing** and stops paying for addresses it does not need:
 
-- **Point-to-Point Packet:** 20-byte header, allowing for a maximum payload of 235 bytes.
-- **Mesh Packet:** 22-byte header, allowing for a maximum payload of 233 bytes.
+```
+ MAC-addressed  [src4][dst4][VT1][FL1][integ3]   = 13 B   (v2-compatible first contact)
+ did-addressed  [did4][VT1][FL1][integ3]         =  9 B   (v3 first contact, no MAC on the wire)
+ sid-addressed  [sid1][VT1][FL1][integ3]         =  6 B   (established session)
 
-Optional MAC compression can reduce header size, effectively increasing the payload capacity:
+ VT     = version (4 bits, 0x3) | kind (4 bits)
+ FL     = mesh | sleep | hop | debug_hops | role_token | auth | cfg_epoch | spare
+ integ  = sha256(payload)[:3]
+```
 
-- **Compressed Point-to-Point Packet:** 12-byte header, allowing for a payload of 243 bytes.
-- **Compressed Mesh Packet:** 14-byte header, allowing for a payload of 241 bytes.
+Three changes, no fattening:
+
+- A **version nibble** makes the format extensible, and a **typed kind nibble** replaces v2's 2-bit
+  command. v2 had three different features contending for one spare flag bit; v3 has room for role
+  swap, control commands and encryption side by side.
+- **Session-id addressing** collapses two 4-byte MACs to **one byte** once a session exists. MACs
+  survive in the handshake, where no session exists yet, and in mesh, where a relay needs the real
+  destination.
+- The integrity trailer is a **real 24-bit** `sha256(payload)` digest, rather than v2's 12-bit hex in
+  a 3-byte field.
+
+Mesh inserts a 2-byte sequence number before the integrity trailer, so the sid-addressed mesh header
+is 8 bytes.
+
+**Secure mode** replaces the integrity trailer with an AEAD tag and adds an anti-replay counter. It
+drops the flag byte entirely, since every flag it carried is either mesh-scoped or unbuilt and secure
+mode is point to point:
+
+```
+ sid-addressed  [sid1][VT1][ctr2] + sealed(payload) + [tag4]   = 8 B overhead
+```
+
+So an authenticated, encrypted v3 chunk still costs **less header than an unencrypted v2 one**.
+
+| framing | header cost | payload at SF7 |
+|---|---|---|
+| v2, point to point, compressed MACs | 12 B | 243 B |
+| v2, point to point, full MACs | 20 B | 235 B |
+| v2, mesh, compressed MACs | 14 B | 241 B |
+| **v3 open, session-addressed** | **6 B** | **249 B** |
+| v3 open, session-addressed, mesh | 8 B | 247 B |
+| **v3 secure, session-addressed** | **8 B** | **247 B** |
+
+Nodes do not have to be told any of this. `chunk_size` in `LoRa.json` is a request, and the node caps
+it at whatever its own codec reports as the framing cost, so a v3 node is not silently held at v2's
+ceiling and a chunk size that would not fit is corrected at startup rather than on the air.
+
+### v2
+
+<details>
+<summary>The v2 header, still spoken by the v2 codec for legacy peers.</summary>
+
+- **MAC addresses (16 bytes):** 8 bytes of source MAC then 8 of destination.
+- **Command and flags (1 byte):** the command type plus several flags.
+- **Checksum (3 bytes):** the last 3 bytes of a SHA-256 digest, as hex.
+- **Message ID (2 bytes, mesh only):** a random number between 0 and 65,535, used to suppress
+  duplicate retransmissions.
+
+Optional MAC compression packs each address from 8 bytes to 4 with binary struct packing, which is
+what the 12-byte and 14-byte rows above are. It is configurable per deployment, for backward
+compatibility with older installs.
 
 <div align="center">
 <table>
@@ -293,62 +471,181 @@ Optional MAC compression can reduce header size, effectively increasing the payl
 </table>
 </div>
 
----
-
-### Flag Composition
-
-The Flag byte controls the behavior of the packet and consists of:
+The v2 flag byte:
 
 <p align="center">
-  <img src="readme_assets/figures/Flags.png" 
+  <img src="readme_assets/figures/Flags.png"
        alt="Flag Byte Composition"
        width="500" />
 </p>
 
-#### Flag Bits:
-1. **Command (2 bits):** Specifies the command type:
-    - **00 → DATA:** Payload contains a requested chunk.
-    - **01 → OK:** Acknowledges connection or confirms correct reception of content.
-    - **10 → CHUNK:** Requests a specific chunk of data (chunk number stored in payload).
-    - **11 → METADATA:** Requests or provides metadata, such as file name and size.
-      
-2. **Mesh bit (1 bit):** Indicates if the message should be forwarded.
-   
-4. **Hop bit (1 bit):** Signals that the message was forwarded at least once.
-   
-6. **Debug hop bit (1 bit):** Enables debugging by replacing content with path details for research purposes.
-   
-8. **Change RF bit (1 bit):** Signals a change in the radio frequency configuration between Nodes.
+1. **Command (2 bits):** `00` DATA (the payload is a requested chunk), `01` OK (connection
+   acknowledged, or content correctly received), `10` CHUNK (a request for a specific chunk, whose
+   number is in the payload), `11` METADATA (file name and size, requested or provided).
+2. **Mesh bit:** the message should be forwarded.
+3. **Hop bit:** the message was forwarded at least once.
+4. **Debug hop bit:** replace the content with path details, for research.
+5. **Change RF bit:** a change of radio configuration between nodes.
 
-#### Optional MAC Compression:
+</details>
 
-- **MAC Address Compression:** Reduces MAC addresses from 8 bytes to 4 bytes using binary struct packing. This feature is optional and can be configured based on deployment needs, allowing for backward compatibility with older deployments.
+## → Identity and addressing
 
+<details>
+<summary>How a node is named, and how the first frame to it is addressed.</summary>
+
+- **MAC.** A physical address. In v2 it was also the identity. In v3 it survives as a human label,
+  as the folder and topic key, and as the bootstrap address for a node that might still be v2.
+- **device_id.** An Edge's v3 identity: the fingerprint of its long-term public key,
+  `SHA256(pubkey)`. Registered on the Hub the way a MAC was, but crypto-bound and therefore
+  unforgeable. It is stable across reboots as long as `identity_file` is set.
+- **session id (sid).** The 1-byte logical address of one Edge and Hub session, at offset 0 of every
+  established-session frame. Identity-derived by default (the first byte of the `device_id` in secure
+  mode, the device-specific low byte of the short MAC in open mode), overridable with an explicit
+  `session_id` in the config, and reassigned by the Hub on the rare 1-byte clash. It stays one byte
+  even when the link is tunnelled.
+
+**How the first frame is addressed follows how the node was registered, never blind probing.**
+Registered by MAC means v2-compatible framing, which is what makes interop and beacon upgrade
+possible. Registered by `device_id` means v3 framing, with no MAC on the wire at all.
+
+</details>
+
+## → Security
+
+<details>
+<summary>Two postures, and what the secure one actually protects.</summary>
+
+`security_mode` in `LoRa.json` selects the posture:
+
+- **`open`** (the default): no crypto. The integrity trailer catches corruption, not an attacker.
+- **`secure`**: an ephemeral-static **ECDH handshake on P-256** establishes a session, then every
+  data frame is sealed with **AES-128-CTR and authenticated with a truncated HMAC-SHA256 tag**,
+  encrypt-then-MAC, and carries a counter that a sliding replay window checks on arrival.
+
+The asymmetric cost is paid once per session, never per frame. The curve math is dependency-free
+pure Python so it runs on the firmware with no native crypto module; the per-frame AES is
+platform-detected instead, so it uses the ESP32's hardware AES on-device and stays well under the
+receive-to-reply turnaround the adaptive pacing depends on. Where no native AES exists, `secure`
+degrades to `open` rather than pretending.
+
+The security perimeter is the **Edge to Hub LoRa link**. Whatever happens downstream of the Hub, on
+its way to a cloud or a database, is secured separately by that deployment.
+
+The **control root** is the other anchor, and it is separate on purpose. It is a deployment-level
+ECDSA P-256 signing root whose public key every node holds from provisioning. An Edge verifies that
+any downlink control artifact, a config change, a reset, an OTA or a returned model, chains to the
+control root before acting on it. Because it is per *deployment* rather than per Hub, Hubs stay
+swappable without re-touching every Edge.
+
+Role reversal moves the drive, never the trust anchor: a temporarily driving Edge is still
+authenticating *to* its Hub.
+
+</details>
+
+## → RF configuration and the trial
+
+<details>
+<summary>Why a radio reconfiguration is never committed on arrival.</summary>
+
+Changing spreading factor, bandwidth, frequency, coding rate or TX power has to happen over the very
+link the change might break. A verified `RF_CONFIG` is therefore never committed on arrival. The node
+switches, runs a bounded **trial** on the new config, and then either commits it or falls back to the
+**last-known-good** config, which is the one that was in force before and is therefore known
+reachable. Committing a trial is what promotes the new config to last-known-good.
+
+The verdict is a **completed full-payload exchange**, not just any frame: a short frame is not proof
+that a full chunk will land. Short frames put the trial in **hold-pending**, extending the window
+without deciding it. Silence for the whole window restores.
+
+The window is time-based, not a cycle count, because time on air swings roughly thirty-fold between
+SF7 and SF12. The signed payload carries `trial` in seconds; when it is absent, both ends derive a
+default scaled to time on air.
+
+The two ends are deliberately asymmetric. The Edge self-restores on silence. The Hub keeps the old
+config beside the new one for that endpoint and **probes both**, alternating on its normal poll loop,
+so nothing new blocks the radio.
+
+</details>
 
 ## → Mesh mode
 
-If the communication protocol has the mesh mode activated, the communication will work exactly the same as described before, but in the case of a request don’t being answered by a Source for a specific number of times (set by the user), the Digital Endpoint will jump to `retransmission mode`. Activating the mesh bit in the Packet in order to tell the other Nodes in the system to retransmit the message if received, to extend the reach of the system and try to establish the communication with the missing Node.
+With mesh mode active, communication works exactly as described above, except that when a request
+goes unanswered a set number of times the `Digital_Endpoint` enters **retransmission mode**: it sets
+the mesh bit, asking other nodes in range to forward the message and extend the system's reach.
 
-If a Source Node receives a Packet that is not for itself, it usually discards it and keep listening for request directed to it. But with the mesh bit activated, it will forward it to help reach the real destination. For this forwarding, the Node sleeps for a random time between 0.1 and 1 second before sending it. This reduces the possibility of collisions between Packets when multiple Nodes are active and in reach between them. Each time a Packet is forwarded, the Hop bit of it will be activated in order to announce that it actually went through other devices during its path. When the destination Node receives its message, it notices that the message arrived using the “retransmission mode” and creates a response Packet with the mesh bit activated, because it assumes that if it arrived like this, it is probably that the response will reach the Gateway jumping through the same path. In this case, the Node doesn’t sleep before sending the response, prioritizing always the Source Node being requested something.
+A node that receives a packet not addressed to it normally discards it. With the mesh bit set, it
+forwards it instead, after sleeping a random 0.1 to 1 second to reduce collisions when several nodes
+are active and in range of each other. Each forward sets the hop bit, so the path is visible. When
+the destination sees that a message arrived in retransmission mode, it replies with the mesh bit set
+too, on the assumption that the reply needs the same path back, and it does *not* sleep first: the
+node being asked for something always has priority.
 
-If the response Packet arrives with the Hop bit off to the Gateway, it means that it didn't go through any other Node in order response to the request, indicating that the retransmission maybe are not needed. In this cases the Gateway will deactivate the “retransmission mode” of this specific Digital Endpoint.
+If a reply arrives with the hop bit clear, it went straight there and retransmission is not needed,
+so the collector clears retransmission mode for that endpoint.
 
-In order to avoid duplication and over retransmission of messages that could collapse the system, each new Packet is assigned a random ID by the Node, and is saved in a fixed-size list that is checked wherever a new message with mesh bit activated arrives. The Nodes also have another fixed-size list that saves all the forwarded message’s IDs and that checks to avoid forwarding multiple times the same Packet.
+To stop duplicates from collapsing the system, each new packet gets a random id, which every node
+keeps in a fixed-size list and checks whenever a mesh-bit packet arrives. A second fixed-size list
+holds forwarded ids, so nothing is forwarded twice.
 
-## → Debug Hops
+**Secure mode is point to point only.** The sealed header has no sequence number, so a secure node
+that believed it was forwarding would in fact be framing point to point and fail in a way that looks
+like a radio fault. The library refuses that combination at startup, where a misconfiguration
+belongs, rather than at the first exchange. (This is about AlLoRa's own flooding mesh. Riding a
+Meshtastic mesh keeps the frame point to point, with the routing in the Meshtastic frame, so it needs
+nothing here.)
 
-The debug hops is an option available to activate when instantiating a Requester or Gateway Node, and is a useful tool to check the path of a Packet when using the Mesh mode. It overrides the messages and focus on register in the payload each time the Packet goes through a Node. This information can be later retrieved in the Requester/Gateway Node’s device’s memory and can be used to make decisions about the distribution of the Nodes in the area to cover.
+## → Debug hops
 
-The output of this process generates a log_rssi.txt file that looks like this:
+Debug hops is an option on a collector-role node, and a useful tool for checking the path of a packet
+in mesh mode. It overrides the message content and uses the payload to record each node the packet
+passes through. The information can be retrieved from the collector's storage afterwards and used to
+decide how to distribute nodes across an area.
+
+The output is a `log_rssi.txt` that looks like this:
 
 ```
-022-06-17_17:11:40: ID=24768 -> [['B', -112, 0.5], ['A', -107, 0], ['B', -106, 0.3], ['C', -88, 0.2], ['G', -100, 0]]
+2022-06-17_17:11:40: ID=24768 -> [['B', -112, 0.5], ['A', -107, 0], ['B', -106, 0.3], ['C', -88, 0.2], ['G', -100, 0]]
 2022-06-17_17:11:50: ID=2065 -> [['C', -99, 0.4], ['B', -93, 0], ['C', -93, 0.2], ['G', -105, 0]]
 2022-06-17_17:11:53: ID=63728 -> [['C', -100, 0.4], ['B', -95, 0], ['C', -95, 0.5], ['G', -103, 0]]
 2022-06-17_17:11:54: ID=32508 -> [['B', -114, 0], ['C', -95, 0.4], ['G', -103, 0]]
 2022-06-17_17:11:56: ID=10063 -> [['C', -99, 0.1], ['B', -95, 0], ['C', -94, 0.1], ['G', -103, 0]]
 ```
 
-Where it shows the time of reception, the ID of the message and then a list of hops that the Packet did. Each hop saves the  name of the Node, the RSSI of the last package received with LoRa when registering the hop, and the random time that the Node had to wait before forwarding the message. As we can see, in some cases this random sleep is 0. This is not random, because those Nodes were the destination of the requests of the Gateway, and, as commented before, they have the priority.
+Each line is a reception time, the message id, and the list of hops. Each hop records the node's
+name, the RSSI of the last packet it received over LoRa, and the random time it waited before
+forwarding. Some of those waits are 0, which is not chance: those nodes were the destination of the
+request, and as noted above they have priority.
 
+-----
 
+# Repository layout
+
+```
+AlLoRa/          the library
+examples/        runnable examples, by node type and by board
+firmware/        MicroPython firmware and build targets for the supported boards
+tests/           the test suite (CPython)
+```
+
+Inside `AlLoRa/`, three conventions are worth knowing before you go looking for something:
+
+**1. Core at the root, interchangeable families in folders.** The loose top-level modules are the
+core pieces every node uses: `Packet`, `Packet_v3`, `Codec`, `Pacing`, `File`, `Digital_Endpoint`,
+`Status`, `negotiation`, `tunnel_codec`. A folder means a family of **alternatives** behind one shared
+contract or base, from which a deployment picks: `Nodes/`, `Connectors/`, `Links/`, `Adapters/`,
+`DataSources/`, `DataSinks/`.
+
+**2. Some folders are planes, not families.** `Security/` and `Control/` are folders whose members are
+*not* interchangeable with each other: they group a domain rather than a set of alternatives. You do
+not choose one file from `Security/`, you use the whole thing. The test is whether the members
+substitute for one another.
+
+**3. A lowercase filename means the module defines no class.** `negotiation.py`, `tunnel_codec.py`,
+`mqtt_naming.py`, `control_types.py` and everything in `utils/` are functions and constants. A
+capitalized filename is the name of the class the module provides.
+
+One naming rule falls out of this: a `_DataSink` suffix is a **plug type**, not
+decoration. It promises `consume(file, reception)` and a node's sink slot. `Control_Root_DataSink`
+carries the suffix because it really is one; `Control_Actuator` does not, because it takes
+`apply(control_type, payload)` and plugs into the gate instead.
