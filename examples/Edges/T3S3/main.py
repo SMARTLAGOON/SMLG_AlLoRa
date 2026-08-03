@@ -29,7 +29,7 @@ try:
     # This is how to handle a backup file if needed (not implemented in this example...)
     if backup:
         print("Asking backup")
-        #file = Datasource.get_backup()
+        #file = datasource.get_backup()
         #lora_node.restore_file(file)
 
     # with an established connection, we start sending data periodically

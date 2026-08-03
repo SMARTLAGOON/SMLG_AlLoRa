@@ -109,7 +109,7 @@ class Capture_sink(DataSink):
 class Rf_apply_sink(Capture_sink):
     """The Edge's downlink sink for these tests: it treats a delivered file as an RF_CONFIG
     artifact (its content is the JSON payload) and defers the switch exactly as the real
-    Node_Control_Sink does — queue the change, let the Edge drain it after the pull's final-OK.
+    Node_Control_Actuator does — queue the change, let the Edge drain it after the pull's final-OK.
     Keeps the coordination test off the crypto gate (verified end-to-end in test_node_control_sink).
     """
 

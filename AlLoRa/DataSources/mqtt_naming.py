@@ -1,6 +1,6 @@
 """The MQTT envelope: `mq!<artifact_id>!<timestamp_ms>!<escaped-topic>` as the file NAME.
 
-The pairing convention between an MQTT_Datasource and an MQTT_DataSink. The original
+The pairing convention between an MQTT_DataSource and an MQTT_DataSink. The original
 topic, a monotonic artifact id and an optional timestamp ride the AlLoRa file name
 (which crosses the link exactly once, inside METADATA) while the file content stays the
 MQTT payload byte-for-byte. Preserving the topic therefore costs zero payload bytes per

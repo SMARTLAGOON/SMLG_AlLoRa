@@ -18,7 +18,7 @@ Two things move against the old design's fused override:
 """
 from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.Codec import build_codec
-from AlLoRa.Links import tunnel_codec
+from AlLoRa import tunnel_codec
 from AlLoRa.utils.debug_utils import print
 
 

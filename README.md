@@ -162,7 +162,7 @@ This type of connector is very straightforward, it uses the native library for u
 
 This connector was developed to use in a Raspberry Pi connected to a Dragino LoRa/HPS HAT for RPi v1.4. It uses the SX127x library to manage the Raspberry Pi’s GPIOs in order to control the Dragino and send packages using a LoRa channel. It also works with ESP32 that uses the SX127x.
 
-### [Wifi_connector.py](AlLoRa/Connectors/Wifi_connector.py)
+### [WiFi_connector.py](AlLoRa/Connectors/WiFi_connector.py)
 
 Is the counterpart of the [WiFi_adapter](AlLoRa/Adapters/WiFi_adapter.py) that runs on the bridge board, developed to use in a Raspberry Pi, but also tested on computers running macOS and Windows. 
 
@@ -170,9 +170,9 @@ Is the counterpart of the [WiFi_adapter](AlLoRa/Adapters/WiFi_adapter.py) that r
     
 ### → [DataSources/](AlLoRa/DataSources/DataSource.py)
 
-A Datasource is a handy class that can be use to manage the files to be send. It is supposed to be used to feed Files to send to a Source Nodes. The base class lives in the DataSources package (the old `AlLoRa.DataSource` import path still works), and a node serving data can take one directly (`Source(..., datasource=...)`): its serve loop will pump the datasource and send whatever it queues.
+A DataSource is a handy class that can be use to manage the files to be send. It is supposed to be used to feed Files to send to a Source Nodes. The base class lives in the DataSources package (the old `AlLoRa.DataSource` import path still works), and a node serving data can take one directly (`Source(..., datasource=...)`): its serve loop will pump the datasource and send whatever it queues.
 
-The package also contains [MQTT_Datasource.py](AlLoRa/DataSources/MQTT_Datasource.py), which subscribes to an MQTT broker and turns each received message into a File to send. Paired with an [MQTT_DataSink.py](AlLoRa/DataSinks/MQTT_DataSink.py) on the other side of the link, the original topic travels inside the file name (the payload crosses untouched, byte for byte) and the message is republished on that same topic at the far broker. Together they form a bidirectional, topic-preserving MQTT bridge over AlLoRa, with role reversal carrying the downlink direction and a shared Loop_guard preventing a republished message from being bridged back again.
+The package also contains [MQTT_DataSource.py](AlLoRa/DataSources/MQTT_DataSource.py), which subscribes to an MQTT broker and turns each received message into a File to send. Paired with an [MQTT_DataSink.py](AlLoRa/DataSinks/MQTT_DataSink.py) on the other side of the link, the original topic travels inside the file name (the payload crosses untouched, byte for byte) and the message is republished on that same topic at the far broker. Together they form a bidirectional, topic-preserving MQTT bridge over AlLoRa, with role reversal carrying the downlink direction and a shared Loop_guard preventing a republished message from being bridged back again.
 
 ### → [Digital_Endpoint.py](AlLoRa/Digital_Endpoint.py)
 

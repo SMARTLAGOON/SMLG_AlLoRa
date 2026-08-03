@@ -3,7 +3,7 @@ from AlLoRa.DataSources.mqtt_naming import encode_name
 from AlLoRa.File import AlLoRa_File
 
 
-class MQTT_Datasource(DataSource):
+class MQTT_DataSource(DataSource):
     """Subscribe to an MQTT broker and queue each matching PUBLISH as an AlLoRa_File.
 
     The ingest twin of MQTT_DataSink: the sink republishes a received file to a broker,

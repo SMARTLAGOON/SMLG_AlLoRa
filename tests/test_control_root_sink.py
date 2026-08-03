@@ -5,7 +5,7 @@ against a pinned per-deployment control-root public key *before* the Edge acts o
 signed artifact is ordinary file content carried by the reversed-pull transfer; the wire
 (the frozen v3 packet) is untouched. This layer sits on the Edge's downlink DataSink,
 operates on the fully reassembled artifact, and is the gate, not the actuator: on a verified
-artifact it hands the wrapped executing sink the trusted (control_type, payload); on anything
+artifact it hands the wrapped actuator the trusted (control_type, payload); on anything
 that fails it drops the artifact and never forwards.
 
 Envelope:  version(1) || type(1) || target_device_id(32) || payload || sig(64)
@@ -22,10 +22,9 @@ import pytest
 
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.DataSinks.DataSink import Reception
-from AlLoRa.DataSinks.Control_Root_DataSink import (
-    Control_Root_DataSink, Control_Sink,
-    ENVELOPE_VERSION, RF_CONFIG, RESET, MODEL, OTA,
-)
+from AlLoRa.Control.Control_Actuator import Control_Actuator
+from AlLoRa.Control.control_types import RF_CONFIG, RESET, MODEL, OTA
+from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink, ENVELOPE_VERSION
 
 # --- frozen vectors (authored with ecdsa 0.18.0; see scratchpad/gen_vectors.py) -------------
 
@@ -72,7 +71,7 @@ ENV_BAD_VERSION_VALID = bytes.fromhex(
 CONTROL_ROOT_HEX = CONTROL_ROOT_PUB.hex()
 
 
-class _CapturingExecutingSink(Control_Sink):
+class _CapturingActuator(Control_Actuator):
     """The v3.0.0 consumer: no real actuator yet, it just records what it was handed. In
     production this is where change_rf_config / reset / OTA live; that is a later increment."""
 
@@ -93,20 +92,20 @@ def _artifact(tmp_path, content, name="ctrl.bin", chunk_size=32):
     return f
 
 
-def _sink(executing_sink, device_id=TARGET_DEVICE_ID, control_root=CONTROL_ROOT_HEX):
+def _sink(actuator, device_id=TARGET_DEVICE_ID, control_root=CONTROL_ROOT_HEX):
     return Control_Root_DataSink(control_root=control_root, device_id=device_id,
-                                 executing_sink=executing_sink)
+                                 actuator=actuator)
 
 
-# --- Slice 1: a verified artifact is handed to the executing sink ---------------------------
+# --- Slice 1: a verified artifact is handed to the actuator ---------------------------
 
-def test_valid_rf_config_artifact_is_delivered_to_the_executing_sink(tmp_path):
-    executing = _CapturingExecutingSink()
-    sink = _sink(executing)
+def test_valid_rf_config_artifact_is_delivered_to_the_actuator(tmp_path):
+    actuator = _CapturingActuator()
+    sink = _sink(actuator)
     sink.consume(_artifact(tmp_path, ENV_RF_CONFIG_VALID), Reception(source="hub"))
 
-    assert executing.applied == [(RF_CONFIG, RF_PAYLOAD)], \
-        "a genuine control artifact must reach the executing sink as (type, payload)"
+    assert actuator.applied == [(RF_CONFIG, RF_PAYLOAD)], \
+        "a genuine control artifact must reach the actuator as (type, payload)"
 
 
 # --- Slice 2: a forged signature is dropped, never forwarded, and never raises --------------
@@ -114,27 +113,27 @@ def test_valid_rf_config_artifact_is_delivered_to_the_executing_sink(tmp_path):
 def test_forged_signature_is_dropped_and_does_not_raise(tmp_path):
     forged = bytearray(ENV_RF_CONFIG_VALID)
     forged[-1] ^= 0x01   # flip one bit of s: still a structurally valid 64-B sig, just not genuine
-    executing = _CapturingExecutingSink()
-    sink = _sink(executing)
+    actuator = _CapturingActuator()
+    sink = _sink(actuator)
 
     # Must NOT raise: raising re-pulls the identical bytes forever and withholds the final-OK.
     # A rejected artifact is consumed-once (transfer completes) and simply never acted upon.
     sink.consume(_artifact(tmp_path, bytes(forged)), Reception(source="hub"))
 
-    assert executing.applied == [], "a forged control artifact must never reach the executing sink"
+    assert actuator.applied == [], "a forged control artifact must never reach the actuator"
 
 
 # --- Slice 3: a genuine artifact addressed to another node is dropped (target-binding) ------
 
 def test_artifact_targeting_another_node_is_dropped(tmp_path):
-    executing = _CapturingExecutingSink()
+    actuator = _CapturingActuator()
     # ENV_RF_CONFIG_VALID is a genuine, correctly-signed command for TARGET_DEVICE_ID. Delivered
     # to a node whose own device_id is OTHER, it must not execute: a fleet-wide control root makes
     # a real command replayable to another node, and the target check is what blocks retargeting.
-    sink = _sink(executing, device_id=OTHER_DEVICE_ID)
+    sink = _sink(actuator, device_id=OTHER_DEVICE_ID)
     sink.consume(_artifact(tmp_path, ENV_RF_CONFIG_VALID), Reception(source="hub"))
 
-    assert executing.applied == [], "a genuine command for another node must not be executed here"
+    assert actuator.applied == [], "a genuine command for another node must not be executed here"
 
 
 # --- Slice 4: structural rejects (all cheap checks, before the expensive verify) ------------
@@ -142,44 +141,44 @@ def test_artifact_targeting_another_node_is_dropped(tmp_path):
 def test_unsupported_version_is_dropped(tmp_path):
     # Correctly signed for version=2, but this node only understands ENVELOPE_VERSION. Acting on
     # a format it does not understand is exactly the cross-version confusion the version guards.
-    executing = _CapturingExecutingSink()
-    _sink(executing).consume(_artifact(tmp_path, ENV_BAD_VERSION_VALID), Reception(source="hub"))
-    assert executing.applied == [], "an unsupported envelope version must be dropped"
+    actuator = _CapturingActuator()
+    _sink(actuator).consume(_artifact(tmp_path, ENV_BAD_VERSION_VALID), Reception(source="hub"))
+    assert actuator.applied == [], "an unsupported envelope version must be dropped"
 
 
 def test_undefined_or_unactuatable_type_is_dropped(tmp_path):
     # Correctly signed and correctly targeted, but type=0x7f has no actuator in this release. A
     # validly-signed-but-unactuatable artifact is dropped at the gate, never forwarded (and never
     # re-pulled): forwarding it would trap a would-be actuator in a retry loop.
-    executing = _CapturingExecutingSink()
-    _sink(executing).consume(_artifact(tmp_path, ENV_UNKNOWN_TYPE_VALID), Reception(source="hub"))
-    assert executing.applied == [], "a type with no actuator must be dropped at the gate"
+    actuator = _CapturingActuator()
+    _sink(actuator).consume(_artifact(tmp_path, ENV_UNKNOWN_TYPE_VALID), Reception(source="hub"))
+    assert actuator.applied == [], "a type with no actuator must be dropped at the gate"
 
 
 def test_truncated_envelope_is_dropped_not_crashed(tmp_path):
     # A file too short to even hold the fixed header+sig must be dropped cleanly, not indexed into.
-    executing = _CapturingExecutingSink()
-    _sink(executing).consume(_artifact(tmp_path, b"\x01\x01tiny"), Reception(source="hub"))
-    assert executing.applied == [], "a truncated envelope must be dropped"
+    actuator = _CapturingActuator()
+    _sink(actuator).consume(_artifact(tmp_path, b"\x01\x01tiny"), Reception(source="hub"))
+    assert actuator.applied == [], "a truncated envelope must be dropped"
 
 
 def test_reset_is_a_live_type_and_carries_an_empty_payload(tmp_path):
-    executing = _CapturingExecutingSink()
-    _sink(executing).consume(_artifact(tmp_path, ENV_RESET_VALID), Reception(source="hub"))
-    assert executing.applied == [(RESET, b"")], "RESET must forward with its empty payload"
+    actuator = _CapturingActuator()
+    _sink(actuator).consume(_artifact(tmp_path, ENV_RESET_VALID), Reception(source="hub"))
+    assert actuator.applied == [(RESET, b"")], "RESET must forward with its empty payload"
 
 
 # --- Slice 5: fail closed at construction (never a silent no-verify) ------------------------
 
 def test_missing_control_root_is_a_construction_error():
-    # The whole point: an executing sink wired without a control_root must refuse to start,
+    # The whole point: an actuator wired without a control_root must refuse to start,
     # loudly, rather than silently forward unverified commands.
     with pytest.raises(ValueError):
         Control_Root_DataSink(control_root=None, device_id=TARGET_DEVICE_ID,
-                              executing_sink=_CapturingExecutingSink())
+                              actuator=_CapturingActuator())
     with pytest.raises(ValueError):
         Control_Root_DataSink(control_root="", device_id=TARGET_DEVICE_ID,
-                              executing_sink=_CapturingExecutingSink())
+                              actuator=_CapturingActuator())
 
 
 def test_malformed_control_root_is_a_construction_error():
@@ -187,27 +186,27 @@ def test_malformed_control_root_is_a_construction_error():
     # construction, not per artifact. 0x04 || 64 zero bytes is a valid length but not on P-256.
     bad_offcurve = ("04" + "00" * 64)
     with pytest.raises(ValueError):
-        _sink(_CapturingExecutingSink(), control_root=bad_offcurve)
+        _sink(_CapturingActuator(), control_root=bad_offcurve)
     with pytest.raises(ValueError):
-        _sink(_CapturingExecutingSink(), control_root="not-hex-at-all")
+        _sink(_CapturingActuator(), control_root="not-hex-at-all")
 
 
-def test_missing_executing_sink_is_a_construction_error():
+def test_missing_actuator_is_a_construction_error():
     with pytest.raises(ValueError):
         Control_Root_DataSink(control_root=CONTROL_ROOT_HEX, device_id=TARGET_DEVICE_ID,
-                              executing_sink=None)
+                              actuator=None)
 
 
 def test_wrong_length_device_id_is_a_construction_error():
     with pytest.raises(ValueError):
-        _sink(_CapturingExecutingSink(), device_id=b"\x00\x01\x02\x03")   # 4 B, not 32
+        _sink(_CapturingActuator(), device_id=b"\x00\x01\x02\x03")   # 4 B, not 32
     with pytest.raises(ValueError):
-        _sink(_CapturingExecutingSink(), device_id=None)
+        _sink(_CapturingActuator(), device_id=None)
 
 
 # --- Slice 6: an actuation failure propagates (retry), unlike a verification reject ---------
 
-class _FailingExecutingSink(Control_Sink):
+class _FailingActuator(Control_Actuator):
     def apply(self, control_type, payload):
         raise RuntimeError("actuator busy")
 
@@ -217,7 +216,7 @@ def test_actuation_failure_propagates_for_at_least_once_retry(tmp_path):
     # the opposite: it must propagate so the drive loop rewinds and re-pulls, giving the genuine
     # command at-least-once delivery. Guarding this so a later refactor can't quietly swallow it.
     with pytest.raises(RuntimeError):
-        _sink(_FailingExecutingSink()).consume(
+        _sink(_FailingActuator()).consume(
             _artifact(tmp_path, ENV_RF_CONFIG_VALID), Reception(source="hub"))
 
 
@@ -229,7 +228,7 @@ def test_reassembly_temp_is_released_on_accept_and_reject(tmp_path):
     accepted = _artifact(tmp_path, ENV_RF_CONFIG_VALID, name="ok.bin")
     temp_ok = accepted.temp_file_path
     assert os.path.exists(temp_ok)
-    _sink(_CapturingExecutingSink()).consume(accepted, Reception(source="hub"))
+    _sink(_CapturingActuator()).consume(accepted, Reception(source="hub"))
     assert not os.path.exists(temp_ok), "a verified artifact left its reassembly temp behind"
 
     forged = bytearray(ENV_RF_CONFIG_VALID)
@@ -237,5 +236,5 @@ def test_reassembly_temp_is_released_on_accept_and_reject(tmp_path):
     rejected = _artifact(tmp_path, bytes(forged), name="bad.bin")
     temp_bad = rejected.temp_file_path
     assert os.path.exists(temp_bad)
-    _sink(_CapturingExecutingSink()).consume(rejected, Reception(source="hub"))
+    _sink(_CapturingActuator()).consume(rejected, Reception(source="hub"))
     assert not os.path.exists(temp_bad), "a rejected artifact left its reassembly temp behind"

@@ -214,7 +214,7 @@ def test_base_datasink_consume_is_abstract():
 
 
 def test_mqtt_sink_republishes_envelope_files_on_their_original_topic(tmp_path):
-    # The paired-bridge case: an MQTT_Datasource on the far side named the file with the
+    # The paired-bridge case: an MQTT_DataSource on the far side named the file with the
     # envelope; the sink must republish on the embedded topic, payload byte-for-byte.
     from AlLoRa.DataSources.mqtt_naming import encode_name
     payload = b"21.5"

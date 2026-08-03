@@ -541,7 +541,7 @@ def test_secure_uplink_still_normal_after_downlink_reversal(tmp_path):
 # =============================================================================
 
 from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
-from AlLoRa.DataSinks.Node_Control_Sink import Node_Control_Sink
+from AlLoRa.Control.Node_Control_Actuator import Node_Control_Actuator
 from test_control_root_sink import (ENV_RF_CONFIG_VALID, ENV_RESET_VALID,
                                     CONTROL_ROOT_HEX, TARGET_DEVICE_ID)
 
@@ -581,11 +581,11 @@ def _control_pair(tmp_path, envelope, reset_log=None, probe=None):
     edge.session_store.put(session_i)
     hub.session_store.put(session_r)
 
-    actuator = Node_Control_Sink(edge, reset_fn=(lambda: reset_log.append("reset"))
+    actuator = Node_Control_Actuator(edge, reset_fn=(lambda: reset_log.append("reset"))
                                  if reset_log is not None else None)
     # device_id is what the node was provisioned with; here it is the frozen vectors' target.
     gate = _Probed_gate(control_root=CONTROL_ROOT_HEX, device_id=TARGET_DEVICE_ID,
-                        executing_sink=actuator, probe=probe or (lambda: None))
+                        actuator=actuator, probe=probe or (lambda: None))
     edge.data_sink = gate
 
     hub.queue_downlink(endpoint, AlLoRa_File(name="ctl.bin", content=bytearray(envelope),

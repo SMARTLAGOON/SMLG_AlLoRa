@@ -1,4 +1,4 @@
-"""MQTT_Datasource — the ingest half of the MQTT bridge (MQTT PUBLISH -> AlLoRa_File).
+"""MQTT_DataSource — the ingest half of the MQTT bridge (MQTT PUBLISH -> AlLoRa_File).
 
 Subscribes to a broker and turns each matching PUBLISH into an envelope-named AlLoRa_File
 on the queue, ready for whoever holds the source role to serve. The client is injected
@@ -7,7 +7,7 @@ broker-free; check() is the non-blocking pump the node loop calls — it never b
 radio loop.
 """
 
-from AlLoRa.DataSources.MQTT_Datasource import MQTT_Datasource
+from AlLoRa.DataSources.MQTT_DataSource import MQTT_DataSource
 from AlLoRa.DataSources.mqtt_naming import decode_name
 
 
@@ -38,7 +38,7 @@ class Fake_client:
 
 def _source(**kwargs):
     client = Fake_client()
-    ds = MQTT_Datasource(file_chunk_size=200, topics=("sensors/#",),
+    ds = MQTT_DataSource(file_chunk_size=200, topics=("sensors/#",),
                          client=client, **kwargs)
     ds.prepare()
     return ds, client

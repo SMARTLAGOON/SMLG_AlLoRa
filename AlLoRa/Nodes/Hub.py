@@ -210,7 +210,7 @@ class Hub(Node):
         self.update_subscribers(digital_endpoint)
 
     def set_downlink_source(self, digital_endpoint, datasource):
-        """Plug a live input boundary (e.g. an MQTT_Datasource) as this Edge's downlink:
+        """Plug a live input boundary (e.g. an MQTT_DataSource) as this Edge's downlink:
         whatever it queues is delivered by delegation, exactly like queue_downlink files.
         Brought up here, at registration: a connect that must fail should fail at setup,
         loudly, not mid-drive-loop. Replaces the endpoint's previous source, so register

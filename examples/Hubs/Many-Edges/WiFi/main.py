@@ -1,5 +1,5 @@
 from AlLoRa.Nodes.Hub import Hub
-from AlLoRa.Connectors.Wifi_connector import WiFi_connector
+from AlLoRa.Connectors.WiFi_connector import WiFi_connector
 
 config_file = "LoRa.json"
 node_file = "Nodes.json"

@@ -1,10 +1,11 @@
-from AlLoRa.DataSinks.Control_Root_DataSink import Control_Sink, RF_CONFIG, RESET
+from AlLoRa.Control.Control_Actuator import Control_Actuator
+from AlLoRa.Control.control_types import RF_CONFIG, RESET
 from AlLoRa.utils.json_utils import json
 from AlLoRa.utils.debug_utils import print
 
 
-class Node_Control_Sink(Control_Sink):
-    """The executing sink the control-root verifier hands a *verified* control artifact to.
+class Node_Control_Actuator(Control_Actuator):
+    """The on-node actuator the control-root verifier hands a *verified* control artifact to.
 
     It never acts in apply(): apply() runs inside consume(), which fires before the transfer's
     final-OK reaches the air, so switching the radio or resetting here would break the
@@ -55,5 +56,5 @@ class Node_Control_Sink(Control_Sink):
     def _drop(self, reason):
         # A dropped-but-verified artifact is a rare, ops-relevant event (a genuine, signed
         # command the node cannot act on): log it. Returns None so apply() just falls through.
-        print("Node_Control_Sink: dropped a verified control artifact ({})".format(reason))
+        print("Node_Control_Actuator: dropped a verified control artifact ({})".format(reason))
         return None

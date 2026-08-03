@@ -1,4 +1,4 @@
-"""The MQTT envelope — the pairing convention between MQTT_Datasource and MQTT_DataSink.
+"""The MQTT envelope — the pairing convention between MQTT_DataSource and MQTT_DataSink.
 
 The original topic (+ artifact id + timestamp) rides the AlLoRa file NAME, which crosses
 the link once inside METADATA — the payload stays the MQTT bytes verbatim, so preserving

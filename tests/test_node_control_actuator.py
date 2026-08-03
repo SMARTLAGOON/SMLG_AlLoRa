@@ -1,10 +1,10 @@
-"""Unit — the Edge-side control actuator (the executing sink behind the control-root gate).
+"""Unit — the Edge-side control actuator (the actuator behind the control-root gate).
 
 The verifier (Control_Root_DataSink) authenticates a downlink control envelope and hands the
-verified (control_type, payload) to an executing sink. This is that sink: it turns a verified
+verified (control_type, payload) to an actuator. This is that actuator: it turns a verified
 RF_CONFIG into a node RF-config change and a verified RESET into a hard reset.
 
-The one behavior that is easy to get wrong and expensive on hardware: the sink runs *inside*
+The one behavior that is easy to get wrong and expensive on hardware: the actuator runs *inside*
 consume(), which fires BEFORE the transfer's final-OK goes on the air (the node's drive loop).
 Acting synchronously would switch the radio (or reboot) before the Hub is acknowledged -> a
 missed final-OK, a stale config the Hub never hears, or a reset loop. So the actuator never
@@ -14,8 +14,8 @@ the final-OK is out. Mirrors v2's proven "reply on the old config, then switch."
 
 import json as _json
 
-from AlLoRa.DataSinks.Node_Control_Sink import Node_Control_Sink
-from AlLoRa.DataSinks.Control_Root_DataSink import RF_CONFIG, RESET
+from AlLoRa.Control.Node_Control_Actuator import Node_Control_Actuator
+from AlLoRa.Control.control_types import RF_CONFIG, RESET
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 
@@ -43,9 +43,9 @@ class _FakeNode:
 
 def test_rf_config_apply_queues_a_deferred_action_and_does_not_switch_now():
     node = _FakeNode()
-    sink = Node_Control_Sink(node)
+    actuator = Node_Control_Actuator(node)
 
-    sink.apply(RF_CONFIG, RF_PAYLOAD)
+    actuator.apply(RF_CONFIG, RF_PAYLOAD)
 
     assert node.rf_calls == [], \
         "the actuator must NOT switch the radio inside apply() (that runs before the final-OK)"
@@ -56,8 +56,8 @@ def test_rf_config_apply_queues_a_deferred_action_and_does_not_switch_now():
 
 def test_draining_the_queued_rf_config_action_applies_the_parsed_config():
     node = _FakeNode()
-    sink = Node_Control_Sink(node)
-    sink.apply(RF_CONFIG, RF_PAYLOAD)
+    actuator = Node_Control_Actuator(node)
+    actuator.apply(RF_CONFIG, RF_PAYLOAD)
 
     node.queued[0]()   # the Edge drains it after the final-OK is on the air
 
@@ -71,9 +71,9 @@ def test_reset_apply_queues_and_only_resets_on_drain():
     node = _FakeNode()
     reset_calls = []
     # Inject a fake reset so the suite never actually reboots; on-device this is machine.reset.
-    sink = Node_Control_Sink(node, reset_fn=lambda: reset_calls.append(1))
+    actuator = Node_Control_Actuator(node, reset_fn=lambda: reset_calls.append(1))
 
-    sink.apply(RESET, b"")
+    actuator.apply(RESET, b"")
     assert reset_calls == [], "RESET must not reboot inside apply() (that is before the final-OK)"
     assert len(node.queued) == 1, "a verified RESET must queue exactly one deferred action"
 
@@ -88,15 +88,15 @@ def test_malformed_rf_config_payload_is_dropped_not_queued_and_does_not_raise():
     # NOT raise: raising re-pulls the identical bad bytes forever and withholds the final-OK. Drop
     # it (the anti-loop rule the verifier's reject already follows), queue nothing.
     node = _FakeNode()
-    sink = Node_Control_Sink(node)
+    actuator = Node_Control_Actuator(node)
 
-    sink.apply(RF_CONFIG, b"not json at all {{{")   # must not raise
+    actuator.apply(RF_CONFIG, b"not json at all {{{")   # must not raise
     assert node.queued == [], "unparseable JSON must not queue an action"
 
-    sink.apply(RF_CONFIG, b"[1, 2, 3]")             # valid JSON, but not an object -> not a config
+    actuator.apply(RF_CONFIG, b"[1, 2, 3]")             # valid JSON, but not an object -> not a config
     assert node.queued == [], "a non-dict payload must not queue an action"
 
-    sink.apply(RF_CONFIG, b"\xff\xfe\x00bad-bytes")  # not even decodable
+    actuator.apply(RF_CONFIG, b"\xff\xfe\x00bad-bytes")  # not even decodable
     assert node.queued == [], "an undecodable payload must not queue an action"
 
 
@@ -154,9 +154,9 @@ def test_draining_an_rf_config_with_trial_sets_the_node_trial_window(tmp_path):
     # trial and reads the window from it — so a reconfig on a slow SF gets the backend-sized
     # window it needs, not a node-global guess.
     edge = _make_edge(tmp_path)
-    sink = Node_Control_Sink(edge)
+    actuator = Node_Control_Actuator(edge)
 
-    sink.apply(RF_CONFIG, b'{"sf":9,"bw":125,"tx_power":14,"trial":45}')
+    actuator.apply(RF_CONFIG, b'{"sf":9,"bw":125,"tx_power":14,"trial":45}')
     edge._pending_control()      # drain, as the Edge does after the pull's final-OK
 
     assert edge.sf_trial, "draining a verified RF_CONFIG must arm the trial"
@@ -167,9 +167,9 @@ def test_rf_config_without_trial_falls_back_to_a_toa_scaled_default(tmp_path):
     # An omitted `trial` is legal: the node self-sizes a ToA-scaled default so a window-less
     # command neither commits on noise nor rolls back too eagerly.
     edge = _make_edge(tmp_path)
-    sink = Node_Control_Sink(edge)
+    actuator = Node_Control_Actuator(edge)
 
-    sink.apply(RF_CONFIG, b'{"sf":9}')
+    actuator.apply(RF_CONFIG, b'{"sf":9}')
     edge._pending_control()
 
     assert edge.sf_trial
@@ -189,7 +189,7 @@ def test_verified_envelope_through_the_gate_reaches_the_actuator_and_queues(tmp_
 
     node = _FakeNode()
     gate = Control_Root_DataSink(control_root=CONTROL_ROOT_HEX, device_id=TARGET_DEVICE_ID,
-                                 executing_sink=Node_Control_Sink(node))
+                                 actuator=Node_Control_Actuator(node))
 
     gate.consume(_artifact(tmp_path, ENV_RF_CONFIG_VALID), Reception(source="hub"))
 

@@ -21,7 +21,7 @@ Two ways in, because a bridge is used two ways:
 import gc
 
 from AlLoRa.Connectors.Connector import Connector
-from AlLoRa.Links import tunnel_codec
+from AlLoRa import tunnel_codec
 from AlLoRa.Status import Status
 from AlLoRa.utils.time_utils import current_time_ms as time, ticks_add, ticks_diff, sleep
 from AlLoRa.utils.debug_utils import print

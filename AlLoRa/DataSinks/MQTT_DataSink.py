@@ -29,7 +29,7 @@ class MQTT_DataSink(DataSink):
         self.keepalive = keepalive
         self.cleanup = cleanup            # discard the reassembly temp after publishing
         self._topic_for = topic_for       # optional callable(source, filename) -> topic str
-        self._loop_guard = loop_guard     # shared with a co-located MQTT_Datasource
+        self._loop_guard = loop_guard     # shared with a co-located MQTT_DataSource
         self._client = client             # injected -> we don't own it; else built in prepare()
         self._owns_client = client is None
         self._flavor = "injected" if client is not None else None
@@ -48,7 +48,7 @@ class MQTT_DataSink(DataSink):
         payload = bytes(file.get_content())
         self._publish(topic, payload)
         if self._loop_guard is not None:
-            # Remember what we just injected: a co-located MQTT_Datasource hears this
+            # Remember what we just injected: a co-located MQTT_DataSource hears this
             # very publish echoed back and must not ship it over the link again.
             self._loop_guard.note(topic, payload)
         if self.cleanup:
@@ -72,7 +72,7 @@ class MQTT_DataSink(DataSink):
     def _topic(self, source, filename):
         # Precedence: explicit override > pairing convention > derived default. topic_for
         # keeps full control (it can decode an envelope name itself); otherwise a file a
-        # paired MQTT_Datasource named with the envelope republishes on its original
+        # paired MQTT_DataSource named with the envelope republishes on its original
         # topic, and a plain file lands under <prefix>/<source>/<filename>.
         if self._topic_for is not None:
             return self._topic_for(source, filename)

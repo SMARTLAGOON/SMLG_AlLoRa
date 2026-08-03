@@ -7,7 +7,7 @@ request/reply bytes whatever medium it runs on. The LoRa frame rides inside as a
 (v2 / v3-open / v3-secure all cross unchanged); these tests pin that the blob and the args
 survive the round trip.
 """
-from AlLoRa.Links import tunnel_codec as codec
+from AlLoRa import tunnel_codec as codec
 
 
 def test_transmit_request_round_trips_the_opaque_wire():

@@ -1,6 +1,6 @@
 class Loop_guard:
     """A tiny LRU set of recently self-published messages, shared by a paired
-    MQTT_Datasource + MQTT_DataSink working the SAME broker (the bridge deployment).
+    MQTT_DataSource + MQTT_DataSink working the SAME broker (the bridge deployment).
 
     The sink note()s every message it republishes; the datasource's subscription hears
     that republish echoed back and seen() tells it to drop it instead of shipping it

@@ -35,7 +35,7 @@ _ON_DEVICE_SECURE = [
     # the datasource + sink pair against its local broker).
     "AlLoRa/DataSource.py",
     "AlLoRa/DataSources/DataSource.py",
-    "AlLoRa/DataSources/MQTT_Datasource.py",
+    "AlLoRa/DataSources/MQTT_DataSource.py",
     "AlLoRa/DataSources/mqtt_naming.py",
     "AlLoRa/DataSources/Loop_guard.py",
     "AlLoRa/DataSinks/DataSink.py",

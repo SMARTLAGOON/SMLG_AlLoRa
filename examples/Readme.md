@@ -9,7 +9,7 @@ The Hub is the device that polls the Edges and pulls their data. One Hub can hol
 
 The Adapters are not nodes. They are bridges that carry the LoRa connection over another technology (WiFi, UART, etc), so that a device with no radio of its own, like a computer, can still reach the channel.
 
-A practical setup would be to have a LoRa-enabled ESP32 (LilyGo T3S3, Pycom LoPy4, etc) connected to a Sensor (Datasource), acting as an Edge, another ESP32 like the first one acting as a Serial Adapter, connected to a Raspberry Pi acting as a Hub. The Raspberry Pi will run the Hub part of the code and send commands to the LoRa module through the Serial Adapter, which will send the AlLoRa commands to the Edge. The data from the Sensor will end up in a folder named after the Edge in the Raspberry Pi, after being successfully polled by the Hub.
+A practical setup would be to have a LoRa-enabled ESP32 (LilyGo T3S3, Pycom LoPy4, etc) connected to a Sensor (a DataSource), acting as an Edge, another ESP32 like the first one acting as a Serial Adapter, connected to a Raspberry Pi acting as a Hub. The Raspberry Pi will run the Hub part of the code and send commands to the LoRa module through the Serial Adapter, which will send the AlLoRa commands to the Edge. The data from the Sensor will end up in a folder named after the Edge in the Raspberry Pi, after being successfully polled by the Hub.
 
 Let's try to run a simple example to understand how AlLoRa works.
 

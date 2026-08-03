@@ -1,17 +1,12 @@
 import hashlib
 
+from AlLoRa.Control.control_types import RF_CONFIG, RESET
 from AlLoRa.DataSinks.DataSink import DataSink
 from AlLoRa.Security.ec_p256 import ecdsa_verify, decode_public_key
 from AlLoRa.utils.debug_utils import print
 
 # Envelope format version (in the signed region). Bumped only when the byte-layout changes.
 ENVELOPE_VERSION = 1
-
-# Control artifact types (closed enum, in the signed region so a purpose can't be relabeled).
-RF_CONFIG = 1
-RESET = 2
-MODEL = 3
-OTA = 4
 
 # Only types with an actuator in this release are forwarded. A validly-signed but not-yet-
 # actuatable type (MODEL/OTA reserved) or an undefined byte is dropped at the gate, never
@@ -24,31 +19,30 @@ _HEADER_LEN = 1 + 1 + _TARGET_LEN          # version, type, target_device_id
 _MIN_LEN = _HEADER_LEN + _SIG_LEN          # 98: the fixed overhead with an empty payload
 
 
-class Control_Sink:
-    """The actuator boundary the verifier hands a *verified* control artifact to."""
-
-    def apply(self, control_type, payload):
-        raise NotImplementedError(
-            "Control_Sink subclasses must implement apply(control_type, payload)")
-
-
 class Control_Root_DataSink(DataSink):
+    """The verify gate of the control path: a DataSink that only forwards what is authentic.
 
-    def __init__(self, control_root, device_id, executing_sink):
-        # Fail closed at construction: a mis-provisioned executing sink must refuse to start,
-        # never silently forward unverified commands.
+    It takes a downlink file off the air like any other sink, checks the envelope and the
+    signature against the control root, and hands the verified artifact to a `Control_Actuator`,
+    which owns the effect and the timing of it. All the crypto lives here and no device
+    knowledge does, so the same gate is reused on any node with any actuator behind it.
+    """
+
+    def __init__(self, control_root, device_id, actuator):
+        # Fail closed at construction: a mis-provisioned gate must refuse to start, never
+        # silently forward unverified commands.
         if not control_root:
             raise ValueError(
-                "an executing control sink requires a control_root public key: refusing to run "
-                "unverified (a registered node must never act on an unsigned command)")
-        if executing_sink is None:
-            raise ValueError("Control_Root_DataSink wraps an executing sink; none was given")
+                "verifying a control artifact requires a control_root public key: refusing to "
+                "run unverified (a registered node must never act on an unsigned command)")
+        if actuator is None:
+            raise ValueError("Control_Root_DataSink wraps an actuator; none was given")
         if device_id is None or len(device_id) != _TARGET_LEN:
             raise ValueError(
                 "device_id must be this node's 32-byte identity fingerprint (its device_id)")
         self.control_root = self._load_control_root(control_root)
         self.device_id = bytes(device_id)
-        self.executing_sink = executing_sink
+        self.actuator = actuator
 
     @staticmethod
     def _load_control_root(control_root):
@@ -74,7 +68,7 @@ class Control_Root_DataSink(DataSink):
         control_type, payload = verified
         # Authentic and for us. An actuation failure inside apply() is transient and is allowed
         # to propagate: the drive loop rewinds and re-pulls, giving at-least-once delivery.
-        self.executing_sink.apply(control_type, payload)
+        self.actuator.apply(control_type, payload)
 
     def _verify(self, content):
         # Cheap structural checks first, the one expensive ECDSA last (on-device CPU is sacred):
