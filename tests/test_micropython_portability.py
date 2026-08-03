@@ -26,7 +26,6 @@ _ON_DEVICE_SECURE = [
     "AlLoRa/Codec.py",
     "AlLoRa/Status.py",
     "AlLoRa/Nodes/Node.py",
-    "AlLoRa/Nodes/Swap_base.py",
     "AlLoRa/Nodes/Edge.py",
     "AlLoRa/Nodes/Hub.py",
     "AlLoRa/Nodes/Source.py",

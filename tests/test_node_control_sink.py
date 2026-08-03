@@ -5,7 +5,7 @@ verified (control_type, payload) to an executing sink. This is that sink: it tur
 RF_CONFIG into a node RF-config change and a verified RESET into a hard reset.
 
 The one behavior that is easy to get wrong and expensive on hardware: the sink runs *inside*
-consume(), which fires BEFORE the transfer's final-OK goes on the air (Swap_base drive loop).
+consume(), which fires BEFORE the transfer's final-OK goes on the air (the node's drive loop).
 Acting synchronously would switch the radio (or reboot) before the Hub is acknowledged -> a
 missed final-OK, a stale config the Hub never hears, or a reset loop. So the actuator never
 acts in apply(): it *queues* the action, and the Edge drains it after the pull completes, once

@@ -39,6 +39,14 @@ committed RF trial actually survive a reboot (the earlier freeze wrote the live 
 the loader never read, so a committed sf7→sf9 came back as sf7 on the next boot); reboot-persistence
 therefore only works once the device runs a rebuild from this freeze.
 
+The structure pass changes the **set** of frozen modules, not just their contents:
+`AlLoRa/Nodes/Swap_base.py` is gone and its two whole-file loops now live on `AlLoRa/Nodes/Node.py`,
+so a device flashed before it holds a module the source no longer has. It also changes how a
+`device_id`-registered endpoint is named off the air (results folder, MQTT topic, status line), which
+a Hub polling several registered Edges needs. Both reach a board only on a rebuild, and this
+paragraph is the trigger for one: the workflow's push filter watches `firmware/**`, so a
+protocol-only commit never starts a build on its own.
+
 ## Adding a target (new device or new modem)
 
 1. If it's a **new modem**, vendor its driver under `drivers/<name>/` (pin the exact version).

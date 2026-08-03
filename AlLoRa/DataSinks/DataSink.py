@@ -11,7 +11,8 @@ class Reception:
 
     def __init__(self, source, session_id=None, device_id=None,
                  rssi=None, snr=None, total_chunks=None, timestamp_ms=None):
-        self.source = source              # the Source's MAC (the folder / topic key)
+        self.source = source              # the sender's label (the folder / topic key): its
+                                          # short MAC, or device_id[:4] hex once registered
         self.session_id = session_id      # sid
         self.device_id = device_id        # did (v3 secure); None in open mode
         self.rssi = rssi                  # final RF snapshot

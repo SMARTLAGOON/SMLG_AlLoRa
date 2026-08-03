@@ -2,7 +2,7 @@
 
 The class survives as an alias so a year of student code, examples and firmware keep
 importing and running unchanged; new code and docs say Edge. The whole machinery lives on
-the unified swappable node (`Swap_base`), which an Edge presets to the "source" home role.
+`Node`, which an Edge presets to the "source" home role.
 """
 from AlLoRa.Nodes.Edge import Edge
 

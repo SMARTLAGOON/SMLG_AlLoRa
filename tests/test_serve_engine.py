@@ -111,7 +111,7 @@ def test_send_file_timeout_is_measured_in_seconds(tmp_path, monkeypatch):
     # milliseconds. A 1-second timeout has to let ~1s of receive windows pass before giving up;
     # under the old ms reading it would bail after the very first window (~300 ms).
     clock = {"now": 100000}
-    monkeypatch.setattr("AlLoRa.Nodes.Swap_base.time", lambda: clock["now"])
+    monkeypatch.setattr("AlLoRa.Nodes.Node.time", lambda: clock["now"])
 
     config_path = str(tmp_path / "edge.json")
     _write_config(config_path)
@@ -382,7 +382,7 @@ def test_trial_holds_on_a_mid_transfer_ok_poll(tmp_path):
 
 def test_serve_restores_last_known_good_after_a_silent_trial_window(tmp_path):
     # The deployed Edge home loop (serve) had NO trial→restore — only the legacy send_file
-    # loop did (Swap_base). A verified RF_CONFIG that makes the Edge unreachable (nothing is
+    # loop did (the shared node base). A verified RF_CONFIG that makes the Edge unreachable (nothing is
     # heard on the new config) must still self-heal: after the trial window of silence, the
     # serve loop falls back to the last-known-good config. The `trial` seconds ride the
     # (signed) payload; change_rf_config reads them.

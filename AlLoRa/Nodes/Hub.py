@@ -13,7 +13,7 @@ which is why `Requester` and `Gateway` are now presets rather than separate node
 import gc
 from os import urandom
 from json import loads
-from AlLoRa.Nodes.Swap_base import Swap_base
+from AlLoRa.Nodes.Node import Node
 from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids
 from AlLoRa.DataSources.DataSource import DataSource
 from AlLoRa.utils.time_utils import current_time_ms as time, sleep, ticks_add, ticks_diff
@@ -30,7 +30,7 @@ class _Downlink_queue(DataSource):
         self.file_queue.append(file)
 
 
-class Hub(Swap_base):
+class Hub(Node):
 
     def __init__(self, connector=None, config_file="LoRa.json",
                  debug_hops=False,
@@ -106,7 +106,7 @@ class Hub(Swap_base):
                     self.digital_endpoints.append(active_node)
                     if self.debug:
                         print("Node {} ({}) added with frequency {}s and listening time {}s.".format(
-                            active_node.get_name(), active_node.get_mac_address(),
+                            active_node.get_name(), active_node.get_label(),
                             active_node.asking_frequency, active_node.listening_time))
             self._register_endpoints()
             return len(self.digital_endpoints)
@@ -125,11 +125,11 @@ class Hub(Swap_base):
         # the map subscribers read. Run on every change to the collection, so an endpoint
         # registered after boot is as addressable, and as visible, as one loaded from file.
         assign_session_ids(self.digital_endpoints)
-        self.status["Digital_Endpoints"] = {ep.get_mac_address(): ep.file_reception_info
+        self.status["Digital_Endpoints"] = {ep.get_label(): ep.file_reception_info
                                             for ep in self.digital_endpoints}
 
     def update_subscribers(self, digital_endpoint):
-        self.status["Digital_Endpoints"][digital_endpoint.get_mac_address()] = \
+        self.status["Digital_Endpoints"][digital_endpoint.get_label()] = \
             digital_endpoint.file_reception_info
         self.status.notify()
 
@@ -147,7 +147,11 @@ class Hub(Swap_base):
         end_time = None if timeout is None else ticks_add(time(), timeout * 1000)
         # Everything is due on entry. Seeded with the current tick rather than 0 because
         # these are wrapping counters: a fixed 0 is not "the past", it is half a period away.
-        next_visit = {ep.get_mac_address(): time() for ep in self.digital_endpoints}
+        # Keyed by label, never by MAC: device_id-registered endpoints all share the
+        # "00000000" MAC default, which collapsed this whole map to ONE entry. Every
+        # registered endpoint then shared a single due-time, so visiting any one of them
+        # silenced all the others for a full asking_frequency and the round-robin died.
+        next_visit = {ep.get_label(): time() for ep in self.digital_endpoints}
 
         while end_time is None or ticks_diff(end_time, time()) > 0:
             if not self.digital_endpoints:
@@ -155,23 +159,23 @@ class Hub(Swap_base):
                 continue
             pass_start = time()
             for endpoint in sorted(self.digital_endpoints,
-                                   key=lambda ep: ticks_diff(next_visit[ep.get_mac_address()],
+                                   key=lambda ep: ticks_diff(next_visit[ep.get_label()],
                                                              pass_start)):
                 if end_time is not None and ticks_diff(end_time, time()) <= 0:
                     return
-                mac = endpoint.get_mac_address()
-                if ticks_diff(time(), next_visit[mac]) >= 0:
+                label = endpoint.get_label()
+                if ticks_diff(time(), next_visit[label]) >= 0:
                     try:
                         self._visit(endpoint, print_file_content, save_files)
                     except Exception as e:
                         if self.debug:
                             print("Error listening to endpoint {} ({}): {}".format(
-                                endpoint.get_name(), mac, e))
+                                endpoint.get_name(), label, e))
                     finally:
                         # Reschedule whether the visit worked or threw: an endpoint that
                         # fails every time must not be retried without pause, which would
                         # starve every other endpoint of the channel.
-                        next_visit[mac] = ticks_add(time(), endpoint.asking_frequency * 1000)
+                        next_visit[label] = ticks_add(time(), endpoint.asking_frequency * 1000)
                 sleep(self.NEXT_ACTION_TIME_SLEEP)
 
     def check_digital_endpoints(self, print_file_content=False, save_files=False, timeout=None):
@@ -184,7 +188,7 @@ class Hub(Swap_base):
     def _visit(self, digital_endpoint, print_file_content, save_files):
         if self.debug:
             print("Listening to endpoint {} ({}) for {}s".format(
-                digital_endpoint.get_name(), digital_endpoint.get_mac_address(),
+                digital_endpoint.get_name(), digital_endpoint.get_label(),
                 digital_endpoint.listening_time))
         self.listen_to_endpoint(digital_endpoint, digital_endpoint.listening_time,
                                 print_file=print_file_content, save_file=save_files)
@@ -199,7 +203,7 @@ class Hub(Swap_base):
             return
         if self.debug:
             print("Listening to endpoint {} ({}) for {}s due to missing chunks".format(
-                digital_endpoint.get_name(), digital_endpoint.get_mac_address(),
+                digital_endpoint.get_name(), digital_endpoint.get_label(),
                 digital_endpoint.max_listen_time_when_locked))
         self.listen_to_endpoint(digital_endpoint, digital_endpoint.max_listen_time_when_locked,
                                 print_file=print_file_content, save_file=save_files)

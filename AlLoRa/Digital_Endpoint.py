@@ -128,10 +128,25 @@ class Digital_Endpoint:
         self.debug = debug
 
     def __repr__(self):
-        return "Digital_Endpoint({} ({})".format(self.name, self.mac_address)
+        return "Digital_Endpoint({} ({})".format(self.name, self.get_label())
 
     def get_name(self):
         return self.name
+
+    def get_label(self):
+        # How this endpoint is named OUTSIDE the radio: the results folder, the MQTT topic
+        # segment, the status line. Never an address, so nothing on the wire reads it.
+        #
+        # A device_id-registered endpoint has no MAC to be named by (the operator registers a
+        # fingerprint, and v3 never puts a MAC on the wire), so `mac_address` stays at its
+        # "00000000" default for every one of them. Naming by that default gave every
+        # registered node the SAME folder and topic: two Edges sending `data.txt` overwrote
+        # each other, which is precisely the multi-node deployment secure mode exists for.
+        # device_id[:4] is the first-contact address, already unique per node, and its hex is
+        # 8 characters, the same shape as the short MAC it stands in for.
+        if self.device_id is not None:
+            return self.device_id[:4].hex()
+        return self.mac_address
 
     def get_mac_address(self):
         return self.mac_address

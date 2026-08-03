@@ -1,8 +1,8 @@
 """Deprecated name: `Requester` is now `Hub` (named by placement, not by who requests).
 
 The class survives as an alias so existing collectors, gateways and examples keep importing
-and running unchanged; new code and docs say Hub. The whole machinery lives on the unified
-swappable node (`Swap_base`), which a Hub presets to the "collector" home role.
+and running unchanged; new code and docs say Hub. The whole machinery lives on `Node`, which
+a Hub presets to the "collector" home role.
 """
 from AlLoRa.Nodes.Hub import Hub
 

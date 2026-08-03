@@ -597,7 +597,7 @@ def _install_wrapping_clock(monkeypatch, wrap_in_ms=1000):
     # hit the 2^30 wrap `wrap_in_ms` from now (advancing with real time).
     import AlLoRa.Nodes.Hub as hub_module
     import AlLoRa.Nodes.Edge as edge_module
-    import AlLoRa.Nodes.Swap_base as swap_module
+    import AlLoRa.Nodes.Node as node_module
 
     base = time.time() * 1000
     start = (1 << 30) - wrap_in_ms
@@ -605,7 +605,7 @@ def _install_wrapping_clock(monkeypatch, wrap_in_ms=1000):
     def fake_ticks():
         return int(start + time.time() * 1000 - base) % (1 << 30)
 
-    for module in (hub_module, edge_module, swap_module):
+    for module in (hub_module, edge_module, node_module):
         monkeypatch.setattr(module, "time", fake_ticks)
 
 

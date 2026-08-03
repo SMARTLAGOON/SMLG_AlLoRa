@@ -307,3 +307,70 @@ def test_a_gateway_built_the_old_way_still_registers_its_endpoints(tmp_path):
     gateway = Gateway(Loopback_connector(HUB_MAC), config, False, 0.1, nodes, None)
 
     assert [ep.get_name() for ep in gateway.digital_endpoints] == ["edge-a"]
+
+
+# --- how an endpoint is named off the air -------------------------------------------------
+#
+# A device_id-registered endpoint has no MAC: the operator registers a fingerprint, and v3
+# puts no MAC on the wire, so `mac_address` keeps its "00000000" default forever. Everything
+# that named a peer by that default therefore named EVERY registered peer the same, which
+# broke exactly the deployment secure mode exists for: a Hub polling several registered Edges.
+
+def _registered(name, device_id, **overrides):
+    """An endpoint the v3 way: identity, no MAC."""
+    node = {"name": name, "device_id": device_id, "active": True,
+            "asking_frequency": 60, "listening_time": 30}
+    node.update(overrides)
+    return node
+
+
+def test_a_registered_endpoint_is_labeled_by_its_identity_not_the_absent_mac():
+    endpoint = Digital_Endpoint(config=_registered("edge-a", "1ee385e641d52898"))
+
+    assert endpoint.get_mac_address() == "00000000", "no MAC is the premise of this test"
+    assert endpoint.get_label() == "1ee385e6", "the label must come from device_id[:4]"
+
+
+def test_two_registered_endpoints_do_not_share_one_label(tmp_path):
+    # The collision itself: distinct nodes, distinct sids, and (before the fix) one identical
+    # name for the results folder, the MQTT topic and the status line. Same-named files from
+    # two different Edges overwrote each other.
+    hub = _make_hub(tmp_path, [_registered("edge-a", "1ee385e641d52898"),
+                               _registered("edge-b", "7c4419aa02bd6631")])
+
+    labels = [ep.get_label() for ep in hub.digital_endpoints]
+    assert labels == ["1ee385e6", "7c4419aa"]
+    assert len(set(labels)) == 2
+
+
+def test_a_mac_registered_endpoint_is_still_labeled_by_its_mac():
+    # v2 deployments must not move: with no identity there is nothing else to be named by.
+    endpoint = Digital_Endpoint(config=_node("edge-a", "a1a1a1a1"))
+
+    assert endpoint.get_label() == "a1a1a1a1"
+
+
+def test_the_status_map_holds_one_entry_per_registered_endpoint(tmp_path):
+    # Keyed by the MAC default, this dict collapsed to a single entry however many endpoints
+    # were registered, so a subscriber (a screen, the control site) saw one merged node.
+    hub = _make_hub(tmp_path, [_registered("edge-a", "1ee385e641d52898"),
+                               _registered("edge-b", "7c4419aa02bd6631")])
+
+    assert sorted(hub.status["Digital_Endpoints"]) == ["1ee385e6", "7c4419aa"]
+
+
+def test_the_visit_schedule_does_not_collapse_registered_endpoints_onto_one_slot(tmp_path, clock):
+    # The sharpest edge of the same bug. `next_visit` was keyed by MAC, so every registered
+    # endpoint shared ONE due-time: visiting any one of them pushed that single deadline out
+    # by its asking_frequency and silenced all the others until it expired. A Hub with three
+    # registered Edges polled one per cycle instead of three, and the round-robin the design
+    # promises did not happen at all.
+    hub = _make_hub(tmp_path, [_registered("edge-a", "1ee385e641d52898", listening_time=1),
+                               _registered("edge-b", "7c4419aa02bd6631", listening_time=1),
+                               _registered("edge-c", "b30a5d1cff204e77", listening_time=1)])
+    visits = []
+    _record_visits(hub, clock, visits)
+
+    hub.run(timeout=10)
+
+    assert sorted({name for name, _ in visits}) == ["edge-a", "edge-b", "edge-c"]

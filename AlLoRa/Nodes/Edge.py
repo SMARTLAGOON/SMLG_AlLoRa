@@ -10,13 +10,13 @@ yields the instant it hears its Hub polling again. `data_sink` is therefore wher
 production).
 """
 import gc
-from AlLoRa.Nodes.Swap_base import Swap_base
+from AlLoRa.Nodes.Node import Node
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.utils.time_utils import current_time_ms as time, ticks_add, ticks_diff
 from AlLoRa.utils.debug_utils import print
 
 
-class Edge(Swap_base):
+class Edge(Node):
 
     def __init__(self, connector=None, config_file="LoRa.json", data_sink=None,
                  datasource=None, downlink_window=60):

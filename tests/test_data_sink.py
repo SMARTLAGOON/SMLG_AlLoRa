@@ -41,7 +41,7 @@ def _write_config(path, result_path):
         json.dump(config, f)
 
 
-def _run_transfer(tmp_path, payload, filename, data_sink=None):
+def _run_transfer(tmp_path, payload, filename, data_sink=None, endpoint=None):
     """A full v3-open Source -> Collector transfer over the loopback seam, optionally with a
     custom sink on the Collector. Mirrors test_v3_open_transfer's harness."""
     result_path = str(tmp_path / "Results")
@@ -53,8 +53,9 @@ def _run_transfer(tmp_path, payload, filename, data_sink=None):
     source.set_file(AlLoRa_File(name=filename, content=bytearray(payload),
                                 chunk_size=source.get_chunk_size()))
     collector = Requester(collector_conn, config_file=config_file, data_sink=data_sink)
-    endpoint = Digital_Endpoint(name="src", mac_address=SOURCE_MAC,
-                                active=True, session_id=SESSION_ID)
+    if endpoint is None:
+        endpoint = Digital_Endpoint(name="src", mac_address=SOURCE_MAC,
+                                    active=True, session_id=SESSION_ID)
 
     errors = []
 
@@ -123,6 +124,25 @@ def test_injected_sink_receives_completed_file_and_replaces_disk(tmp_path):
     assert content == payload, "sink received a corrupt/incomplete file"
     # A custom sink replaces the disk write; the file must not also be persisted.
     assert not (tmp_path / "Results" / SOURCE_MAC / "v3.bin").exists()
+
+
+def test_a_registered_endpoints_file_lands_under_its_identity_not_00000000(tmp_path):
+    # A device_id-registered endpoint has no MAC, so `mac_address` stays at its "00000000"
+    # default and the folder was built from that: every registered Edge saved into
+    # Results/00000000/, where same-named files silently overwrote each other. A
+    # single-endpoint test cannot see it; the deployment it breaks is a Hub with several
+    # registered nodes, which is what secure mode is for.
+    payload = bytes(i % 256 for i in range(1000))
+    endpoint = Digital_Endpoint(name="src", active=True, session_id=SESSION_ID,
+                                device_id="1ee385e641d52898172380d95b7914ec")
+    sink = _CapturingSink()
+    _run_transfer(tmp_path, payload, "v3.bin", data_sink=sink, endpoint=endpoint)
+
+    assert endpoint.get_mac_address() == "00000000", "no MAC is the premise of this test"
+    assert len(sink.received) == 1, "sink was not handed exactly one completed file"
+    rec, _, content = sink.received[0]
+    assert rec.source == "1ee385e6", "the sink's folder/topic key is still the absent MAC"
+    assert content == payload
 
 
 # --- unit: the concrete sinks + File.discard ------------------------------------------------
