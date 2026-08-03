@@ -28,8 +28,8 @@ Check the [examples folder](examples) for more information about how to run the 
 Links of interest:
 
 - [Setting up AlLoRa in LilyGo T3S3 devices](firmware/T3S3/)
-- [Setting up AlLoRa in LoPy4 devices](examples/Requesters/LopyRequester)
-- [Setting up AlLoRa in Raspberry Pi or other computers](examples/Gateways)
+- [Setting up AlLoRa in LoPy4 devices](examples/Hubs/One-Edge/LoPy4)
+- [Setting up AlLoRa in Raspberry Pi or other computers](examples/Hubs/Many-Edges)
 
 
 ----
