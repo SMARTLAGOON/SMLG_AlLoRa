@@ -3,7 +3,7 @@
 Named by where it sits, not by which way data flows: an Edge lives with the sensors/devices
 at the end of the link and *serves* by default (home role "source"): uplink is always
 Edge-serves / Hub-pulls, even for a large file. It still carries the drive loop, because a
-downlink reverses the roles for one pull: the Hub delegates the drive role with a GRANT and
+downlink reverses the roles for one pull: the Hub delegates the collector role with a GRANT and
 this Edge pulls the pending file, then comes home. The Edge never self-promotes, and it
 yields the instant it hears its Hub polling again. `data_sink` is therefore where a
 *downlink* lands on an Edge (a capturing sink in tests, an apply-the-artifact sink in
@@ -35,13 +35,13 @@ class Edge(Node):
         self._grant_pending = swap_id
 
     def run(self, timeout=None):
-        """The Edge's main loop: answer the Hub's polls and uplink pulls (serve role), and
+        """The Edge's main loop: answer the Hub's polls and uplink pulls (source role), and
         honor a GRANT by temporarily driving one downlink pull, then come home. `timeout`
         is in seconds; None runs forever (the deployed main loop).
 
         Both node types run with the same verb: `Edge(...).run()` and `Hub(...).run()`. It is
         deliberately not called `serve` here, even though serving is what an Edge mostly does,
-        because "serve" already names a *role* both node types take in turn, and an Edge that
+        because `serve` names one of the two things a node does in a round, and an Edge that
         honors a GRANT spends part of this very loop driving instead."""
         end_time = None if timeout is None else ticks_add(time(), timeout * 1000)
         while end_time is None or ticks_diff(end_time, time()) > 0:

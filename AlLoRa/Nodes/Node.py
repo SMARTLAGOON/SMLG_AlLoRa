@@ -359,7 +359,7 @@ class Node:
 
     # --- the shared one-round engine: request (initiator) / respond (responder) ------------
     # Both roles run the same round from opposite sides, so both verbs live here on the Node.
-    # Role reversal is just a node calling the other verb (the drive-role swaps; the type and
+    # Role reversal is just a node calling the other verb (the drive swaps; the type and
     # the trust-anchor don't).
 
     def request(self, packet):
@@ -723,7 +723,7 @@ class Node:
             self._serve(packet)
 
     def _on_grant(self, packet):
-        # Base: ignore. The Edge preset overrides this to accept the delegated drive role;
+        # Base: ignore. The Edge preset overrides this to accept the delegated collector role;
         # a Hub (the authority) never takes a GRANT from anyone.
         pass
 
@@ -735,7 +735,7 @@ class Node:
         pass
 
     def _maybe_delegate(self, digital_endpoint):
-        # Base: nothing to delegate. The Hub preset overrides this to hand the drive role
+        # Base: nothing to delegate. The Hub preset overrides this to hand the collector role
         # to an Edge (GRANT) when a downlink file is pending for it at a safe boundary.
         return False
 
@@ -776,7 +776,7 @@ class Node:
                 and self._last_reply_kind == Packet_v3.OK):
             self.yield_count += 1
             if self.debug:
-                print("Yielding the drive role: the authority is polling again")
+                print("Yielding the collector role: the authority is polling again")
             return True
         return False
 
@@ -1248,7 +1248,7 @@ class Node:
                 # The safe boundary for a downlink delegation: any idle point between
                 # complete files (pre-contact OK, or the idle metadata-poll loop), but
                 # never mid-chunk (a reassembly in progress must finish first). With a
-                # downlink pending, the Hub preset delegates the drive role here (GRANT +
+                # downlink pending, the Hub preset delegates the collector role here (GRANT +
                 # serve + reclaim) instead of running this round's request.
                 if digital_endpoint.state != "PROCESS_CHUNK_STATE" \
                         and self._maybe_delegate(digital_endpoint):
@@ -1336,7 +1336,7 @@ class Node:
                 if self.sf_trial and self.protocol_version < 3:
                     # Legacy v2 drive-side trial (a Collector changing its own config via
                     # ask_change_rf): commit on the first successful round, as v2 always did.
-                    # In v3 the trial is owned by the serve role and resolved by a full-payload
+                    # In v3 the trial is owned by the source role and resolved by a full-payload
                     # exchange (see `response`); the drive loop only carries the window backstop.
                     self._commit_trial()
 

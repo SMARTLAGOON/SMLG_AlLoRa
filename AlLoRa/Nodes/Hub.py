@@ -3,7 +3,7 @@
 Named by where it sits: the Hub is the permanent controller of its Edges. It polls, pulls
 their uplink files, and never surrenders control. Its home role is "collector" (the drive
 loop); it also carries the serve loop because a downlink temporarily reverses the roles:
-the Hub delegates the drive role to an Edge with a GRANT, serves the pending file to the
+the Hub delegates the collector role to an Edge with a GRANT, serves the pending file to the
 Edge's pull, and reclaims control the moment the pull ends (or its reclaim timer fires).
 
 A Hub holds one or more endpoints and runs the visit loop over them itself (`run()`). One
@@ -405,7 +405,7 @@ class Hub(Node):
         grant.set_session(digital_endpoint.session_id)
         grant.set_grant(self._swap_id)
         # Fire-and-forget, like the final-OK: a lost GRANT is benign (the Edge never left
-        # its serve role). It just costs this reclaim window before the poll resumes.
+        # its source role). It just costs this reclaim window before the poll resumes.
         self.send_lora(grant)
         if self.debug:
             print("GRANT({}) to sid {}".format(self._swap_id, digital_endpoint.session_id))
