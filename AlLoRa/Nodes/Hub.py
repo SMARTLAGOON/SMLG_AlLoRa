@@ -8,7 +8,7 @@ Edge's pull, and reclaims control the moment the pull ends (or its reclaim timer
 
 A Hub holds one or more endpoints and runs the visit loop over them itself (`run()`). One
 endpoint is the 1:1 collector, many is the gateway deployment: the same class either way,
-which is why `Requester` and `Gateway` are now presets rather than separate nodes.
+which is why the two v2 classes it replaces are gone rather than kept as separate nodes.
 """
 import gc
 from os import urandom

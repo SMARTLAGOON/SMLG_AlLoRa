@@ -79,17 +79,17 @@ handshake. Known traps the frozen library must avoid (all fixed, listed so they 
 `tests/test_micropython_portability.py` scans the frozen secure path for these names so CI, not
 the ESP32, is what fails when a new one creeps in.
 
-Rule of thumb: after any change to the secure path, don't trust CI alone — flash and confirm the
-Source boots **without** the `secure mode … running open (degraded): …` line, whose suffix now
+Rule of thumb: after any change to the secure path, don't trust CI alone: flash and confirm the
+Edge boots **without** the `secure mode … running open (degraded): …` line, whose suffix now
 names the exact backend failure. Note the frozen library is baked into the `.bin`, so a
 library-only change needs a firmware rebuild to reach the device.
 
 **Registering a secure node (device_id, not MAC).** A secure node's first contact is addressed by
 its device_id, the fingerprint of its long-term identity key (`SHA256(pubkey)`), not by its wifi
-MAC. On first boot the Source generates that key, persists it to the `identity_file` named in
-`LoRa.json` (so the device_id is stable across reboots), and prints it as `SOURCE device_id
-(register this on the Collector): <hex>`. Bring-up is therefore two passes: boot the Source once to
-read its device_id, then register that value on the Collector (`Digital_Endpoint(device_id="<hex>",
+MAC. On first boot the Edge generates that key, persists it to the `identity_file` named in
+`LoRa.json` (so the device_id is stable across reboots), and prints it as `EDGE device_id
+(register this on the Hub): <hex>`. Bring-up is therefore two passes: boot the Edge once to
+read its device_id, then register that value on the Hub (`Digital_Endpoint(device_id="<hex>",
 active=True)`) before starting the pull. The session id derives from the same identity, so no
 hand-assigned `session_id` is needed; set one in config only to override for debugging or to break a
 rare 1-byte clash. A node registered by MAC instead keeps the legacy two-MAC handshake.

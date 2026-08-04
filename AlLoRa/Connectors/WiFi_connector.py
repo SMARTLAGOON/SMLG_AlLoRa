@@ -3,7 +3,7 @@
 Thin over Tunnel_connector: a split Connector whose transport verbs cross an HTTP link to a
 bridge (Adapter) running the radio. The tunnel logic lives in Tunnel_connector; this only
 builds the concrete WiFi_link client from the config and keeps the old constructor so existing
-Gateway examples import it unchanged. It replaces the previous JSON-command HTTP protocol,
+Hub examples import it unchanged. It replaces the previous JSON-command HTTP protocol,
 which re-parsed the frame on the bridge and so only ever spoke v2.
 """
 from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector

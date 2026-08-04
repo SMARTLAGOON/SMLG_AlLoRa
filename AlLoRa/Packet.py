@@ -10,15 +10,15 @@ class Packet:
 
     # SM = Short MAC
     HEADER_SIZE_P2P_SM  = 12 #20
-    HEADER_FORMAT_P2P_SM  = "!4s4sB3s" #Source, Destination, Flags, Check Sum
+    HEADER_FORMAT_P2P_SM  = "!4s4sB3s" #Src MAC, Dst MAC, Flags, Check Sum
     HEADER_SIZE_MESH_SM  = 14  #22
-    HEADER_FORMAT_MESH_SM  = "!4s4sB2s3s" #Source, Destination, Flags, ID, Check Sum
+    HEADER_FORMAT_MESH_SM  = "!4s4sB2s3s" #Src MAC, Dst MAC, Flags, ID, Check Sum
 
     # LM = Long MAC
     HEADER_SIZE_P2P_LM  = 20
-    HEADER_FORMAT_P2P_LM  = "!8s8sB3s" #Source, Destination, Flags, Check Sum
+    HEADER_FORMAT_P2P_LM  = "!8s8sB3s" #Src MAC, Dst MAC, Flags, Check Sum
     HEADER_SIZE_MESH_LM  = 22
-    HEADER_FORMAT_MESH_LM  = "!8s8sB2s3s" #Source, Destination, Flags, ID, Check Sum
+    HEADER_FORMAT_MESH_LM  = "!8s8sB2s3s" #Src MAC, Dst MAC, Flags, ID, Check Sum
 
     OK = "OK"
     METADATA = "METADATA"  #"request-data-info"

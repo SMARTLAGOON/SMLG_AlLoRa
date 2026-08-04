@@ -146,25 +146,12 @@ def test_edge_and_hub_start_at_home_roles(tmp_path):
         assert callable(node.send_file)            # serve
 
 
-def test_legacy_names_are_aliases_of_the_unified_node(tmp_path):
-    from AlLoRa.Nodes.Source import Source
-    from AlLoRa.Nodes.Requester import Requester
-    from AlLoRa.Nodes.Gateway import Gateway
-
-    assert issubclass(Source, Edge)
-    assert issubclass(Requester, Hub)
-    assert issubclass(Gateway, Requester)
-
-
-def test_dead_sleep_param_refused_by_hub_swallowed_by_shims(tmp_path):
+def test_dead_sleep_param_is_refused_rather_than_swallowed(tmp_path):
     # NEXT_ACTION_TIME_SLEEP has been a silent no-op since v2.0, when the adaptive
-    # sleep controller (now Pacing) replaced the fixed inter-request gap. The new
-    # surface refuses it — accepting a dead knob is a lie — while the deprecated
-    # shims keep accepting and ignoring it (exactly what v2.0 did), so fielded
-    # main.py files construct unchanged. Runtime tuning lives on Pacing.
-    from AlLoRa.Nodes.Requester import Requester
-    from AlLoRa.Nodes.Gateway import Gateway
-
+    # sleep controller (now Pacing) replaced the fixed inter-request gap. v2 swallowed
+    # it; the v3 surface refuses it, because accepting a dead knob is a lie: a
+    # deployment that passes it is telling the node something the node cannot honour,
+    # and would go on believing it had set the gap. Runtime tuning lives on Pacing.
     config = str(tmp_path / "hub.json")
     _write_config(config, str(tmp_path / "results"), HUB_OWN_SID)
     conn, _ = Loopback_connector.create_pair(HUB_MAC, EDGE_MAC)
@@ -172,12 +159,8 @@ def test_dead_sleep_param_refused_by_hub_swallowed_by_shims(tmp_path):
     with pytest.raises(TypeError):
         Hub(conn, config_file=config, NEXT_ACTION_TIME_SLEEP=0.1)
 
-    requester = Requester(conn, config_file=config, NEXT_ACTION_TIME_SLEEP=0.1)
-    assert requester.pacing.sleep == requester.pacing.min_sleep   # seed untouched
-
-    gateway = Gateway(conn, config_file=config, NEXT_ACTION_TIME_SLEEP=0.1,
-                      nodes_file=str(tmp_path / "no_nodes.json"))
-    assert gateway.pacing.sleep == gateway.pacing.min_sleep
+    with pytest.raises(TypeError):
+        Edge(conn, config_file=config, NEXT_ACTION_TIME_SLEEP=0.1)
 
 
 # --- happy path: downlink byte-exact, then control returns to the Hub --------

@@ -9,7 +9,7 @@ window returns None so the role-specific driver can do its own bookkeeping.
 import json
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Nodes.Source import Source
+from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Packet_v3 import Packet_v3
 
 SESSION_ID = 42
@@ -27,7 +27,7 @@ def _make_source(tmp_path):
     with open(config_file, "w") as f:
         json.dump(config, f)
     conn, _peer = Loopback_connector.create_pair("a1a1a1a1", "b2b2b2b2")
-    return Source(conn, config_file=config_file), conn
+    return Edge(conn, config_file=config_file), conn
 
 
 def _request(sid):

@@ -13,8 +13,8 @@ from AlLoRa.Links.Serial_link import Serial_link
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
 from AlLoRa.Adapters.Adapter import Adapter
-from AlLoRa.Nodes.Source import Source
-from AlLoRa.Nodes.Requester import Requester
+from AlLoRa.Nodes.Edge import Edge
+from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.File import AlLoRa_File
 
@@ -164,10 +164,10 @@ def test_full_v3_transfer_over_serial_link(tmp_path):
     pump = threading.Thread(target=lambda: bridge.serve(should_stop=stop.is_set), daemon=True)
     pump.start()
 
-    source = Source(source_conn, config_file=config_file)
+    source = Edge(source_conn, config_file=config_file)
     source.set_file(AlLoRa_File(name="serial.bin", content=bytearray(payload),
                                 chunk_size=source.get_chunk_size()))
-    collector = Requester(Tunnel_connector(link=client_link), config_file=config_file)
+    collector = Hub(Tunnel_connector(link=client_link), config_file=config_file)
     endpoint = Digital_Endpoint(name="src", mac_address=SOURCE_MAC, active=True,
                                 session_id=SESSION_ID)
 

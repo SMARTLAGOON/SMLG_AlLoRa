@@ -15,12 +15,6 @@ def test_base_imports_and_constructs_on_cpython():
     assert ds.get_file_chunk_size() == 200
 
 
-def test_legacy_import_path_is_the_same_class():
-    from AlLoRa.DataSources.DataSource import DataSource
-    from AlLoRa.DataSource import DataSource as Legacy
-    assert Legacy is DataSource
-
-
 def _file(name, payload=b"x"):
     from AlLoRa.File import AlLoRa_File
     return AlLoRa_File(name=name, content=bytearray(payload), chunk_size=8)

@@ -1,4 +1,7 @@
-"""v2 baseline benchmark — Source (the device under test for throughput).
+"""v2 baseline benchmark: Source (the device under test for throughput).
+
+Flash this from the `v2.0.0` tag, not from the v3 branch: it is deliberately frozen on the
+v2 API, and `Source` no longer exists on v3. See this folder's README.
 
 Serves a fixed set of file sizes a few times each and prints one machine-readable
 `BENCH,...` line per transfer (wall-clock around send_file -> end-to-end throughput,

@@ -1,9 +1,10 @@
 """A Hub holds 1+ endpoints and owns the visit loop that polls them.
 
-That story used to live one level down, in `Gateway`: the Hub had no endpoint collection and
-no loop at all, so the single-endpoint and multi-endpoint collectors were different classes
-rather than the same class with one or many peers. These tests pin the surface on `Hub`,
-where the loop is now the node's `run()` verb rather than a method named after a check.
+That story used to live one level down, in the v2 gateway class: the collector had no
+endpoint collection and no loop at all, so the single-endpoint and multi-endpoint deployments
+were different classes rather than the same class with one or many peers. These tests pin the
+surface on `Hub`, where the loop is now the node's `run()` verb rather than a method named
+after a check.
 
 They also pin the visit cadence, which never worked. The reschedule added `asking_frequency`
 (seconds) to a millisecond clock, so an endpoint configured to be polled every 5 minutes was
@@ -19,7 +20,6 @@ import pytest
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Nodes import Hub as hub_module
-from AlLoRa.Nodes.Gateway import Gateway
 from AlLoRa.Nodes.Hub import Hub
 
 HUB_MAC = "b2b2b2b2"
@@ -277,16 +277,6 @@ def test_check_digital_endpoints_still_drives_the_loop(tmp_path, clock):
     assert visits
 
 
-def test_gateway_keeps_no_logic_of_its_own(tmp_path):
-    # Gateway is now a preset over Hub, like Requester: it pins the multi-endpoint defaults
-    # and the legacy argument order, and defines nothing else.
-    assert set(vars(Gateway)) - {"__module__", "__qualname__", "__doc__"} == {"__init__"}
-
-    for verb in ("run", "check_digital_endpoints", "add_digital_endpoints",
-                 "set_digital_endpoints", "update_subscribers"):
-        assert getattr(Gateway, verb) is getattr(Hub, verb)
-
-
 def test_both_node_types_run_with_the_same_verb():
     # A deployment's main.py should not have to remember which placement it is holding:
     # Edge(...).run() and Hub(...).run() are the one way to start a node.
@@ -296,17 +286,6 @@ def test_both_node_types_run_with_the_same_verb():
     # `serve` survives on the Edge as the deprecated spelling, but it is no longer the
     # definition: it forwards, so there is a single loop to change.
     assert Edge.serve is not Edge.run
-
-
-def test_a_gateway_built_the_old_way_still_registers_its_endpoints(tmp_path):
-    config = str(tmp_path / "hub.json")
-    nodes = str(tmp_path / "Nodes.json")
-    _write_config(config, str(tmp_path / "results"))
-    _write_nodes(nodes, [_node("edge-a", "a1a1a1a1")])
-
-    gateway = Gateway(Loopback_connector(HUB_MAC), config, False, 0.1, nodes, None)
-
-    assert [ep.get_name() for ep in gateway.digital_endpoints] == ["edge-a"]
 
 
 # --- how an endpoint is named off the air -------------------------------------------------

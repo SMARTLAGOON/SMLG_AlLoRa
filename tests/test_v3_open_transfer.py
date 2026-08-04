@@ -15,8 +15,8 @@ import json
 import threading
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Nodes.Source import Source
-from AlLoRa.Nodes.Requester import Requester
+from AlLoRa.Nodes.Edge import Edge
+from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.File import AlLoRa_File
 
@@ -51,12 +51,12 @@ def _run_transfer(tmp_path, source_conn, collector_conn, payload, filename):
     config_file = str(tmp_path / "LoRa.json")
     _write_config(config_file, result_path)
 
-    source = Source(source_conn, config_file=config_file)
+    source = Edge(source_conn, config_file=config_file)
     source.set_file(AlLoRa_File(name=filename,
                                 content=bytearray(payload),
                                 chunk_size=source.get_chunk_size()))
 
-    collector = Requester(collector_conn, config_file=config_file)
+    collector = Hub(collector_conn, config_file=config_file)
     endpoint = Digital_Endpoint(name="src", mac_address=SOURCE_MAC,
                                 active=True, session_id=SESSION_ID)
 

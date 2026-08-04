@@ -28,12 +28,9 @@ _ON_DEVICE_SECURE = [
     "AlLoRa/Nodes/Node.py",
     "AlLoRa/Nodes/Edge.py",
     "AlLoRa/Nodes/Hub.py",
-    "AlLoRa/Nodes/Source.py",
-    "AlLoRa/Nodes/Requester.py",
     "AlLoRa/Digital_Endpoint.py",
     # The MQTT bridge halves are frozen and reached on-device too (a bridge Edge runs
     # the datasource + sink pair against its local broker).
-    "AlLoRa/DataSource.py",
     "AlLoRa/DataSources/DataSource.py",
     "AlLoRa/DataSources/MQTT_DataSource.py",
     "AlLoRa/DataSources/mqtt_naming.py",

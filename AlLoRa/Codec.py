@@ -94,8 +94,8 @@ class _SidMatchSpec:
 
 class _DidMatchSpec:
     """v3 first contact: a reply belongs to our request when it carries the same device_id[:4]
-    token. One 4-byte address, symmetric in both directions (the Collector polls a Source's
-    did; the Source answers under it), cleartext at wire offset 0, so like the sid spec it is
+    token. One 4-byte address, symmetric in both directions (the collector polls the Edge's
+    did; the Edge answers under it), cleartext at wire offset 0, so like the sid spec it is
     keyless and `matches_wire` runs at the radio without touching a key."""
 
     def __init__(self, did):
@@ -173,7 +173,7 @@ class V3SecureCodec:
     """Secure posture, but *hybrid*: it speaks sid-addressed data frames sealed, and
     MAC-addressed first-contact/handshake CTRL frames open (they carry public keys and no
     session exists yet). A node has to hold both because first contact bootstraps the very
-    session the data path needs, and a Gateway does it with different Sources over its
+    session the data path needs, and a Hub does it with different Edges over its
     lifetime. Framing is routed by the packet's own addressing; parsing try-parses (the wire
     format has both frame shapes but no marker to tell them apart), using the AEAD tag / the
     24-bit integrity already on the wire as the validity check, no new wire field.
@@ -232,8 +232,8 @@ class V3SecureCodec:
                 return h
         except Exception:
             pass
-        # Or an open device_id-addressed handshake CTRL frame. The did token is the *Source's*
-        # in both directions, so a Collector serving many Sources can't tell "mine" from
+        # Or an open device_id-addressed handshake CTRL frame. The did token is the *Edge's*
+        # in both directions, so a Hub serving many Edges can't tell "mine" from
         # "theirs" here. That decision moves to is_for_me (responder) / match_spec (initiator);
         # deframe only vouches for integrity + that it is a CTRL frame.
         d = self._new("did")

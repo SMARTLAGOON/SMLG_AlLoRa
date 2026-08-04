@@ -13,8 +13,8 @@ import json
 import threading
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Nodes.Source import Source
-from AlLoRa.Nodes.Requester import Requester
+from AlLoRa.Nodes.Edge import Edge
+from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids
 from AlLoRa.Packet_v3 import Packet_v3
 
@@ -64,8 +64,8 @@ def test_source_adopts_a_reassigned_sid_from_the_welcome(tmp_path):
     _config(config_file, str(tmp_path / "Results"))
     source_conn, collector_conn = Loopback_connector.create_pair(SOURCE_MAC, COLLECTOR_MAC)
 
-    source = Source(source_conn, config_file=config_file)
-    collector = Requester(collector_conn, config_file=config_file)
+    source = Edge(source_conn, config_file=config_file)
+    collector = Hub(collector_conn, config_file=config_file)
 
     derived = source.device_id[0]
     reassigned = (derived + 1) % 256               # a sid the Source would NOT derive on its own

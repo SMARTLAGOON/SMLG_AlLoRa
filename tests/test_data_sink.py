@@ -16,8 +16,8 @@ import os
 import threading
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Nodes.Source import Source
-from AlLoRa.Nodes.Requester import Requester
+from AlLoRa.Nodes.Edge import Edge
+from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.DataSinks.DataSink import DataSink, Reception
@@ -49,10 +49,10 @@ def _run_transfer(tmp_path, payload, filename, data_sink=None, endpoint=None):
     _write_config(config_file, result_path)
 
     source_conn, collector_conn = Loopback_connector.create_pair(SOURCE_MAC, COLLECTOR_MAC)
-    source = Source(source_conn, config_file=config_file)
+    source = Edge(source_conn, config_file=config_file)
     source.set_file(AlLoRa_File(name=filename, content=bytearray(payload),
                                 chunk_size=source.get_chunk_size()))
-    collector = Requester(collector_conn, config_file=config_file, data_sink=data_sink)
+    collector = Hub(collector_conn, config_file=config_file, data_sink=data_sink)
     if endpoint is None:
         endpoint = Digital_Endpoint(name="src", mac_address=SOURCE_MAC,
                                     active=True, session_id=SESSION_ID)

@@ -68,8 +68,8 @@ uplink; on a downlink they mirror.
 |---|---|---|
 | `Source` node | **`Edge`** node | type (placement) |
 | `Collector` node | **`Hub`** node | type (placement + authority) |
-| `Requester` | a `Hub` with one Edge and a trivial sink | deprecated alias |
-| `Gateway` | a `Hub` with many Edges and a cloud sink | deprecated alias |
+| `Requester` | a `Hub` with one Edge and a trivial sink | removed in v3 |
+| `Gateway` | a `Hub` with many Edges and a cloud sink | removed in v3 |
 | `source` / `collector` | the **role** names (the words that used to be type names) | role |
 | `initiator` / `responder` | unchanged, but demoted to the per-round mechanic, not a role name | round / wire |
 | `Adapter` node | transport: the far half of a split Connector | **not** a node type |
@@ -78,8 +78,14 @@ uplink; on a downlink they mirror.
 | `Gateway.check_digital_endpoints()` | **`Hub.run()`** | main-loop verb |
 | `DataSource` / `DataSink` | unchanged, now present on **both** types | app boundary |
 
-`Source`, `Requester` and `Gateway` still import and run: they are aliases kept so a year of student
-code, examples and fielded firmware keep working. New code says `Edge` and `Hub`.
+**`Source`, `Requester` and `Gateway` no longer exist.** They survived the migration as aliases and
+were removed once nothing in the library, the examples or the firmware imported them, because a name
+that only redirects is a name someone still has to learn. A year-old `main.py` needs two edits:
+`Source` becomes `Edge`, and both `Requester` and `Gateway` become `Hub`. Pass the constructor
+arguments **by keyword**, since the old positional orders are not the new one, and drop
+`NEXT_ACTION_TIME_SLEEP`: it has been a silent no-op since v2.0 and the v3 constructors refuse it
+rather than accept a knob they cannot honour (the adaptive gap lives on `Pacing`). To run old code
+unchanged instead, use the `v2.0.0` tag, which is what it was written against.
 
 Two verbs are worth keeping straight, because they are **not** a second pair of role names: the
 collector role **drives** a round, the source role **serves** it. A node has a drive loop and a serve
@@ -253,8 +259,8 @@ exactly why it is transport and not a third node type.
 
 A `DataSource` feeds `AlLoRa_File`s to whoever is in the source role: a sensor reading becomes a
 file, an MQTT message becomes a file. Hand one to a node and its serve loop pumps it and sends
-whatever it queues. The base class lives in the `DataSources` package; the old `AlLoRa.DataSource`
-import path still works.
+whatever it queues. The base class lives in the `DataSources` package, the input-boundary mirror of
+`DataSinks`; the old top-level `AlLoRa.DataSource` import path was removed with the node aliases.
 
 [`MQTT_DataSource`](AlLoRa/DataSources/MQTT_DataSource.py) subscribes to a broker and turns each
 received message into a file. Paired with an [`MQTT_DataSink`](AlLoRa/DataSinks/MQTT_DataSink.py) on

@@ -19,7 +19,7 @@ def negotiate_version(registered_v3, beacon_echoed):
       attacker forcing a secure node back to plaintext.
     - Otherwise a peer that **echoes the v3 beacon** is v3.
     - Otherwise (a legacy peer, or genuine first contact) default to **v2**, the
-      retro-compat path, so a v3 Gateway can still consume un-reflashed v2 field nodes.
+      retro-compat path, so a v3 Hub can still consume un-reflashed v2 field nodes.
     """
     if registered_v3:
         return V3

@@ -4,12 +4,12 @@ Three role-named steps, decoupled from the wire: each produces or consumes an op
 payload of bytes, so the caller chooses how to frame them and no handshake wire-kind is
 fixed here:
 
-    initiator_hello(randfunc)                 -> (state, hello_payload)     # Source
-    responder_accept(static_priv, hello, sid) -> (session, welcome_payload) # Collector
-    initiator_complete(state, welcome)        -> session                    # Source
+    initiator_hello(randfunc)                 -> (state, hello_payload)     # Edge
+    responder_accept(static_priv, hello, sid) -> (session, welcome_payload) # Hub
+    initiator_complete(state, welcome)        -> session                    # Edge
 
-The initiator (a Source) makes a fresh ephemeral keypair per session; the responder (the
-Collector) holds a long-lived static keypair and assigns the session id. Each derives the
+The initiator (an Edge) makes a fresh ephemeral keypair per session; the responder (the
+Hub) holds a long-lived static keypair and assigns the session id. Each derives the
 same ECDH shared secret from its own private key and the peer's public key, and the KDF
 turns it into matching session keys. The secret itself never crosses the wire. A fresh
 ephemeral key per session means a reboot re-handshakes into a distinct key.
@@ -27,7 +27,7 @@ _PUB_LEN = 65  # SEC1 uncompressed public key: 0x04 || X(32) || Y(32)
 
 
 def initiator_hello(randfunc):
-    """Source: generate an ephemeral keypair. Returns (state, hello_payload), where state is
+    """Initiator: generate an ephemeral keypair. Returns (state, hello_payload), where state is
     the ephemeral private key held until initiator_complete() and hello_payload is the
     ephemeral public key to send."""
     ephemeral_priv = generate_private_key(randfunc)
@@ -51,9 +51,9 @@ def responder_accept(static_priv, hello_payload, sid, send_sid=True):
 
 
 def initiator_complete(state, welcome_payload, default_sid=None):
-    """Source: read the responder's static public key from the welcome, derive the same shared
+    """Initiator: read the responder's static public key from the welcome, derive the same shared
     secret with the ephemeral private key, and build the matching session. The sid is taken
-    from the welcome when present (the Collector reassigned it); otherwise it falls back to
+    from the welcome when present (the responder reassigned it); otherwise it falls back to
     ``default_sid``, the value both ends already agree on (device_id[0])."""
     ephemeral_priv = state
     static_pub = welcome_payload[:_PUB_LEN]

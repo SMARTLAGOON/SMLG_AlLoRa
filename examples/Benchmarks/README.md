@@ -4,9 +4,12 @@ Measures the **v2 wire's** end-to-end throughput / success / retransmissions on 
 T3S3, so the v3 wire-format decision is made against real numbers — the +1-header-byte
 and DATA-index calls are **gated on this baseline**, not on arithmetic.
 
-> Run it from the deployed **v2.0.0** tag for a pure v2 baseline (the harness uses
-> only public `Source`/`Requester`/`AlLoRa_File` APIs that exist on both v2 and the
-> v3 branch). The v3 branch hasn't touched the wire yet, so it reads the same.
+> **Run it from the deployed `v2.0.0` tag.** The harness is frozen on the v2 API
+> (`Source` / `Requester` / `AlLoRa_File`), which is the point: a v2 baseline has to be
+> measured against v2 code, not against v3 code that happens to speak the same wire.
+> `Source` and `Requester` were removed from the v3 branch when the aliases went, so
+> these two `main.py` files import only on the tag. Do not migrate them to `Edge` / `Hub`;
+> that would silently turn the baseline into a v3 measurement.
 
 ## What it does
 - **Source** (`Source/main.py`) serves a fixed size sweep (`SIZES_KB`, `ROUNDS` times)

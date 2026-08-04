@@ -32,7 +32,7 @@ and carries no FL byte (every flag is mesh-scoped or unbuilt, and secure is P2P 
     sid-addressed  [sid1][VT1][ctr2] + sealed(payload) + [tag4]   = 8 B overhead
 
 The did token is device_id[:4], one 4-byte identity address, the same in both directions
-(the Collector polls it, the Source answers under it), so it matches at wire offset 0 exactly
+(the collector polls it, the source answers under it), so it matches at wire offset 0 exactly
 like the sid. It replaces the two-MAC handshake header once a node is registered by device_id
 rather than by MAC.
 """

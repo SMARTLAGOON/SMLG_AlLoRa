@@ -2,8 +2,8 @@
 
 This folder contains the code for enabling different devices as Edge nodes. An Edge is the node
 that sits out with the sensors: it holds the data and serves it, and its Hub does the polling.
-(`Edge` is the v3 name for what v2 called a `Source`. The old name still imports, as a deprecated
-alias.)
+(`Edge` is the v3 name for what v2 called a `Source`. The old name is gone; a fielded main.py
+needs the rename and a reflash, or the `v2.0.0` tag to keep running as it is.)
 
 There are three main files in these folders:
 

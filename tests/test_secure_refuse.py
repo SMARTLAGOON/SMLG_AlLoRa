@@ -11,7 +11,7 @@ import pytest
 
 import AlLoRa.Security.AEAD as AEAD
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Nodes.Source import Source
+from AlLoRa.Nodes.Edge import Edge
 
 SOURCE_MAC = "a1a1a1a1"
 COLLECTOR_MAC = "b2b2b2b2"
@@ -33,7 +33,7 @@ def _make_source(tmp_path, **overrides):
     cfg = str(tmp_path / "LoRa.json")
     _write(cfg, **overrides)
     conn, _ = Loopback_connector.create_pair(SOURCE_MAC, COLLECTOR_MAC)
-    return Source(conn, config_file=cfg)
+    return Edge(conn, config_file=cfg)
 
 
 def test_secure_node_refuses_to_run_without_a_backend(tmp_path, monkeypatch):

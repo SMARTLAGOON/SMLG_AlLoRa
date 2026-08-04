@@ -1,4 +1,7 @@
-"""v2 baseline benchmark — Requester (the puller).
+"""v2 baseline benchmark: Requester (the puller).
+
+Flash this from the `v2.0.0` tag, not from the v3 branch: it is deliberately frozen on the
+v2 API, and `Requester` no longer exists on v3. See this folder's README.
 
 Continuously pulls files from the Source so the Source can push back-to-back. The
 timing/throughput is measured and printed on the *Source* side; this side just keeps

@@ -90,7 +90,7 @@ class AlLoRa_File:
             return self.content
         return self.content
 
-    # Requester methods
+    # collector-side methods
     def get_missing_chunks(self) -> list:
         return self.missing_chunks
 
@@ -138,7 +138,7 @@ class AlLoRa_File:
         except Exception:
             pass
 
-    # Source methods
+    # source-side methods
     def reset_delivery(self):
         # One file object can be served more than once, re-queued after delivery,
         # or broadcast to several endpoints. Every new serve must start from an

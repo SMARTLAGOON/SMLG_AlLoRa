@@ -1,9 +1,9 @@
 """Pacing: one home for the timing the protocol adapts as it runs.
 
 A pure policy object: no radio, no I/O. It is fed the Time-on-Air-derived bounds by whoever
-owns the RF config (the `Connector` for the window; the `Requester` for the sleep), so the
+owns the RF config (the `Connector` for the window; the collector for the sleep), so the
 adaptation is unit-testable off-device, which it never was while it lived scattered on the
-`Connector` and on the `Requester`.
+`Connector` and on the collector.
 
 Two adaptive controllers live here, the two halves of the "one home":
 
@@ -20,7 +20,7 @@ Two adaptive controllers live here, the two halves of the "one home":
     via `next_sleep`.
 
 A given deployment drives whichever half it needs (the `Connector` the window, the
-`Requester` the sleep); a step-4 `request`/`respond` engine will drive both from one home.
+collector the sleep); a step-4 `request`/`respond` engine will drive both from one home.
 """
 from os import urandom
 
@@ -36,7 +36,7 @@ class Pacing:
         self.observed_min_timeout = float('inf')
         self.set_bounds(min_timeout, max_timeout)
         # --- inter-request sleep controller (its bounds arrive later via set_sleep_bounds,
-        # which needs the sf/bw the Requester reads off its connector) ---
+        # which needs the sf/bw the collector reads off its connector) ---
         self.successful_interactions_required = successful_interactions_required
         self.max_failures = max_failures
         self.exponential_backoff_threshold = exponential_backoff_threshold
@@ -61,7 +61,7 @@ class Pacing:
         self.observed_min_timeout = min(self.observed_min_timeout, td)
         self.window = max(new_window, max(self.min_timeout, self.observed_min_timeout))
 
-    # --- inter-request sleep controller (was scattered across the Requester's loop) --------
+    # --- inter-request sleep controller (was scattered across the collector's loop) --------
 
     def set_sleep_bounds(self, min_sleep, max_sleep):
         """Set the sf/bw-derived sleep bounds and reset the controller to a fresh hunt

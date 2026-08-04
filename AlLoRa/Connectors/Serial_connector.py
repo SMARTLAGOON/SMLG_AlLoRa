@@ -4,7 +4,7 @@ Thin over Tunnel_connector: it is a split Connector whose transport verbs cross 
 bridge (Adapter) running the radio. All the tunnel logic (exchange-routed matching, D↓/td↑
 pacing, opaque wire so v2/v3-open/v3-secure all cross unchanged) lives in Tunnel_connector;
 this only builds the concrete Serial_link client from the config and keeps the old constructor
-so existing Gateway examples import it unchanged. It replaces the previous ad-hoc
+so existing Hub examples import it unchanged. It replaces the previous ad-hoc
 `S&W:`/`ACK:`/`Listen:` string protocol, which re-parsed the frame on the bridge and so only
 ever spoke v2.
 """

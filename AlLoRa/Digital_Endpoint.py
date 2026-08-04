@@ -11,7 +11,7 @@ def assign_session_ids(endpoints):
     later endpoint is bumped to the lowest free byte, which the Collector then sends in that
     session's WELCOME (the initiator can't derive a reassigned value on its own). Fixed sids
     (an explicit override, or a MAC-registered endpoint with no identity to derive from) are
-    reserved first and never moved. A no-op for a single endpoint (the 1:1 Requester case).
+    reserved first and never moved. A no-op for a single endpoint (the 1:1 Hub case).
     """
     taken = set()
     derived_endpoints = []

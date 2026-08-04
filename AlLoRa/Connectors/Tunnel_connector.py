@@ -71,7 +71,7 @@ class Tunnel_connector(Connector):
     def send_and_wait_response(self, packet):
         """The initiator round over the tunnel: frame here, match at the radio via `exchange`,
         deframe the returned reply here. Same (response | error-dict, size_sent, size_recv, td)
-        contract the engine reads for a local radio, so Requester/Source are untouched."""
+        contract the engine reads for a local radio, so Hub/Edge are untouched."""
         focus_time = self.adaptive_timeout
         wire = self.codec.frame(packet)
         packet_size_sent = len(wire)

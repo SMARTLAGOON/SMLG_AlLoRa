@@ -11,8 +11,8 @@ import json
 import threading
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Nodes.Source import Source
-from AlLoRa.Nodes.Requester import Requester
+from AlLoRa.Nodes.Edge import Edge
+from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Packet_v3 import Packet_v3
 
@@ -38,8 +38,8 @@ def test_handshake_over_the_live_flow_yields_matching_sessions(tmp_path):
     _config(config_file, str(tmp_path / "Results"))
     source_conn, collector_conn = Loopback_connector.create_pair(SOURCE_MAC, COLLECTOR_MAC)
 
-    source = Source(source_conn, config_file=config_file)
-    collector = Requester(collector_conn, config_file=config_file)
+    source = Edge(source_conn, config_file=config_file)
+    collector = Hub(collector_conn, config_file=config_file)
     endpoint = Digital_Endpoint(name="src", mac_address=SOURCE_MAC,
                                 active=True, session_id=SESSION_ID)
 

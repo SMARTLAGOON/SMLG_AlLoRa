@@ -18,7 +18,7 @@ class Connector:
         self.debug = False
 
     # `adaptive_timeout` / `observed_min_timeout` now live in `Pacing`; these properties keep
-    # every existing call site (the send loop, the Source's pokes, the tunnels) working.
+    # every existing call site (the send loop, the Edge's pokes, the tunnels) working.
     @property
     def adaptive_timeout(self):
         return self.pacing.window
@@ -173,7 +173,7 @@ class Connector:
 
     def send(self, packet: Packet):
         # Back-compat: frame via the codec, then transmit the bytes. Connectors now override
-        # transmit(wire); this keeps every send(packet) caller (Source/Node.send_lora) working
+        # transmit(wire); this keeps every send(packet) caller (Node.send_lora and up) working
         # and routes them through the same framing home.
         return self.transmit(self.codec.frame(packet))
 

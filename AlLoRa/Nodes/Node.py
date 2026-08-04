@@ -246,14 +246,14 @@ class Node:
 
     # --- first-contact handshake over the wire (open device_id-addressed CTRL frames) -------
     # The exchange rides the shared request/respond verbs. Message kinds ride a 1-byte prefix
-    # on the CTRL payload (provisional layout): the Collector (responder + sid-assigner) drives
-    # two rounds, the Source (initiator) answers with its ephemeral key then completes. Frames
-    # are addressed by the Source's device_id[:4] (no MAC on the wire); a MAC-registered peer
+    # on the CTRL payload (provisional layout): the Hub (responder + sid-assigner) drives
+    # two rounds, the Edge (initiator) answers with its ephemeral key then completes. Frames
+    # are addressed by the Edge's device_id[:4] (no MAC on the wire); a MAC-registered peer
     # keeps the retiring two-MAC shape.
-    _HS_INIT = 0        # Collector -> Source: begin (prompt for the ephemeral key)
-    _HS_HELLO = 1       # Source -> Collector: ephemeral public key
-    _HS_WELCOME = 2     # Collector -> Source: static public key + assigned sid
-    _HS_ACK = 3         # Source -> Collector: session established
+    _HS_INIT = 0        # Hub -> Edge: begin (prompt for the ephemeral key)
+    _HS_HELLO = 1       # Edge -> Hub: ephemeral public key
+    _HS_WELCOME = 2     # Hub -> Edge: static public key + assigned sid
+    _HS_ACK = 3         # Edge -> Hub: session established
 
     def _ctrl_packet(self, token, hs_kind, payload=b"", addressing="did"):
         # A first-contact v3 CTRL frame (no sid until the handshake assigns one); the hybrid
@@ -365,7 +365,7 @@ class Node:
     def request(self, packet):
         """One initiator round: transmit a request and wait for its reply. Returns the
         connector's (response | error dict, size_sent, size_recv, td) tuple. Driven by
-        Requester/Gateway to pull a transfer; a role-reversed Source runs it too."""
+        a Hub to pull a transfer; a role-reversed Edge runs it too."""
         return self.connector.send_and_wait_response(packet)
 
     def respond(self, handler):
@@ -576,7 +576,7 @@ class Node:
         self._drive_ready = True
 
     # `NEXT_ACTION_TIME_SLEEP` now lives in `Pacing.sleep`; this property keeps every call
-    # site working (the loop's `finally`, `Gateway.check_digital_endpoints`, examples).
+    # site working (the loop's `finally`, `Hub.run`, examples).
     @property
     def NEXT_ACTION_TIME_SLEEP(self):
         return self.pacing.sleep

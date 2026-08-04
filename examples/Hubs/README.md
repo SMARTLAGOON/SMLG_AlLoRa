@@ -17,5 +17,5 @@ from AlLoRa.Nodes.Hub import Hub
 lora_hub = Hub(connector, config_file="LoRa.json")
 ```
 
-`Requester` and `Gateway` survive as deprecated aliases so fielded main.py files keep booting
-unchanged. New code says `Hub`.
+`Requester` and `Gateway` were the two v2 names for this node and are gone: both become `Hub`.
+A fielded main.py needs that edit and a reflash, or the `v2.0.0` tag to keep running as it is.
