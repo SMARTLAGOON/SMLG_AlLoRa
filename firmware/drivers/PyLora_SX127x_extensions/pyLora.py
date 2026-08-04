@@ -43,6 +43,17 @@ def cr_converter(cr):
     elif cr == 4:
         cr = CODING_RATE.CR4_8
     return cr
+
+# Bandwidth in Hz, indexed by the MODEM_CONFIG_1 bandwidth field (see the BW class).
+BW_HZ = (7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500000)
+
+# The SX1276 requires LowDataRateOptimize once a symbol lasts longer than 16 ms:
+# past that, crystal drift accumulates over the symbol and the receiver loses lock.
+# At BW125 that means SF11 and SF12, at BW250 it means SF12. The threshold is on
+# symbol time, not on the spreading factor, so bandwidth has to be part of the test.
+LDRO_SYMBOL_TIME_S = 0.016
+
+
 class pyLora:
     IS_RPi = machine.startswith('armv')
     IS_ESP8266 = machine.startswith('ESP8266')
@@ -53,7 +64,12 @@ class pyLora:
     __SX127X_LIB = None
 
     timeout_socket = None
-    blocked_socket = None   
+    blocked_socket = None
+
+    # While true, LDRO is recomputed from SF and BW on every change. set_low_data_rate_optim()
+    # clears it so a deliberate override is not silently undone by the next set_spreading_factor;
+    # auto_low_data_rate_optim() hands control back.
+    _ldro_auto = True
 
     def __init__(self, verbose=False, do_calibration=False, calibration_freq=868, 
                     sf=7, cr=1, freq=868, bw=125, pa_select=1, 
@@ -93,6 +109,32 @@ class pyLora:
                                  max_power=max_power,
                                  output_power=output_power,
                                  preamble=preamble)
+        self._apply_ldro()
+
+    def _apply_ldro(self):
+        """ Match LowDataRateOptimize to the spreading factor and bandwidth now in use.
+
+            The modem is read back rather than trusting whatever a caller passed in, so
+            this stays correct whichever setter got us here and whether the caller used
+            kHz or a BW constant. Does nothing while an override is in force.
+        """
+        if not self._ldro_auto:
+            return
+        sf = self.get_spreading_factor()
+        bw = self.get_bandwidth()
+        if not 0 <= bw < len(BW_HZ):
+            return      # bandwidth we cannot price: leave the register as it is
+        symbol_time = (2 ** sf) / BW_HZ[bw]
+        ldro = 1 if symbol_time > LDRO_SYMBOL_TIME_S else 0
+
+        # Modem config only latches in sleep or standby, and a node parks in continuous
+        # receive between transfers, so this can land mid-RX. Same guard change_bw uses.
+        mode = self.__SX127X_LIB.get_mode()
+        if mode != MODE.STDBY:
+            self.__SX127X_LIB.set_mode(MODE.STDBY)
+        self.__SX127X_LIB.set_low_data_rate_optim(ldro)
+        if mode != MODE.STDBY:
+            self.__SX127X_LIB.set_mode(mode)
 
     def send(self, content):
         self.__SX127X_LIB.set_mode(MODE.SLEEP)
@@ -170,10 +212,12 @@ class pyLora:
 
     def sf(self, sf):
         self.__SX127X_LIB.set_spreading_factor(sf)
+        self._apply_ldro()
 
     # Added method to set spreading factor
     def set_spreading_factor(self, sf):
         self.__SX127X_LIB.set_spreading_factor(sf)
+        self._apply_ldro()
 
     # Added method to set bandwidth
     def set_bandwidth(self, bw):
@@ -181,6 +225,24 @@ class pyLora:
         print("BW:", bw)
         #self.__SX127X_LIB.change_bw(bw)
         self.__SX127X_LIB.change_bw(bw)
+        self._apply_ldro()
+
+    # Added method to get low data rate optimization
+    def get_low_data_rate_optim(self):
+        return self.__SX127X_LIB.get_low_data_rate_optim()
+
+    # Added method to force low data rate optimization, overriding the automatic choice.
+    # The override is sticky: it survives later SF and BW changes, so an A/B measurement
+    # cannot be silently undone by setting the spreading factor afterwards. Call
+    # auto_low_data_rate_optim() to go back to following the modem.
+    def set_low_data_rate_optim(self, low_data_rate_optim):
+        self._ldro_auto = False
+        self.__SX127X_LIB.set_low_data_rate_optim(1 if low_data_rate_optim else 0)
+
+    # Added method to hand LDRO back to the automatic symbol-time rule, and apply it now.
+    def auto_low_data_rate_optim(self):
+        self._ldro_auto = True
+        self._apply_ldro()
 
     # Added method to set coding rate
     def set_coding_rate(self, cr):

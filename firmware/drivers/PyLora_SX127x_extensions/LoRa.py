@@ -386,13 +386,6 @@ class LoRa:
             d['symb_timout_lsb'] = val & 0x03
         return d
 
-    def get_modem_config_3(self):
-        val = self.spi.transfer(address=REG.LORA.MODEM_CONFIG_3)
-        return dict(
-            low_data_rate_optim=val >> 3 & 0x01,
-            agc_auto_on=val >> 2 & 0x01
-        )
-
     def get_lna(self):
 
         v = self.spi.transfer(address=REG.LORA.LNA)
@@ -678,7 +671,7 @@ class LoRa:
         self.set_modem_config_3(agc_auto_on=agc_auto_on)
 
     def get_low_data_rate_optim(self):
-        return self.set_modem_config_3()['low_data_rate_optim']
+        return self.get_modem_config_3()['low_data_rate_optim']
 
     def set_low_data_rate_optim(self, low_data_rate_optim):
         self.set_modem_config_3(low_data_rate_optim=low_data_rate_optim)
