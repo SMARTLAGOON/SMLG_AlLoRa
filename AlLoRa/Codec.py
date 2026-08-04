@@ -270,7 +270,7 @@ def build_codec(protocol_version=2, addressing="mac", mesh_mode=False, short_mac
     already decided that is acceptable for its posture, per the secure-mode trust model).
     """
     if protocol_version >= 3:
-        if (security_mode in ("secure", "strict")
+        if (security_mode == "secure"
                 and session_resolver is not None and aead is not None):
             if mesh_mode:
                 # Secure framing is sid-addressed P2P only: the sealed header carries no seq

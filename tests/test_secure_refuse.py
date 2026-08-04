@@ -1,9 +1,14 @@
-"""A secure node with no crypto backend refuses to run.
+"""A node that cannot deliver the posture it was configured with refuses to run.
 
 The dangerous failure is a *silent* one: a node configured secure that quietly runs plaintext
-because its firmware lacks the AEAD backend is worse than one that stops — the operator thinks
-their traffic is protected. So a secure/strict node with no backend halts loudly. The escape
+because its firmware lacks the AEAD backend is worse than one that stops, since the operator
+thinks their traffic is protected. So a secure node with no backend halts loudly. The escape
 hatch is an explicit, opt-in allow_insecure_fallback for tests/bring-up, never the default.
+
+The same rule covers a posture that is named but not built. `strict` is designed (the Edge
+authenticates the Hub too) and unimplemented, and half-accepting it was the same silent
+failure wearing the strongest-sounding name: the session id derived from the identity, so the
+node looked registered and secure on the wire, and every frame went out in the clear.
 """
 import json
 
@@ -52,3 +57,19 @@ def test_secure_node_runs_secure_when_the_backend_is_present(tmp_path):
     # the real CPython backend is available -> no refusal, secure is live
     source = _make_source(tmp_path)
     assert source.aead is not None
+
+
+def test_strict_is_refused_rather_than_run_as_plaintext(tmp_path):
+    # Not "strict behaves like secure": a node configured strict must not come up at all until
+    # the posture exists, because an operator who asked for mutual auth and silently got
+    # one-directional auth has been told something false about their deployment.
+    with pytest.raises(ValueError) as raised:
+        _make_source(tmp_path, security_mode="strict")
+
+    assert "not implemented" in str(raised.value)
+
+
+def test_the_open_and_secure_postures_are_unaffected(tmp_path):
+    # The refusal is scoped to the unbuilt name; the two working postures still construct.
+    assert _make_source(tmp_path, security_mode="open").aead is None
+    assert _make_source(tmp_path, security_mode="secure").aead is not None

@@ -239,7 +239,7 @@ class Node:
         explicit = self.config.get('session_id', None)
         if explicit is not None:
             return explicit
-        if self.security_mode in ('secure', 'strict'):
+        if self.security_mode == 'secure':
             self._ensure_identity()
             return self.device_id[0]
         return int(self.MAC[-2:], 16)
@@ -285,6 +285,18 @@ class Node:
         # Defaults keep v2 behavior byte-for-byte (version 2, MAC addressing).
         self.protocol_version = self.config.get('protocol_version', 2)
         self.security_mode = self.config.get('security_mode', 'open')
+        if self.security_mode == 'strict':
+            # 'strict' is a designed posture (the Edge authenticates the Hub, not just the
+            # other way round) whose crypto is not built yet. It has to be refused here rather
+            # than passed on, because the half of it that does exist is the dangerous half: the
+            # sid derives from the identity, so the node looks registered and secure on the
+            # wire, while the frames it sends are plaintext. Refusing at startup is the whole
+            # point; a posture that silently delivers less than it names is worse than no
+            # posture at all.
+            raise ValueError(
+                "security_mode 'strict' is not implemented yet: it would derive an "
+                "identity-based session id and then send plaintext. Use 'secure' for "
+                "authenticated, encrypted frames, or 'open' for none.")
         # session_id is resolved after init (identity-derived unless config overrides); see
         # _resolve_session_id. It is read from config here only as the explicit override source.
         self.addressing = 'sid' if self.protocol_version >= 3 else 'mac'
