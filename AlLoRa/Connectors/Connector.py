@@ -16,6 +16,8 @@ class Connector:
         self.pacing = Pacing()   # one home for the adaptive receive window (was adaptive_timeout)
         self.codec = build_codec()   # how a Packet is spoken on the wire; rebuilt in config()
         self.debug = False
+        self.protocol_version = 2    # config() decides; this is its default until it runs
+        self.frame_size = None       # set by the node once it knows its clamped chunk size
 
     # `adaptive_timeout` / `observed_min_timeout` now live in `Pacing`; these properties keep
     # every existing call site (the send loop, the Edge's pokes, the tunnels) working.
@@ -100,6 +102,23 @@ class Connector:
             security_mode='secure', session_resolver=session_resolver, aead=aead)
 
     def get_max_payload_size(self):
+        """The largest frame the radio will carry, in bytes.
+
+        The LoRa explicit-header PHY carries 255 bytes at every spreading factor and every
+        bandwidth, and that is what v3 reports. The table this replaced returned 111 at SF11
+        and 30 at SF12; those numbers were measured on hardware that never had
+        LowDataRateOptimize set, where long frames at high spreading factors genuinely did
+        fail, so they described that fault rather than the PHY. With the register written a
+        raw sweep put 18 of 18 frames intact at 255 bytes at SF12. The table was also blind
+        to bandwidth, which nothing noticed because the configured bandwidth was never
+        reaching the radio either.
+
+        v2 keeps the table it shipped with. It is frozen, and it is the baseline the v3
+        throughput comparison is measured against, so moving it would rewrite the instrument
+        rather than the protocol.
+        """
+        if self.protocol_version >= 3:
+            return self.MAX_LENGTH_MESSAGE
         if self.sf < 11:
             return 255
         elif self.sf == 11:
@@ -107,11 +126,32 @@ class Connector:
         elif self.sf == 12:
             return 30   #51
 
+    def set_frame_size(self, frame_size):
+        """Tell the connector how big the frames this node really sends are, so the receive
+        window is sized for its traffic instead of for the ceiling.
+
+        The node owns this number: the clamp that produces it needs the codec's per-frame
+        overhead, which the node asks for. Recomputing the timeouts here keeps the window
+        honest whenever the chunk size moves, which RF-config coordination does at runtime.
+        """
+        self.frame_size = frame_size
+        self.update_timeouts()
+
     def update_timeouts(self):
         # Calculate the min and max timeouts based on the ToA for the current RF settings
         self.max_payload_size = self.get_max_payload_size()
-        min_toa = self.calculate_toa(self.sf, self.bw, self.cr, self.max_payload_size)   # Max payload
-        max_toa = min_toa * 2
+        # The floor is what this node's own traffic costs; the ceiling is what the PHY can
+        # still put in front of it. Those used to be one number because the ceiling was
+        # small enough that nothing could exceed it, and they must not be collapsed again:
+        # the adaptive window can never grow past the ceiling, so a node whose peer sends
+        # larger frames than it does would be unable to receive them at all. Sizing only the
+        # floor from real traffic is what stops a 30-byte-chunk node at SF12 from sitting on
+        # a 7.7-second floor waiting out frames it never sends.
+        floor_payload = self.max_payload_size
+        if self.frame_size:
+            floor_payload = min(floor_payload, self.frame_size)
+        min_toa = self.calculate_toa(self.sf, self.bw, self.cr, floor_payload)
+        max_toa = self.calculate_toa(self.sf, self.bw, self.cr, self.max_payload_size) * 2
         self.min_timeout = min_toa + self.timeout_delta # Convert ms to seconds
         self.max_timeout = max_toa + self.timeout_delta  # Convert ms to seconds and add delta for processing times
         self.pacing.set_bounds(self.min_timeout, self.max_timeout)   # bounds change -> window resets to max (as before)

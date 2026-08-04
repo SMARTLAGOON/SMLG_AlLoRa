@@ -124,6 +124,7 @@ class Node:
             self.chunk_size = max_chunk_size
             if self.debug:
                 print("Chunk size too big, setting to max: ", self.chunk_size)
+        self._publish_frame_size()
         self.file = None
 
         # The serve side's input boundary, the mirror of data_sink: with a datasource
@@ -527,7 +528,8 @@ class Node:
         if self.chunk_size > max_chunk_size:
             self.chunk_size = max_chunk_size
             print("Chunk size too big, changing to: ", self.chunk_size)
-            
+        self._publish_frame_size()
+
         if changed:
             # Arm the trial. The window rides the (signed) payload as `trial` seconds; absent,
             # a ToA-scaled default sized off the new config's receive window. The deadline is
@@ -543,6 +545,12 @@ class Node:
             self.status["TX_P"] = self.connector.tx_power
             return True
         return False
+
+    def _publish_frame_size(self):
+        # The connector sizes its receive window from the biggest frame it will really see.
+        # Only this node knows that number: it is the clamped chunk plus the codec's
+        # overhead, and the codec is asked here for the same reason it is asked below.
+        self.connector.set_frame_size(self.chunk_size + self.connector.codec.payload_overhead())
 
     def calculate_max_chunk_size(self):
         # How many payload bytes fit beside the framing, for whatever this node actually
