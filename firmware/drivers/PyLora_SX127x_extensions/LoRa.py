@@ -84,12 +84,9 @@ class LoRa:
         self.selected_chip.set_irq_callbacks(cb_dio0=self._dio0)
         # Get working class with util methods of SPI
         self.spi = self.selected_chip.get_spi()
-        self.set_implicit_header_mode(False)
-        self.set_invert_iq(0)
         self.payload = ""
         self.freq = freq
         self.verbose = verbose
-        self.set_bw(signal_bandwidth)
 
         # set mode to sleep and read all registers
         self.set_mode(MODE.SLEEP)
@@ -119,7 +116,17 @@ class LoRa:
             self.set_register(register_address, value)
 
         self.set_mode(MODE.SLEEP)
+        # Everything below configures the LoRa modem, so it has to come after the line above:
+        # MODE.SLEEP carries the LongRangeMode bit, and until that bit is written the chip is
+        # still an FSK modem, where 0x1D is RegRxBw and 0x33 is RegNodeAdrs rather than
+        # MODEM_CONFIG_1 and INVERT_IQ. Bandwidth, header mode and IQ inversion used to be
+        # written above, so they landed in FSK register space and never reached the modem at
+        # all: a node came up at the reset default of 125 kHz whatever its config asked for,
+        # and said nothing about it.
         self.set_coding_rate(cr)
+        self.set_bw(signal_bandwidth)
+        self.set_implicit_header_mode(False)
+        self.set_invert_iq(0)
         self.set_freq(freq)
         self.set_spreading_factor(sf)
         self.set_sync_word(sync_word)
