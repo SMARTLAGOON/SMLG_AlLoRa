@@ -126,7 +126,12 @@ class Connector:
         t_symbol = (2 ** sf) / bw_hz    # Symbol duration
         t_preamble = t_symbol * (8 + 4.25)  # Preamble duration
         h = 0   # Implicit header disabled
-        de = 1 if (sf >= 11 and bw == 125) else 0   # Low data rate optimization enabled for SF11 and SF12 with 125kHz BW
+        # Low data rate optimization. The radio turns this on once a symbol lasts longer
+        # than 16 ms, which depends on bandwidth as well as spreading factor: it is SF11
+        # and SF12 at BW125, but only SF12 at BW250, and it starts as low as SF10 at
+        # BW62.5. Keying off the spreading factor alone made the airtime estimate wrong
+        # wherever the bandwidth was not 125 kHz.
+        de = 1 if t_symbol > 0.016 else 0
         cr_rate = cr / 4.0  # Coding rate
         # Payload Symbol Calculation
         payload_bits = 8 * payload_size - 4 * sf + 28 + 16 * (1 if crc else 0) - 20 * h
