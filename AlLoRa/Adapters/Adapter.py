@@ -44,8 +44,11 @@ class _PrefixMatch:
 
 class Adapter:
 
-    # After serving a request the loop pauses before reading the next one, so a board that is
-    # also driving a screen gets a slice. Kept from the pre-split bridge loop.
+    # Yielded only when there was nothing to serve, or when the link raised. Both links in the
+    # tree already block or poll-with-sleep inside read_request, so this buys them nothing; it
+    # is here so a Link that returns immediately without yielding cannot spin the board, since
+    # on-device CPU is a design invariant. It must never fire between back-to-back verbs: on
+    # the WiFi tunnel that cost 100 ms per verb, about 15% of a 1 KB transfer's wall clock.
     IDLE_SLEEP = 0.1
 
     def __init__(self, connector: Connector = None, config_file=None, link=None, debug=False):
@@ -123,7 +126,8 @@ class Adapter:
                     self.status["SNR"] = self.connector.get_snr()
                     self.status.notify()
                     gc.collect()
-                sleep(self.IDLE_SLEEP)
+                else:
+                    sleep(self.IDLE_SLEEP)
             except KeyboardInterrupt:
                 if self.debug:
                     print("THREAD_EXIT")
@@ -131,13 +135,16 @@ class Adapter:
             except Exception as e:
                 if self.debug:
                     print("Error in Adapter: {}".format(e))
+                # A link that raises rather than returning None (a dead UART, an unplugged
+                # bridge) would otherwise retry with no pause at all.
+                sleep(self.IDLE_SLEEP)
 
     def serve(self, should_stop=None):
         """Pump verb requests until `should_stop()` says stop (or forever). Each request runs
         one radio verb and writes exactly one reply, so the client's blocked rpc always wakes.
 
-        This is the bare pump, without run()'s status refresh and inter-request pause: it is
-        what a caller driving the bridge from its own loop wants.
+        This is the bare pump, without run()'s status refresh and idle pause: it is what a
+        caller driving the bridge from its own loop wants.
         """
         while should_stop is None or not should_stop():
             self.handle_one(timeout=0.5)
