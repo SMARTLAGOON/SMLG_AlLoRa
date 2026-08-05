@@ -4,12 +4,17 @@ Measures the **v2 wire's** end-to-end throughput / success / retransmissions on 
 T3S3, so the v3 wire-format decision is made against real numbers — the +1-header-byte
 and DATA-index calls are **gated on this baseline**, not on arithmetic.
 
-> **Run it from the deployed `v2.0.0` tag.** The harness is frozen on the v2 API
-> (`Source` / `Requester` / `AlLoRa_File`), which is the point: a v2 baseline has to be
+> **Run it against the deployed `v2.0.0` library.** The harness is frozen on the v2 API
+> (`Source` / `Requester` / `CTP_File`), which is the point: a v2 baseline has to be
 > measured against v2 code, not against v3 code that happens to speak the same wire.
 > `Source` and `Requester` were removed from the v3 branch when the aliases went, so
-> these two `main.py` files import only on the tag. Do not migrate them to `Edge` / `Hub`;
-> that would silently turn the baseline into a v3 measurement.
+> these two `main.py` files import only against the tag's package. Do not migrate them to
+> `Edge` / `Hub`; that would silently turn the baseline into a v3 measurement.
+>
+> **This folder does not exist at the tag.** It was written later on the v3 branch and
+> frozen on the v2 *API*, so "run it from the tag" means: flash the tag's `AlLoRa/`
+> package, then add these mains on top. The file class is `CTP_File` at `v2.0.0` and
+> `AlLoRa_File` on v3, which is why `Source/main.py` imports it through a try/except.
 
 ## What it does
 - **Source** (`Source/main.py`) serves a fixed size sweep (`SIZES_KB`, `ROUNDS` times)
@@ -24,7 +29,8 @@ and DATA-index calls are **gated on this baseline**, not on arithmetic.
   into a per-SF table.
 
 ## Run it
-1. **Flash** `Source/` to one T3S3, `Requester/` to the other (each with its `LoRa.json`).
+1. **Flash** the `v2.0.0` `AlLoRa/` package to both T3S3, then `Source/` to one and
+   `Requester/` to the other (each with its `LoRa.json`).
 2. In `Requester/main.py` set `SOURCE_MAC` (the Source prints its MAC on boot) and `SF`.
 3. Pick one SF per session: set `sf` in `Source/LoRa.json` **and** `SF` in `Requester/main.py`
    to the same value. Start the Requester first, then the Source.

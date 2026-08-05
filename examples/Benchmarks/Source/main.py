@@ -1,7 +1,8 @@
 """v2 baseline benchmark: Source (the device under test for throughput).
 
-Flash this from the `v2.0.0` tag, not from the v3 branch: it is deliberately frozen on the
-v2 API, and `Source` no longer exists on v3. See this folder's README.
+Run this against the `v2.0.0` library, not against the v3 branch: it is deliberately frozen
+on the v2 API, and `Source` no longer exists on v3. The harness itself only exists on v3, so
+flashing means the tag's `AlLoRa/` package plus this file. See this folder's README.
 
 Serves a fixed set of file sizes a few times each and prints one machine-readable
 `BENCH,...` line per transfer (wall-clock around send_file -> end-to-end throughput,
@@ -15,7 +16,11 @@ Establishes the v2 baseline the v3 wire-format call is gated on (measured, not a
 import gc
 
 from AlLoRa.Nodes.Source import Source
-from AlLoRa.File import AlLoRa_File
+try:
+    from AlLoRa.File import CTP_File as BenchFile      # v2.0.0: the library this harness measures
+except ImportError:
+    from AlLoRa.File import AlLoRa_File as BenchFile   # v3: same class, renamed. Kept so the file
+                                                       # also imports on the branch it is stored on
 from AlLoRa.Connectors.SX127x_connector import SX127x_connector
 from AlLoRa.utils.time_utils import current_time_ms as now_ms
 
@@ -54,7 +59,7 @@ for _ in range(ROUNDS):
     for kb in SIZES_KB:
         size = kb * 1024
         gc.collect()
-        f = AlLoRa_File(name="{}.bin".format(kb), content=bytearray(b"A" * size), chunk_size=cks)
+        f = BenchFile(name="{}.bin".format(kb), content=bytearray(b"A" * size), chunk_size=cks)
         node.set_file(f)
 
         probe.retx = 0
