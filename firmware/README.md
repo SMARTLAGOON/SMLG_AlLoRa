@@ -109,3 +109,11 @@ re-handshakes. Silence alone is deliberately not enough, since an endpoint with 
 metadata poll with nothing at all and would otherwise be re-keyed while merely idle. The budget is
 `session_recovery_after` (default 3 visits) on the Hub ctor. This matters most for the RESET control
 artifact, which reboots an endpoint on purpose: rebuild to reach it.
+
+**Validating endpoint radio defaults needs a non-SF7 bench.** An endpoint that states no radio
+settings of its own now follows the node that polls it, resolved once when the endpoint is
+constructed rather than read live (mid-round the radio sits on whichever endpoint was visited last,
+so a live read would make every unstated endpoint inherit its neighbour). The previous behaviour was
+a hardcoded SF7, so at SF7 the old and new code are indistinguishable and a green run proves
+nothing. Flash a Hub whose own config is some other spreading factor, register an endpoint with no
+`connector` block, and confirm the transfer completes at the Hub's factor.
