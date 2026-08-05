@@ -25,7 +25,8 @@ prints/saves it under `Results/<label>/`.
 ## The two things that must line up
 
 1. **RF config must match** on both `LoRa.json`: `sf` / `freq` / `bandwidth` / `coding_rate`.
-   (They're identical here: SF7 / 868 / 125 / 4-5.)
+   (They're identical here: SF7 / 868 / 125 / 4-5.) Changing those two files is enough: the Hub's
+   endpoint states no radio of its own, so it is polled on whatever the Hub's `LoRa.json` says.
 2. **`session_id` must match**, because v3 addresses by session id, not MAC. Both are `42` here.
    The Hub's `mac_address` field is just a label and the save-folder name; it doesn't affect
    addressing in v3 (set it to the Edge's printed MAC if you want a meaningful folder).

@@ -125,6 +125,11 @@ class Hub(Node):
         # the map subscribers read. Run on every change to the collection, so an endpoint
         # registered after boot is as addressable, and as visible, as one loaded from file.
         assign_session_ids(self.digital_endpoints)
+        # Resolve RF here rather than at the first visit so the whole roster is decided, and
+        # printed, at boot: which endpoints follow this Hub and which carry their own radio
+        # is exactly what you want to read before wondering why one of them is silent.
+        for endpoint in self.digital_endpoints:
+            self.resolve_endpoint_rf(endpoint)
         self.status["Digital_Endpoints"] = {ep.get_label(): ep.file_reception_info
                                             for ep in self.digital_endpoints}
 
@@ -246,6 +251,9 @@ class Hub(Node):
         # probe fallback and arming the trial. prepare_connector tunes to endpoint.* on the next
         # visit, so updating those fields IS the Hub following the Edge onto the new config.
         sid = digital_endpoint.session_id
+        # The rollback target has to be a real config, never an endpoint's "follow this node"
+        # placeholder: giving up on a trial has to put the radio somewhere concrete.
+        self.resolve_endpoint_rf(digital_endpoint)
         old = [digital_endpoint.freq, digital_endpoint.sf, digital_endpoint.bw,
                digital_endpoint.cr, digital_endpoint.tx_power]
         for attr in ("freq", "sf", "bw", "cr", "tx_power"):

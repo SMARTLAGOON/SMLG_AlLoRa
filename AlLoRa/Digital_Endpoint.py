@@ -59,6 +59,11 @@ class Digital_Endpoint:
         - listening_time: Time in seconds the gateway should focus on this endpoint when checking.
         - MAX_RETRANSMISSIONS_BEFORE_MESH: Maximum retransmissions before enabling mesh mode.
         - lock_on_file_receive: If True, the gateway locks on this node until a complete file is received or a timeout occurs.
+
+        RF settings are optional. State them in a `connector` block inside `config`, spelled as
+        in LoRa.json (`freq`, `sf`, `bandwidth`, `coding_rate`, `tx_power`), so the peer's own
+        block can be pasted across; anything left unstated is polled on the config of the node
+        holding this endpoint. See `_read_rf`.
         """
         if config:
             self.name = config.get('name', name)
@@ -70,11 +75,7 @@ class Digital_Endpoint:
             self.MAX_RETRANSMISSIONS_BEFORE_MESH = config.get('MAX_RETRANSMISSIONS_BEFORE_MESH', MAX_RETRANSMISSIONS_BEFORE_MESH)
             self.lock_on_file_receive = config.get('lock_on_file_receive', lock_on_file_receive)
             self.max_listen_time_when_locked = config.get('max_listen_time_when_locked', max_listen_time_when_locked)
-            self.freq = config.get('freq', 868)
-            self.sf = config.get('sf', 7)
-            self.bw = config.get('bw', 125)
-            self.cr = config.get('cr', 1)
-            self.tx_power = config.get('tx_power', 14)
+            self._read_rf(config)
             explicit_sid = config.get('session_id', session_id)
             raw_device_id = config.get('device_id', device_id)
         else:
@@ -87,11 +88,7 @@ class Digital_Endpoint:
             self.MAX_RETRANSMISSIONS_BEFORE_MESH = MAX_RETRANSMISSIONS_BEFORE_MESH
             self.lock_on_file_receive = lock_on_file_receive
             self.max_listen_time_when_locked = max_listen_time_when_locked
-            self.freq = 868
-            self.sf = 7
-            self.bw = 125
-            self.cr = 1
-            self.tx_power = 14
+            self._read_rf(None)
             explicit_sid = session_id
             raw_device_id = device_id
 
@@ -126,6 +123,71 @@ class Digital_Endpoint:
         self.mesh = False  # Mesh mode starts disabled
         self.retransmission_counter = 0  # Counter for retransmissions
         self.debug = debug
+
+    # The five settings that describe a peer's RADIO: what this node has to match to hear it.
+    # Anything else in a pasted block (timeouts, debug, serial_port/baud) describes how the
+    # LOCAL node reaches its own radio, so it has no meaning here. The timeouts in particular
+    # are already derived: change_rf_config recomputes them from the SF and BW it just set.
+    _RF_FIELDS = ("freq", "sf", "bw", "cr", "tx_power")
+    # Canonical spelling inside a `connector` block, which is LoRa.json's own: an endpoint
+    # block is meant to be that file's connector block, pasted across unedited.
+    _RF_FROM_CONNECTOR = {"freq": "freq", "sf": "sf", "bw": "bandwidth",
+                          "cr": "coding_rate", "tx_power": "tx_power"}
+
+    def _read_rf(self, config):
+        """Read this endpoint's RF from its config, leaving anything unstated as None.
+
+        None means "wherever the node polling me already is", resolved against that node's
+        own configured RF when the endpoint is registered. It does NOT mean SF7: an endpoint
+        that says nothing about its radio used to retune the poller down to a hardcoded SF7
+        that appeared in no config file, so a whole deployment at any other SF went silent
+        with nothing logged.
+
+        Two accepted shapes. A `connector` block is the documented one, spelled exactly as in
+        LoRa.json so it can be pasted from the peer's own config; the flat `sf`/`bw`/`cr` keys
+        are the legacy shape and still read. A block wins outright if both are present.
+        """
+        self.rf_skipped = ()
+        self.rf_source = "node"
+        if not config:
+            for field in Digital_Endpoint._RF_FIELDS:
+                setattr(self, field, None)
+            return
+        block = config.get('connector')
+        if block:
+            for field, key in Digital_Endpoint._RF_FROM_CONNECTOR.items():
+                setattr(self, field, block.get(key))
+            # A pasted block carries the local node's plumbing too. Naming what was skipped
+            # turns a silent drop into something visible at boot, where it is cheap.
+            self.rf_skipped = tuple(k for k in block
+                                    if k not in Digital_Endpoint._RF_FROM_CONNECTOR.values())
+            self.rf_source = "connector block"
+            return
+        for field in Digital_Endpoint._RF_FIELDS:
+            setattr(self, field, config.get(field))
+        if any(getattr(self, f) is not None for f in Digital_Endpoint._RF_FIELDS):
+            self.rf_source = "legacy keys"
+
+    def resolve_rf(self, defaults):
+        """Fill whatever this endpoint left unstated from `defaults`, once.
+
+        `defaults` is the polling node's own configured RF, snapshotted at construction and
+        NOT read live: by the second visit of a round the radio sits on the previous
+        endpoint's config, so resolving against the live values would quietly make every
+        unstated endpoint inherit its neighbour instead of the node's own file.
+
+        Returns True when it filled something, so a caller can log the result exactly once.
+        """
+        filled = False
+        for field, value in zip(Digital_Endpoint._RF_FIELDS, defaults):
+            if getattr(self, field) is None:
+                setattr(self, field, value)
+                filled = True
+        return filled
+
+    def describe_rf(self):
+        return "{}/SF{}/BW{}/CR{}/{}dBm".format(self.freq, self.sf, self.bw,
+                                                self.cr, self.tx_power)
 
     def __repr__(self):
         return "Digital_Endpoint({} ({})".format(self.name, self.get_label())

@@ -17,8 +17,7 @@
       "asking_frequency": 300,
       "listening_time": 20,
       "lock_on_file_receive": false,
-      "max_listen_time_when_locked": 60,
-      "sf": 7
+      "max_listen_time_when_locked": 60
   },
   {
       "name": "sentiment2",
@@ -49,6 +48,12 @@
       "listening_time": 60,
       "lock_on_file_receive": true,
       "max_listen_time_when_locked": 60,
-      "sf": 8
+      "connector": {
+          "freq": 868,
+          "sf": 8,
+          "bandwidth": 125,
+          "coding_rate": 1,
+          "tx_power": 14
+      }
   }
 ]

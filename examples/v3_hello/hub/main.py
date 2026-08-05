@@ -13,6 +13,11 @@ print("HUB ready | MAC:", hub.MAC)
 
 # OPEN mode: v3 data transfer addresses by session id, so session_id must match the Edge's
 # LoRa.json. mac_address is only a label + the save-folder name here.
+#
+# No radio settings here on purpose: an endpoint that states none is polled on this Hub's own
+# LoRa.json, so changing sf in both LoRa.json files is all it takes to move the pair to another
+# spreading factor. Give it a `config={... "connector": {...}}` only to poll an Edge on settings
+# that differ from this node's.
 endpoint = Digital_Endpoint(name="src", mac_address="9eeff0dc", active=True, session_id=42)
 
 # SECURE mode: register the Edge by its device_id (it prints it on boot). First contact is

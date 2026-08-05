@@ -173,6 +173,13 @@ the transfer, the mesh-retransmission state, the file currently in flight, and t
 It also assembles the complete `AlLoRa_File` once every chunk has arrived. An Edge holds one too, for
 its Hub.
 
+The Hub retunes to an endpoint's RF settings before listening to it, which is how one Hub serves
+several Edges on different configs. An endpoint that states no RF is polled on **the node's own
+`LoRa.json` config**, so the common case, where both ends share a configuration, needs nothing
+written down. To place one Edge on different settings, give its `Nodes.json` entry a `connector`
+block copied from that Edge's own `LoRa.json`; anything the block omits still comes from this node.
+See [examples/Hubs/Many-Edges](examples/Hubs/Many-Edges).
+
 </details>
 
 ## Transport: Connector, Link, Adapter

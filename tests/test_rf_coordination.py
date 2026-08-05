@@ -291,6 +291,8 @@ def test_hub_mirrors_endpoint_config_after_the_reconfig_downlink_is_delivered(tm
     edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
     edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn, reclaim_timeout=3)
 
+    # This endpoint states no RF of its own, so it follows the Hub, and the Hub is on sf7.
+    hub.resolve_endpoint_rf(endpoint)
     assert endpoint.sf == 7, "the endpoint starts on the old config"
     hub.queue_downlink(endpoint, _rf_config_file({"sf": 9, "trial": 30}, hub),
                        mirror_config={"sf": 9, "trial": 30})

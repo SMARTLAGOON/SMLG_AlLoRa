@@ -71,6 +71,12 @@ class Node:
 
         self.config_connector()
 
+        # What THIS node's own config file asked for, snapshotted before any endpoint can
+        # retune the radio. It is the fallback an endpoint that states no RF resolves to, so
+        # it has to be the configured values and not the live ones: mid-round the radio is
+        # sitting on whichever endpoint was visited last.
+        self.rf_defaults = self.connector.get_rf_config()
+
         self.status["Freq"] = self.connector.frequency
         self.status["SF"] = self.connector.sf
         self.status["BW"] = self.connector.bw
@@ -1549,9 +1555,26 @@ class Node:
             print("Min sleep time: ", min_sleep_time, "Max sleep time: ", max_sleep_time)
         return min_sleep_time, max_sleep_time
 
+    def resolve_endpoint_rf(self, digital_endpoint):
+        """Give an endpoint concrete RF, filling whatever it left unstated from this node's
+        own config. Idempotent, so it is safe on every path that can produce an endpoint:
+        registration from a file, registration by hand, and one handed straight to
+        listen_to_endpoint without being registered at all."""
+        if not digital_endpoint.resolve_rf(self.rf_defaults):
+            return
+        if self.debug:
+            # Naming the source is the point: an endpoint on the wrong config and an endpoint
+            # correctly following this node look identical once resolved.
+            print("Endpoint {} ({}): RF {} (from {})".format(
+                digital_endpoint.get_name(), digital_endpoint.get_label(),
+                digital_endpoint.describe_rf(), digital_endpoint.rf_source))
+            if digital_endpoint.rf_skipped:
+                print("  ignored non-RF keys: {}".format(", ".join(digital_endpoint.rf_skipped)))
+
     def prepare_connector(self, digital_endpoint):
         if self.debug:
             print("Preparing connector for endpoint: ", digital_endpoint)
+        self.resolve_endpoint_rf(digital_endpoint)
         de_freq = digital_endpoint.freq
         de_sf = digital_endpoint.sf
         de_bw = digital_endpoint.bw
