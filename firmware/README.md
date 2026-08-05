@@ -110,6 +110,12 @@ metadata poll with nothing at all and would otherwise be re-keyed while merely i
 `session_recovery_after` (default 3 visits) on the Hub ctor. This matters most for the RESET control
 artifact, which reboots an endpoint on purpose: rebuild to reach it.
 
+**The bridge no longer pauses between back-to-back verbs.** The adapter loop's 100 ms pause now
+fires only when there was nothing to serve, or when the link raised. Any tunnel timing measured
+against a `.bin` built before this is not comparable: the old build spent 100 ms per transport
+verb inside the bridge, roughly 15% of a 1 KB transfer. Re-measure rather than diffing against a
+recorded run.
+
 **Validating endpoint radio defaults needs a non-SF7 bench.** An endpoint that states no radio
 settings of its own now follows the node that polls it, resolved once when the endpoint is
 constructed rather than read live (mid-round the radio sits on whichever endpoint was visited last,
