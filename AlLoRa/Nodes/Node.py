@@ -641,6 +641,21 @@ class Node:
             self.set_file(self.datasource.get_next_file())
 
     def establish_connection(self, try_for=None):
+        """v2 only. Wait for a peer and optionally agree an RF change before transferring.
+
+        v3 has no separate connect step: serve a file and let `send_file()` block until the
+        peer asks for it. That synchronizes the two ends exactly as this did, and it also
+        covers the secure handshake, which this does not.
+        """
+        if self.protocol_version >= 3:
+            # This negotiates over v2 RF-change verbs the v3 frame does not carry, so left
+            # unguarded it raises AttributeError on the first packet received: deep inside
+            # the receive loop, after the radio is already running, and reading as a library
+            # bug rather than a wrong call. Refuse at the call instead, where the mistake is.
+            raise NotImplementedError(
+                "establish_connection() is v2 only: it negotiates RF changes with frame "
+                "fields that do not exist in version 3. A v3 node waits for its peer by "
+                "serving a file and letting send_file() block until the peer asks for it.")
         while True:
             if self.debug:
                 print("Establish")

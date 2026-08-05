@@ -6,6 +6,8 @@ its uplink and a Hub serving a delegated downlink rely on.
 import json
 import threading
 
+import pytest
+
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.File import AlLoRa_File
@@ -150,6 +152,31 @@ def test_v2_rf_change_while_idle_does_not_crash_serve(tmp_path):
     assert not edge.connector.outbox.empty(), "the confirming reply never went out"
 
 
+# --- the connection wait is v2 only, and says so at the call ------------------
+
+def test_establish_connection_refuses_on_a_v3_node(tmp_path):
+    # It negotiates over v2 RF-change fields that the v3 frame does not carry. Left
+    # unguarded it ran until the first packet arrived and then raised AttributeError
+    # from inside the receive loop, which reads as a library bug rather than a wrong
+    # call. A v3 node must be told at the call, before the radio starts.
+    edge = _make_edge(tmp_path)
+    edge.connector.inbox.put(b"\xff")    # a packet would only make it fail later
+
+    with pytest.raises(NotImplementedError) as excinfo:
+        edge.establish_connection(try_for=1)
+
+    assert "send_file" in str(excinfo.value), "the refusal must name the v3 way to wait"
+
+
+def test_establish_connection_still_runs_on_a_v2_node(tmp_path):
+    # The eight Edge examples that call it all default to version 2, so the guard must
+    # be scoped to v3 and leave the legacy path exactly as it was.
+    legacy = _make_v2_edge(tmp_path)
+    legacy.connector.inbox.put(b"\xff")
+
+    assert legacy.establish_connection(try_for=1) is False
+
+
 # --- radio-adjacent paths must be silent unless debug is on -------------------
 
 def test_quiet_paths_stay_quiet_without_debug(tmp_path, capsys):
@@ -168,8 +195,11 @@ def test_quiet_paths_stay_quiet_without_debug(tmp_path, capsys):
 
     assert edge.prepare_connector(endpoint) is True
 
-    edge.connector.inbox.put(b"\xff")    # instant round, nothing parseable
-    edge.establish_connection(try_for=1)
+    # The connection wait is v2 only, so it has to be probed on a v2 node.
+    legacy = _make_v2_edge(tmp_path)
+    capsys.readouterr()
+    legacy.connector.inbox.put(b"\xff")    # instant round, nothing parseable
+    legacy.establish_connection(try_for=1)
 
     assert capsys.readouterr().out == ""
 
