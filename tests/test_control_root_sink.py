@@ -8,13 +8,18 @@ operates on the fully reassembled artifact, and is the gate, not the actuator: o
 artifact it hands the wrapped actuator the trusted (control_type, payload); on anything
 that fails it drops the artifact and never forwards.
 
-Envelope:  version(1) || type(1) || target_device_id(32) || payload || sig(64)
-           sig = ECDSA-P256 over SHA-256( version || type || target || payload ), raw r||s.
+Envelope:  version(1) || type(1) || target_device_id(32) || counter(4) || payload || sig(64)
+           sig = ECDSA-P256 over SHA-256( everything before it ), raw r||s.
 
-Vectors below are frozen literals authored with the `ecdsa` lib and cross-checked against this
-project's own ec_p256.ecdsa_verify (see the scratchpad generator), so the suite stays
-dependency-free and the runtime only ever verifies, never signs.
+The envelopes below are minted at test time from a control-root keypair rather than pasted in
+as frozen literals: the library can sign now, so a format change can re-sign its own fixtures
+instead of needing a generator script that is no longer around. This does not leave the tests
+marking their own homework, because the signature primitives are pinned independently against
+RFC 6979's published vectors in test_ec_p256.py. What is under test here is the envelope
+structure and the gate's policy, which is our own format and has no external vector to hold it
+to anyway.
 """
+import hashlib
 import math
 import os
 
@@ -25,13 +30,17 @@ from AlLoRa.DataSinks.DataSink import Reception
 from AlLoRa.Control.Control_Actuator import Control_Actuator
 from AlLoRa.Control.control_types import RF_CONFIG, RESET, MODEL, OTA
 from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink, ENVELOPE_VERSION
+from AlLoRa.Security.ec_p256 import ecdsa_sign, public_key_uncompressed
 
-# --- frozen vectors (authored with ecdsa 0.18.0; see scratchpad/gen_vectors.py) -------------
+# --- the deployment's control root, and the artifacts it mints -----------------------------
 
-CONTROL_ROOT_PUB = bytes.fromhex(
-    "04e184ae8152166cbf2ed1a6647627d0d3e6d2c806e79e383865e67ac14273ce8e"
-    "5f2549640fd707f6347253a2e0959d572ee8298dc1cf1f90130fc3097fe8fb7c"
-)
+# RFC 6979 A.2.5's published test scalar, used here because it is unmistakably not a real key.
+CONTROL_ROOT_PRIV = 0xC9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721
+CONTROL_ROOT_PUB = public_key_uncompressed(CONTROL_ROOT_PRIV)
+CONTROL_ROOT_HEX = CONTROL_ROOT_PUB.hex()
+
+# An unrelated authority: valid keys, no standing with a node pinned to the root above.
+OTHER_ROOT_PRIV = 0x1F2E3D4C5B6A79889796A5B4C3D2E1F00F1E2D3C4B5A69788897A6B5C4D3E2F1
 TARGET_DEVICE_ID = bytes.fromhex(
     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 )
@@ -40,35 +49,21 @@ OTHER_DEVICE_ID = bytes.fromhex(
 )
 RF_PAYLOAD = b'{"sf":9,"bw":125,"tx_power":14}'
 
-# version=1 type=RF_CONFIG target=TARGET payload=RF_PAYLOAD, correctly signed by the control root.
-ENV_RF_CONFIG_VALID = bytes.fromhex(
-    "0101000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-    "7b227366223a392c226277223a3132352c2274785f706f776572223a31347d"
-    "77b659a479d20d850078cfd8cc6eaad868882177ccdb4b8e3be6207fcbdacb43"
-    "f276ce4f98dfb9270f2c6b7783c3d987aa1848693b594f55cbec2809f15b8574"
-)
-# version=1 type=RESET target=TARGET payload=b"" (empty), correctly signed.
-ENV_RESET_VALID = bytes.fromhex(
-    "0102000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-    "3a17bd32dbef93f3e0c72ae9860f37b2ecc2cc0e2990d6637dbf1414112568bc"
-    "e2933245fc971a587ffaaf6050b1ea24c0946906bfa31d2fdf36ff676a84b2e4"
-)
-# validly signed but type=0x7f (undefined / no actuator) — must still be dropped.
-ENV_UNKNOWN_TYPE_VALID = bytes.fromhex(
-    "017f000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-    "7b227366223a392c226277223a3132352c2274785f706f776572223a31347d"
-    "a32bb522a362af8263edbcffeadaa32b50a1a9790b424bab4d23ddaa5f86123a"
-    "26bf93cc6d22d065f219a9ef5c4a47081b6a00d654c7749f26fac27c54079fc6"
-)
-# validly signed but version=2 (unsupported) — must be dropped (cross-version confusion).
-ENV_BAD_VERSION_VALID = bytes.fromhex(
-    "0201000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-    "7b227366223a392c226277223a3132352c2274785f706f776572223a31347d"
-    "dda38dad9766a28fdf4241393e42c3bebda263890e6552337205482b27154552"
-    "ee67cc432814201ca1bc9c258f51d18d910e6625ba0c7e1a3f03d38540c52108"
-)
 
-CONTROL_ROOT_HEX = CONTROL_ROOT_PUB.hex()
+def _envelope(control_type, payload, target=TARGET_DEVICE_ID, counter=1,
+              version=ENVELOPE_VERSION, priv=CONTROL_ROOT_PRIV):
+    """Mint one control artifact, signed the way the gate expects to find it."""
+    region = (bytes([version, control_type]) + bytes(target)
+              + counter.to_bytes(4, "big") + bytes(payload))
+    return region + ecdsa_sign(priv, hashlib.sha256(region).digest())
+
+
+ENV_RF_CONFIG_VALID = _envelope(RF_CONFIG, RF_PAYLOAD)
+ENV_RESET_VALID = _envelope(RESET, b"")
+# Validly signed and correctly targeted, but a type with no actuator in this release.
+ENV_UNKNOWN_TYPE_VALID = _envelope(0x7F, RF_PAYLOAD)
+# Validly signed, in a format version this node does not understand.
+ENV_BAD_VERSION_VALID = _envelope(RF_CONFIG, RF_PAYLOAD, version=ENVELOPE_VERSION + 1)
 
 
 class _CapturingActuator(Control_Actuator):
@@ -92,9 +87,10 @@ def _artifact(tmp_path, content, name="ctrl.bin", chunk_size=32):
     return f
 
 
-def _sink(actuator, device_id=TARGET_DEVICE_ID, control_root=CONTROL_ROOT_HEX):
+def _sink(actuator, device_id=TARGET_DEVICE_ID, control_root=CONTROL_ROOT_HEX,
+          counter_file=None):
     return Control_Root_DataSink(control_root=control_root, device_id=device_id,
-                                 actuator=actuator)
+                                 actuator=actuator, counter_file=counter_file)
 
 
 # --- Slice 1: a verified artifact is handed to the actuator ---------------------------
@@ -139,8 +135,8 @@ def test_artifact_targeting_another_node_is_dropped(tmp_path):
 # --- Slice 4: structural rejects (all cheap checks, before the expensive verify) ------------
 
 def test_unsupported_version_is_dropped(tmp_path):
-    # Correctly signed for version=2, but this node only understands ENVELOPE_VERSION. Acting on
-    # a format it does not understand is exactly the cross-version confusion the version guards.
+    # Correctly signed, but in a format version this node does not understand. Acting on a
+    # format it cannot parse is exactly the cross-version confusion the version guards.
     actuator = _CapturingActuator()
     _sink(actuator).consume(_artifact(tmp_path, ENV_BAD_VERSION_VALID), Reception(source="hub"))
     assert actuator.applied == [], "an unsupported envelope version must be dropped"
@@ -238,3 +234,131 @@ def test_reassembly_temp_is_released_on_accept_and_reject(tmp_path):
     assert os.path.exists(temp_bad)
     _sink(_CapturingActuator()).consume(rejected, Reception(source="hub"))
     assert not os.path.exists(temp_bad), "a rejected artifact left its reassembly temp behind"
+
+
+# --- Slice 8: freshness, so authority is end-to-end and not just unforgeable ----------------
+#
+# Without a counter a signed artifact is valid forever, and freshness is delegated to whoever
+# carries it. That defeats the property the control root exists for: a Hub that cannot forge a
+# command can still replay one it carried before, re-imposing a recorded config at will with a
+# perfectly valid signature. The counter lives inside the signed region and a node refuses any
+# artifact whose counter it has already passed.
+
+
+def test_a_replayed_artifact_is_refused_the_second_time(tmp_path):
+    # The same bytes, the same valid signature, delivered twice. The first is genuine; the
+    # second is a replay and must not act.
+    actuator = _CapturingActuator()
+    sink = _sink(actuator)
+    artifact = _envelope(RF_CONFIG, RF_PAYLOAD)
+
+    sink.consume(_artifact(tmp_path, artifact, name="first.bin"), Reception(source="hub"))
+    sink.consume(_artifact(tmp_path, artifact, name="again.bin"), Reception(source="hub"))
+
+    assert actuator.applied == [(RF_CONFIG, RF_PAYLOAD)], \
+        "a replayed control artifact must be acted on once, not once per delivery"
+
+
+def test_a_later_artifact_is_still_accepted_after_an_earlier_one(tmp_path):
+    # The counter refuses what came before, never what comes next: an operator must be able to
+    # keep reconfiguring the node.
+    actuator = _CapturingActuator()
+    sink = _sink(actuator)
+
+    sink.consume(_artifact(tmp_path, _envelope(RF_CONFIG, RF_PAYLOAD, counter=4), name="a.bin"),
+                 Reception(source="hub"))
+    sink.consume(_artifact(tmp_path, _envelope(RESET, b"", counter=9), name="b.bin"),
+                 Reception(source="hub"))
+
+    assert actuator.applied == [(RF_CONFIG, RF_PAYLOAD), (RESET, b"")]
+
+
+def test_an_artifact_reminted_at_the_same_counter_is_refused(tmp_path):
+    # Strictly greater, not greater-or-equal. A fresh signature over the same counter is the
+    # authority repeating itself, and the node has already acted on that instruction.
+    actuator = _CapturingActuator()
+    sink = _sink(actuator)
+
+    sink.consume(_artifact(tmp_path, _envelope(RF_CONFIG, RF_PAYLOAD, counter=4), name="a.bin"),
+                 Reception(source="hub"))
+    sink.consume(_artifact(tmp_path, _envelope(RESET, b"", counter=4), name="b.bin"),
+                 Reception(source="hub"))
+
+    assert actuator.applied == [(RF_CONFIG, RF_PAYLOAD)], "the counter must be strictly greater"
+
+
+def test_the_high_water_mark_survives_a_reboot(tmp_path):
+    # A mark held only in RAM resets on restart and re-opens the entire replay window, which is
+    # most of what the counter buys. Power-cycling the node must not make a captured artifact
+    # replayable again.
+    mark = str(tmp_path / "control.mark")
+    artifact = _envelope(RF_CONFIG, RF_PAYLOAD, counter=5)
+
+    before = _CapturingActuator()
+    _sink(before, counter_file=mark).consume(
+        _artifact(tmp_path, artifact, name="before.bin"), Reception(source="hub"))
+    assert before.applied == [(RF_CONFIG, RF_PAYLOAD)]
+
+    after_reboot = _CapturingActuator()          # a fresh gate reading the mark off the filesystem
+    _sink(after_reboot, counter_file=mark).consume(
+        _artifact(tmp_path, artifact, name="after.bin"), Reception(source="hub"))
+
+    assert after_reboot.applied == [], "the replay window re-opened across a reboot"
+
+
+def test_rotating_the_control_root_starts_the_count_over(tmp_path):
+    # How a reset happens with nothing added to the wire: a mark is keyed by the root that
+    # accepted it, so a new root does not match and counts from zero. Artifacts signed by the
+    # old root no longer verify anyway, so nothing old becomes replayable.
+    mark = str(tmp_path / "control.mark")
+    seasoned = _CapturingActuator()
+    _sink(seasoned, counter_file=mark).consume(
+        _artifact(tmp_path, _envelope(RF_CONFIG, RF_PAYLOAD, counter=900), name="old.bin"),
+        Reception(source="hub"))
+    assert seasoned.applied == [(RF_CONFIG, RF_PAYLOAD)]
+
+    # Re-provisioned onto a different authority, whose own numbering starts low.
+    rotated = _CapturingActuator()
+    new_root = public_key_uncompressed(OTHER_ROOT_PRIV)
+    _sink(rotated, control_root=new_root.hex(), counter_file=mark).consume(
+        _artifact(tmp_path, _envelope(RESET, b"", counter=1, priv=OTHER_ROOT_PRIV),
+                  name="new.bin"),
+        Reception(source="hub"))
+
+    assert rotated.applied == [(RESET, b"")], \
+        "a rotated root must not inherit the previous root's high-water mark"
+
+
+def test_a_refused_artifact_does_not_move_the_mark(tmp_path):
+    # The mark moves only on an artifact that verified. Otherwise anyone able to put bytes in
+    # front of the node could send a forged artifact with a huge counter and lock it out of
+    # every genuine command below that number.
+    actuator = _CapturingActuator()
+    sink = _sink(actuator)
+    forged = bytearray(_envelope(RF_CONFIG, RF_PAYLOAD, counter=10_000))
+    forged[-1] ^= 0x01
+
+    sink.consume(_artifact(tmp_path, bytes(forged), name="forged.bin"), Reception(source="hub"))
+    sink.consume(_artifact(tmp_path, _envelope(RF_CONFIG, RF_PAYLOAD, counter=2), name="ok.bin"),
+                 Reception(source="hub"))
+
+    assert actuator.applied == [(RF_CONFIG, RF_PAYLOAD)], \
+        "a forged counter must not raise the bar for genuine commands"
+
+
+def test_a_failed_actuation_leaves_the_artifact_deliverable_again(tmp_path):
+    # The gate already lets an actuation failure propagate so the drive loop re-pulls the same
+    # artifact. That retry only works if the mark has not moved yet: marking on verify rather
+    # than on actuation would refuse the node's own retry as a replay and lose the command.
+    artifact = _envelope(RF_CONFIG, RF_PAYLOAD, counter=3)
+    failing = _sink(_FailingActuator())
+    with pytest.raises(RuntimeError):
+        failing.consume(_artifact(tmp_path, artifact, name="try1.bin"), Reception(source="hub"))
+
+    assert failing.counter == 0, "a command that never actuated must not count as delivered"
+
+    recovered = _CapturingActuator()
+    failing.actuator = recovered                 # the transient condition clears
+    failing.consume(_artifact(tmp_path, artifact, name="try2.bin"), Reception(source="hub"))
+
+    assert recovered.applied == [(RF_CONFIG, RF_PAYLOAD)], "the re-pull must still be accepted"

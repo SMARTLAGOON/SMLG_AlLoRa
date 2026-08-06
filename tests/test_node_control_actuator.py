@@ -177,10 +177,10 @@ def test_rf_config_without_trial_falls_back_to_a_toa_scaled_default(tmp_path):
     assert edge._default_trial_window() >= 30.0, "the fallback window is a sane ToA-scaled floor"
 
 
-# --- Slice 6: end-to-end gate -> actuator, on the frozen signed vectors ---------------------
+# --- Slice 6: end-to-end gate -> actuator, on a genuinely signed envelope -------------------
 
 def test_verified_envelope_through_the_gate_reaches_the_actuator_and_queues(tmp_path):
-    # Compose the real verifier with the real actuator and feed the frozen, correctly-signed
+    # Compose the real verifier with the real actuator and feed a correctly-signed
     # RF_CONFIG envelope: the gate must verify it and hand the actuator the (type, payload), the
     # actuator must defer, and draining must apply exactly the config the signed envelope carried.
     from test_control_root_sink import ENV_RF_CONFIG_VALID, CONTROL_ROOT_HEX, TARGET_DEVICE_ID, _artifact
