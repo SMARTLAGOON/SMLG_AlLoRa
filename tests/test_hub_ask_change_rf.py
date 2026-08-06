@@ -22,6 +22,8 @@ from AlLoRa.Control.control_types import RF_CONFIG
 from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
 from AlLoRa.DataSinks.DataSink import Reception
 from AlLoRa.DataSources.DataSource import DataSource
+from AlLoRa.Nodes.Node import Node
+from AlLoRa.Packet_v3 import Packet_v3
 from test_control_root_sink import (
     CONTROL_ROOT_PRIV, OTHER_ROOT_PRIV, TARGET_DEVICE_ID, _CapturingActuator,
 )
@@ -136,6 +138,86 @@ def test_a_hub_with_neither_a_root_nor_an_artifact_asks_in_band(tmp_path):
     assert hub.ask_change_rf(endpoint, {"sf": 9}) is False, \
         "the in-band exchange reports whether it landed"
     assert source.queued == [], "the in-band route must queue no downlink"
+
+
+def test_the_in_band_route_speaks_the_control_frame_a_v3_peer_listens_for(tmp_path):
+    # What the third transport actually puts on the air. It used to fall through to the v2
+    # verb, which builds a legacy flag packet unconditionally; a v3 node ignores that flag
+    # outright, so an open v3 deployment had no working way to retune at all. The change went
+    # out, was dropped in silence, and the call reported a bad link after 20 attempts rather
+    # than a missing feature.
+    hub, endpoint, source = _hub(tmp_path)
+    sent = []
+    hub.send_request = lambda packet: sent.append(packet)   # capture, answer nothing
+
+    hub.ask_change_rf(endpoint, NEW_CONFIG)
+
+    assert sent, "an open Hub must put the change on the air"
+    assert sent[0].get_command() == Packet_v3.CTRL, "an in-band command rides a CTRL frame"
+    payload = sent[0].get_payload()
+    assert payload[0] == 0x80 | RF_CONFIG, \
+        "the prefix is the namespace bit plus the control type verbatim"
+    assert json.loads(payload[1:].decode("utf-8")) == NEW_CONFIG, \
+        "the body is the same JSON the signed envelope carries, so both transports reach the "\
+        "actuator with identical arguments"
+
+
+def test_the_legacy_verb_refuses_on_a_v3_node(tmp_path):
+    # The same defect the dispatch above fixes, in its general form. `ask_change_rf` lives on
+    # Node, so the legacy implementation is reachable from any node, and it builds a v2 flag
+    # packet unconditionally. A v3 node ignores that flag on receipt, so an unguarded call
+    # transmits twenty frames nobody listens to and then reports a bad link, which sends
+    # whoever is debugging it to the antenna instead of to the version mismatch.
+    #
+    # Called unbound on purpose: the subject is the legacy implementation itself, not which
+    # transport the Hub's override would have selected.
+    hub, endpoint, source = _hub(tmp_path)
+    sent = []
+    hub.send_request = lambda packet: sent.append(packet)
+
+    assert Node.ask_change_rf(hub, endpoint, {"sf": 9}) is False, \
+        "the legacy verb has no transport on a v3 link and must say so"
+    assert sent == [], "a v3 node must put no v2 flag frame on the air"
+
+
+def test_an_echoed_prefix_is_the_acknowledgement(tmp_path):
+    # What lets the call report "applied" rather than "queued". The ack is the prefix alone,
+    # no body: the Hub already holds the config it asked for, so echoing it back would buy
+    # nothing and cost airtime, and the type acked is proof the peer parsed the type sent.
+    hub, endpoint, source = _hub(tmp_path)
+    sent = []
+
+    def _echo(packet):
+        sent.append(packet)
+        reply = hub.new_packet()
+        reply.set_kind(Packet_v3.CTRL)
+        reply.set_payload(bytes([0x80 | RF_CONFIG]))
+        return reply
+
+    hub.send_request = _echo
+
+    assert hub.ask_change_rf(endpoint, NEW_CONFIG) is True, \
+        "an echoed prefix is the peer accepting the command"
+    assert len(sent) == 1, "an acknowledged command must not be sent again"
+
+
+def test_an_ordinary_keepalive_is_not_mistaken_for_an_acknowledgement(tmp_path):
+    # Why the ack is a CTRL frame carrying the prefix rather than a plain OK. OK is also the
+    # connection-poll and keepalive kind, so a peer that is merely alive would otherwise read
+    # as a peer that accepted the change: the Hub would report success, stop retrying, and
+    # move itself onto a configuration the Edge never applied. That is the deaf-endpoint
+    # failure, reached by believing an ack that was never sent.
+    hub, endpoint, source = _hub(tmp_path)
+
+    def _keepalive(packet):
+        reply = hub.new_packet()
+        reply.set_ok()
+        return reply
+
+    hub.send_request = _keepalive
+
+    assert hub.ask_change_rf(endpoint, NEW_CONFIG) is False, \
+        "only a control ack acknowledges a control command"
 
 
 def test_a_restarted_hub_does_not_reissue_numbers_the_fleet_has_seen(tmp_path):

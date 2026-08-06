@@ -28,14 +28,14 @@ PEER_MAC = "a1a1a1a1"
 SESSION_ID = 42
 
 
-def _make_hub(tmp_path, mesh_mode=False):
+def _make_hub(tmp_path, mesh_mode=False, protocol_version=3):
     """A Hub with nobody on the other end: its inbox never fills, so every round times out."""
     config = {
         "name": "hub",
         "chunk_size": 243,
         "mesh_mode": mesh_mode,
         "short_mac": True,
-        "protocol_version": 3,
+        "protocol_version": protocol_version,
         "security_mode": "open",
         "session_id": 7,
         "debug": False,
@@ -81,10 +81,26 @@ def test_ask_data_reports_a_timeout_instead_of_raising(tmp_path):
 
 
 def test_ask_change_rf_gives_up_without_an_exception(tmp_path):
-    # The legacy v2 drive-side reconfig has the same unguarded dereference, but inside a
-    # try/except that already spends a try on it - so guarding it changes nothing except
-    # that a silent peer stops printing a crash for each of the 20 attempts.
+    # The in-band reconfiguration, which is what a v3 open Hub selects. A silent peer must
+    # exhaust the attempts and report a refused change, not raise: the give-up value is the
+    # only thing distinguishing "the Edge did not accept" from "the Edge accepted", and a
+    # caller that got an exception instead would have no way to tell which.
+    #
+    # Retargeted deliberately when the v3 in-band transport landed. It used to reach the
+    # legacy loop through the no-authority fallback, which on a v3 link put frames on the air
+    # that no peer listens to; the v2 counterpart below now covers that loop where it is live.
     hub = _make_hub(tmp_path)
+    hub.send_request = lambda packet: None
+
+    assert hub.ask_change_rf(_endpoint(), {"sf": 9}) is False
+
+
+def test_the_legacy_reconfig_loop_gives_up_without_an_exception_on_a_v2_hub(tmp_path):
+    # The same guarantee for the v2 encoding, on the only kind of node that still speaks it.
+    # The unguarded dereference lived here, inside a try/except that already spent a try on
+    # it, so guarding it changed nothing except that a silent peer stopped printing a crash
+    # for each of the twenty attempts.
+    hub = _make_hub(tmp_path, protocol_version=2)
     hub.send_request = lambda packet: None
 
     assert hub.ask_change_rf(_endpoint(), {"sf": 9}) is False

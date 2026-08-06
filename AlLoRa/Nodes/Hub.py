@@ -16,8 +16,9 @@ from json import loads, dumps
 from AlLoRa.Nodes.Node import Node
 from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids
 from AlLoRa.DataSources.DataSource import DataSource
-from AlLoRa.Control.control_types import RF_CONFIG
+from AlLoRa.Control.control_types import RF_CONFIG, IN_BAND
 from AlLoRa.File import AlLoRa_File
+from AlLoRa.Packet_v3 import Packet_v3
 from AlLoRa.utils.time_utils import current_time_ms as time, sleep, ticks_add, ticks_diff
 from AlLoRa.utils.debug_utils import print
 
@@ -34,6 +35,12 @@ class _Downlink_queue(DataSource):
 
 class Hub(Node):
 
+    # Rounds an in-band control command is retried before the call gives up. Matched to the
+    # legacy in-band reconfiguration rather than tuned: on a lossy link a single dropped frame
+    # must not read as a refused change, and a reconfiguration is rare enough that spending a
+    # few rounds on it costs nothing the transfer loop will miss.
+    _IN_BAND_ATTEMPTS = 20
+
     def __init__(self, connector=None, config_file="LoRa.json",
                  debug_hops=False,
                  max_sleep_time=3,
@@ -45,12 +52,14 @@ class Hub(Node):
                  probe_give_up_after=6,
                  session_recovery_after=3,
                  control_root=None,
-                 control_counter_file=None):
+                 control_counter_file=None,
+                 control_actuator=None):
         super().__init__(connector, config_file,
                          debug_hops=debug_hops,
                          max_sleep_time=max_sleep_time,
                          successful_interactions_required=successful_interactions_required,
                          data_sink=data_sink,
+                         control_actuator=control_actuator,
                          home_role="collector")
         # The endpoints this Hub polls, registered from a Nodes.json-shaped file. Registration
         # fails soft: a Hub with none is a node with nothing to poll, not a boot failure.
@@ -259,19 +268,26 @@ class Hub(Node):
 
           * given the control root, the Hub mints the artifact itself;
           * given `artifact`, it carries what a backend minted, untouched;
-          * given neither, the change goes as an in-band request on the link itself.
+          * given neither, the change goes in band on the link itself, as a control frame.
 
-        On either signed route the same `new_config` goes on as the mirror, so the Hub follows
-        the Edge onto the new parameters once delivery is confirmed. That is deliberately not
-        two calls: a caller who queued the command and forgot the mirror would leave the Hub
-        polling a configuration its Edge has already left, which is a deaf endpoint rather than
-        a partial success. The in-band route attaches none, because it applies the change on
-        both ends as the exchange completes rather than afterwards.
+        The in-band route is selected by version as well: it speaks a v3 frame, so a v2 link
+        falls through to the legacy encoding instead. Selecting rather than configuring is the
+        point. A deployment does not choose how its control travels, it is told by what it was
+        provisioned with, and a caller that could pick would be a caller that could pick wrong.
 
-        Returns True once a signed artifact is queued for delivery, or whatever the in-band
-        exchange reports, so a caller can tell a queued reconfiguration from a refused one.
+        Every route ends by moving this end onto `new_config` too: the signed ones through the
+        mirror once delivery is confirmed, the in-band one as soon as the peer acknowledges. A
+        reconfiguration where only the far end moves is not a partial success, it is an endpoint
+        this Hub can no longer hear, so following is not left to the caller to remember.
+
+        Returns True once a signed artifact is queued for delivery, or once an in-band command
+        has been acknowledged, so a caller can tell a reconfiguration that landed from one that
+        was refused. Note the two are not the same claim: on the signed route the change is
+        queued and will be delivered on a later visit, while in band it has already been taken.
         """
         if artifact is None and self.control_root is None:
+            if self.protocol_version >= 3:
+                return self._ask_change_rf_in_band(digital_endpoint, new_config)
             return super().ask_change_rf(digital_endpoint, new_config)
         if artifact is None:
             payload = dumps(new_config).encode("utf-8")
@@ -281,6 +297,53 @@ class Hub(Node):
                            chunk_size=self.get_chunk_size())
         self.queue_downlink(digital_endpoint, file, mirror_config=new_config)
         return True
+
+    def _ask_change_rf_in_band(self, digital_endpoint, new_config):
+        """Ask one Edge to retune over the link itself, with no envelope around the command.
+
+        The frame *is* the command: a CTRL packet whose payload is one prefix byte (the in-band
+        namespace bit ORed with the control type) followed by the same JSON the signed envelope
+        carries. Both transports therefore reach the peer's actuator with identical arguments,
+        and the actuator never learns how the command arrived.
+
+        Addressing is the packet's own, which is what makes this route reachable with no
+        identity provisioned: the endpoint is already addressed by its session, so an open
+        deployment needs no device_id and no key to retune a node.
+        """
+        prefix = IN_BAND | RF_CONFIG
+        payload = bytes([prefix]) + dumps(new_config).encode("utf-8")
+        try_for = self._IN_BAND_ATTEMPTS
+        while try_for > 0:
+            packet = self.create_request(digital_endpoint.get_mac_address(),
+                                         digital_endpoint.get_mesh(),
+                                         digital_endpoint.get_sleep(),
+                                         digital_endpoint.session_id)
+            packet.set_kind(Packet_v3.CTRL)
+            packet.set_payload(payload)
+            if self._is_control_ack(self.send_request(packet), prefix):
+                # The peer accepted, so this end follows it onto the new configuration, exactly
+                # as the signed route does once its artifact is delivered. Moving only the Edge
+                # is not a partial success: it is an endpoint this Hub can no longer hear.
+                self._mirror_endpoint_config(digital_endpoint, new_config)
+                return True
+            try_for -= 1
+        return False
+
+    @staticmethod
+    def _is_control_ack(reply, prefix):
+        """Whether a reply is *this* command's acknowledgement.
+
+        Matched on the prefix that went out, not merely on the frame being a CTRL: a peer
+        answering about some other control type has not accepted this one. An OK is explicitly
+        not an ack, because OK is also the connection poll and the keepalive, so treating one
+        as acceptance would let a peer that is merely alive read as a peer that retuned. The
+        Hub would then move itself onto a config the Edge never applied, which is the deaf
+        endpoint the mirror exists to prevent.
+        """
+        if reply is None or reply.get_command() != Packet_v3.CTRL:
+            return False
+        payload = reply.get_payload()
+        return bool(payload) and payload[0] == prefix
 
     def _load_control_counter(self):
         """Read back the highest number this Hub has issued, or 0 if it has none.

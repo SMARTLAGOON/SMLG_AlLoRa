@@ -29,6 +29,7 @@ from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.Status import Status
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
+from AlLoRa.Control.control_types import IN_BAND, KNOWN as CONTROL_TYPES
 from AlLoRa.Pacing import Pacing
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, \
     ticks_add, ticks_diff
@@ -45,10 +46,18 @@ class Node:
                  successful_interactions_required=5,
                  data_sink=None,
                  datasource=None,
+                 control_actuator=None,
                  home_role="source"):
         self.config_file = config_file
         self.open_backup()
         self.connector = connector
+
+        # What an in-band control command acts through. The signed route reaches its actuator
+        # inside the verify gate, which is a DataSink and so arrives with the file; an in-band
+        # command has no file and no gate, so the node holds the reference itself. A node given
+        # none simply does not accept in-band control, which is the right default: an actuator
+        # is a capability an operator grants, not one a node has by existing.
+        self.control_actuator = control_actuator
 
         self.LAST_IDS = list()              # IDs from my mesagges
         self.LAST_SEEN_IDS = list()         # IDs from others
@@ -774,9 +783,64 @@ class Node:
             self._on_grant(packet)
             return
         if kind == Packet_v3.CTRL:
-            self.send_response(self.answer_handshake(packet))
+            # Two vocabularies share the CTRL kind, told apart by bit 7 of the payload's first
+            # byte: handshake kinds below it, control types at and above. Splitting them here
+            # is what lets an unrecognised frame be dropped *as* the thing it claimed to be;
+            # before, an unknown handshake kind and an unknown control type were the same
+            # silent None and neither could be logged for what it was.
+            payload = packet.get_payload()
+            if payload and (payload[0] & IN_BAND):
+                self._handle_in_band_control(packet, payload)
+            else:
+                self.send_response(self.answer_handshake(packet))
         else:
             self._serve(packet)
+
+    def _handle_in_band_control(self, packet, payload):
+        """Act on a control command that arrived on the link itself, with nothing wrapping it.
+
+        The command is unauthenticated by construction: an open link authenticates nothing, and
+        a node in radio range of an attacker can already be disrupted worse than by a retune.
+        What must hold is that the tier is a property of the node, not of the frame, which is
+        why the two refusals below are unconditional rather than configurable.
+        """
+        # One mask picks the namespace (done by the caller), one reads the type back verbatim.
+        # Masked rather than subtracted so a reserved bit that later gains a meaning lands
+        # outside the closed enum and is dropped, instead of aliasing onto a real type.
+        control_type = payload[0] & 0x7F
+        if self.home_role == "collector":
+            # Actuation follows authority: an authority evaluates control from below, it does
+            # not apply it. Mechanically a peer holding the collector role can drive a control
+            # round, since driving is what retunes RF, but a delegated role carries no
+            # authority with it. And the harm is not local: a wrongly retuned Edge costs that
+            # node until its trial reverts it, while a wrongly retuned authority moves the
+            # aggregation point for every node aimed at it.
+            if self.debug:
+                print("Ignoring an in-band control command: this node is the authority")
+            return
+        if control_type not in CONTROL_TYPES:
+            if self.debug:
+                print("Dropping an in-band control command of unknown type: ", control_type)
+            return
+        if self.control_actuator is None:
+            # Nothing to act with. Staying silent rather than acknowledging is the point: an
+            # ack would move the commanding end onto a configuration this node will never
+            # apply, which is a deaf endpoint rather than a failed command.
+            if self.debug:
+                print("Dropping an in-band control command: no actuator on this node")
+            return
+        self.control_actuator.apply(control_type, bytes(payload[1:]))
+        ack = self.new_packet()
+        if packet.addressing == "sid":
+            ack.set_session(packet.get_session())
+        ack.set_kind(Packet_v3.CTRL)
+        # The prefix alone, no body: the commanding end already holds what it asked for, and
+        # the type acked is what proves this node parsed the type that was sent.
+        ack.set_payload(bytes([payload[0]]))
+        self.send_response(ack)
+        # The safe boundary the actuator defers to: the acknowledgement is on the air, so
+        # switching the radio (or resetting) can no longer cost the peer its confirmation.
+        self._run_pending_control()
 
     def _on_grant(self, packet):
         # Base: ignore. The Edge preset overrides this to accept the delegated collector role;
@@ -1517,6 +1581,14 @@ class Node:
         return False
 
     def ask_change_rf(self, digital_endpoint, new_config):
+        # v2 only. The request below carries the change in the flag byte's bit 7, and a v3 node
+        # ignores that flag on receipt, so on a v3 link this would transmit twenty frames
+        # nobody acts on and then report a failed exchange: a missing transport dressed as a
+        # bad antenna. A v3 caller wants the Hub's override, which selects a transport.
+        if self.protocol_version >= 3:
+            if self.debug:
+                print("The legacy in-band RF change has no transport on a v3 link")
+            return False
         try_for = 20
         new_config = [new_config.get("freq", None), new_config.get("sf", None),
                         new_config.get("bw", None), new_config.get("cr", None),

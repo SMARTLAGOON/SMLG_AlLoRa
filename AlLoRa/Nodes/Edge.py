@@ -19,9 +19,10 @@ from AlLoRa.utils.debug_utils import print
 class Edge(Node):
 
     def __init__(self, connector=None, config_file="LoRa.json", data_sink=None,
-                 datasource=None, downlink_window=60):
+                 datasource=None, control_actuator=None, downlink_window=60):
         super().__init__(connector, config_file, data_sink=data_sink,
-                         datasource=datasource, home_role="source")
+                         datasource=datasource, control_actuator=control_actuator,
+                         home_role="source")
         # How long a granted pull may drive before the Edge gives up and comes home (its
         # own backstop, independent of the Hub's reclaim timer).
         self.downlink_window = downlink_window
