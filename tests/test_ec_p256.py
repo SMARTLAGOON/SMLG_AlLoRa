@@ -12,7 +12,7 @@ import os
 from AlLoRa.Security.ec_p256 import (
     generate_private_key, public_key_uncompressed, ecdh_shared_secret,
     is_on_curve, decode_public_key, scalar_mult, point_add, ecdsa_verify,
-    G, N, INF,
+    ecdsa_sign, G, N, INF,
 )
 
 # Canonical P-256 / SHA-256 ECDSA vectors from RFC 6979 Appendix A.2.5 (the deterministic-k
@@ -30,6 +30,7 @@ _SAMPLE_SIG = bytes.fromhex(
     "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716"
     "f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8"
 )
+_RFC6979_PRIV = 0xC9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721
 _TEST_DIGEST = bytes.fromhex("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
 _TEST_SIG = bytes.fromhex(
     "f1abb023518351cd71d881567b1ea663ed3efcf6c5132b354f28d3b0b7d38367"
@@ -147,3 +148,74 @@ def test_ecdsa_verify_rejects_structurally_invalid_signatures():
     assert ecdsa_verify(_RFC6979_PUBKEY, _SAMPLE_DIGEST, zero_r) is False
     assert ecdsa_verify(_RFC6979_PUBKEY, _SAMPLE_DIGEST, zero_s) is False
     assert ecdsa_verify(_RFC6979_PUBKEY, _SAMPLE_DIGEST, r_eq_n) is False
+
+
+# --- ECDSA signing: the minting half of the control root ------------------------------
+#
+# The control root is an authority a node verifies against, so something must be able to
+# mint what it verifies. Signing uses the RFC 6979 deterministic nonce rather than a random
+# one: a nonce that repeats or is biased leaks the private key outright from two signatures,
+# and on an ESP32 `urandom` is only cryptographically strong with the RF subsystem enabled,
+# which a USB-attached minting Hub need not have. Deriving the nonce from the key and the
+# digest removes the RNG, and with it the whole failure mode.
+#
+# It also makes the vectors above an exact test of signing rather than a round trip: RFC
+# 6979's published (r, s) is what a correct deterministic signer must produce byte for byte,
+# so a wrong-but-self-consistent implementation disagrees with the RFC instead of agreeing
+# with itself.
+
+
+def test_the_rfc6979_private_key_matches_the_pinned_public_key():
+    # Ties the private scalar to the public key the verify tests already trust, so the
+    # signing vectors below rest on the same published pair and not on a fresh assumption.
+    assert public_key_uncompressed(_RFC6979_PRIV) == _RFC6979_PUBKEY
+
+
+def test_ecdsa_sign_reproduces_the_published_rfc6979_signatures():
+    # The exactness test. Both A.2.5 vectors, byte for byte.
+    assert ecdsa_sign(_RFC6979_PRIV, _SAMPLE_DIGEST) == _SAMPLE_SIG
+    assert ecdsa_sign(_RFC6979_PRIV, _TEST_DIGEST) == _TEST_SIG
+
+
+def test_a_freshly_minted_key_signs_something_its_public_half_verifies():
+    # The actual minting use: a control root generated on a Hub signs an artifact digest, and
+    # a node holding only the public half accepts it.
+    priv = generate_private_key(os.urandom)
+    pub = public_key_uncompressed(priv)
+    digest = bytes.fromhex("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
+
+    signature = ecdsa_sign(priv, digest)
+
+    assert len(signature) == 64
+    assert ecdsa_verify(pub, digest, signature) is True
+
+
+def test_a_signature_does_not_carry_over_to_another_digest():
+    # The binding that makes a signed control artifact worth signing: a signature minted over
+    # one payload must not authenticate a different one.
+    priv = generate_private_key(os.urandom)
+    pub = public_key_uncompressed(priv)
+
+    signature = ecdsa_sign(priv, _SAMPLE_DIGEST)
+
+    assert ecdsa_verify(pub, _TEST_DIGEST, signature) is False
+
+
+def test_signing_the_same_digest_twice_returns_the_same_bytes():
+    # Determinism is the point of the RFC 6979 nonce, not an accident to be tidied away: it is
+    # what removes the RNG whose failure would leak the private scalar. Pinned so that adding
+    # randomness back here fails loudly rather than quietly.
+    assert ecdsa_sign(_RFC6979_PRIV, _SAMPLE_DIGEST) == ecdsa_sign(_RFC6979_PRIV, _SAMPLE_DIGEST)
+
+
+def test_signing_refuses_a_key_or_digest_it_cannot_use():
+    # A private scalar outside [1, N) is a provisioning error, and a digest that is not
+    # SHA-256-sized means the caller hashed with something else. Either would otherwise mint a
+    # signature that no verifier accepts, which reads as a broken link rather than a bad key.
+    import pytest
+    with pytest.raises(ValueError):
+        ecdsa_sign(0, _SAMPLE_DIGEST)
+    with pytest.raises(ValueError):
+        ecdsa_sign(N, _SAMPLE_DIGEST)
+    with pytest.raises(ValueError):
+        ecdsa_sign(_RFC6979_PRIV, _SAMPLE_DIGEST[:31])

@@ -1,17 +1,23 @@
-"""Minimal pure-Python P-256 (secp256r1) for the ECDH handshake.
+"""Minimal pure-Python P-256 (secp256r1) for the ECDH handshake and the control root.
 
-Dependency-free elliptic-curve math so ephemeral-static ECDH runs on the AlLoRa firmware
-with no native crypto module. The asymmetric cost is paid once per session (a few hundred
-ms of scalar multiplication on-device), never per frame. Consolidated from the project's
-SecureAlLoRa reference implementation (the two hand-rolled P-256 files merged into one),
-carrying what ECDH needs (keypair generation, SEC1 uncompressed points, on-curve validation,
-the shared-secret computation) plus ECDSA verification for the control-root downlink. Verify
-runs only on the rare downlink control artifact (config/OTA/model), never on the per-frame
-hot path; there is no signing here, since the field node only ever verifies.
+Elliptic-curve math with no native crypto module, so ephemeral-static ECDH runs on the
+AlLoRa firmware. The asymmetric cost is paid once per session (a few hundred ms of scalar
+multiplication on-device), never per frame. Consolidated from the project's SecureAlLoRa
+reference implementation (the two hand-rolled P-256 files merged into one), carrying what
+ECDH needs (keypair generation, SEC1 uncompressed points, on-curve validation, the
+shared-secret computation) plus both halves of the control-root signature: verification, run
+by a field node on the rare downlink control artifact (config/OTA/model) and never on the
+per-frame hot path, and signing, run by whoever holds the root private key.
+
+The curve math is dependency-free; signing additionally needs ``hmac`` + ``hashlib`` for its
+deterministic nonce, which the security layer already requires (the KDF and the AEAD are
+built on both, and secure mode refuses to start without them).
 
 Public keys are always validated to be real points on the curve before use. Accepting an
 off-curve point is a classic invalid-key attack that can leak the private scalar.
 """
+import hmac
+import hashlib
 
 # secp256r1 domain parameters.
 P  = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
@@ -226,3 +232,59 @@ def ecdsa_verify(public_key, digest, signature):
     if point is INF:
         return False
     return point[0] % N == r
+
+
+def _hmac_sha256(key, data):
+    return hmac.new(bytes(key), bytes(data), hashlib.sha256).digest()
+
+
+def ecdsa_sign(priv_d, digest):
+    """Sign a SHA-256 ``digest`` with the P-256 private scalar ``priv_d``, returning the raw
+    ``r || s`` pair (64 B) that ``ecdsa_verify`` checks.
+
+    The per-signature nonce is derived from the key and the digest (RFC 6979 section 3.2)
+    rather than drawn from an RNG. ECDSA leaks the private scalar outright if a nonce ever
+    repeats or is measurably biased, and ``urandom`` on an ESP32 is only cryptographically
+    strong while the RF subsystem is enabled, which a minting node need not have on. Deriving
+    the nonce removes the RNG, and the whole failure mode with it. A visible consequence:
+    signing the same digest twice returns the same bytes, which is expected here and is what
+    lets the published vectors pin this code exactly.
+
+    This is the minting side of the control root, run by whoever holds the root private key.
+    A field node only ever verifies.
+    """
+    if not (1 <= priv_d < N):
+        raise ValueError("private scalar out of range [1, N)")
+    if len(digest) != 32:
+        raise ValueError("expected a 32-byte SHA-256 digest")
+
+    # Seed the HMAC-SHA256 generator with the key and the digest, so the nonce is a function
+    # of exactly what is being signed and by whom.
+    key_octets = priv_d.to_bytes(32, "big")                          # int2octets(x)
+    digest_octets = (_bits_to_int(digest) % N).to_bytes(32, "big")   # bits2octets(h1)
+    gen_key = b"\x00" * 32
+    gen_val = b"\x01" * 32
+    gen_key = _hmac_sha256(gen_key, gen_val + b"\x00" + key_octets + digest_octets)
+    gen_val = _hmac_sha256(gen_key, gen_val)
+    gen_key = _hmac_sha256(gen_key, gen_val + b"\x01" + key_octets + digest_octets)
+    gen_val = _hmac_sha256(gen_key, gen_val)
+
+    z = _bits_to_int(digest)
+    while True:
+        # One HMAC output is exactly the 256 bits the group order needs, so a candidate is
+        # one step of the generator.
+        gen_val = _hmac_sha256(gen_key, gen_val)
+        k = _bits_to_int(gen_val)
+        if 1 <= k < N:
+            point = scalar_mult(k, G)
+            if point is not INF:
+                r = point[0] % N
+                if r != 0:
+                    s = (inv_mod(k, N) * (z + r * priv_d)) % N
+                    if s != 0:
+                        return r.to_bytes(32, "big") + s.to_bytes(32, "big")
+        # An unusable candidate (out of range, or a degenerate r or s, all vanishingly rare):
+        # re-key the generator and draw a fresh one. Nudging k instead would bias it, and a
+        # biased nonce is the same key-recovery hazard a random one would have been.
+        gen_key = _hmac_sha256(gen_key, gen_val + b"\x00")
+        gen_val = _hmac_sha256(gen_key, gen_val)
