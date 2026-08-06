@@ -5,6 +5,7 @@ its uplink and a Hub serving a delegated downlink rely on.
 """
 import json
 import threading
+import time
 
 import pytest
 
@@ -280,11 +281,14 @@ def test_v2_poll_ok_is_always_answered(tmp_path):
 class _Trial_spy_edge(Edge):
     """An Edge that records the trial's terminal transitions — commit (backup_config,
     the new config persisted as last-known-good) and restore (revert to last-known-good)
-    — so a test can assert which one a request stream drove, without reaching inside."""
+    — so a test can assert which one a request stream drove, without reaching inside.
+    `restored_at` is the monotonic stamp of the restore, for the tests that care when it
+    landed and not only that it did."""
 
     def __init__(self, *args, **kwargs):
         self.committed = 0
         self.restored = 0
+        self.restored_at = None
         super().__init__(*args, **kwargs)
 
     def backup_config(self):
@@ -293,6 +297,7 @@ class _Trial_spy_edge(Edge):
 
     def restore_rf_config(self):
         self.restored += 1
+        self.restored_at = time.monotonic()
         super().restore_rf_config()
 
 
@@ -429,3 +434,87 @@ def test_serve_restores_last_known_good_after_a_silent_trial_window(tmp_path):
     assert edge.restored == 1, "a silent trial window must restore the last-known-good config"
     assert edge.connector.get_rf_config()[1] == 7, "the connector reverted to last-known-good sf7"
     assert not edge.sf_trial, "a restored trial is over"
+
+
+# --- RF_CONFIG trial: the window has a ceiling no message can push out -----------------
+#
+# Every short control frame heard on the new config holds the trial, pushing the restore
+# deadline out, and nothing capped that. A peer whose downlink can ask but whose uplink
+# keeps losing the reply re-asks METADATA forever, and each ask extends the window: the node
+# then neither commits (no chunk ever moves) nor restores (it is never silent), and sits on
+# an unproven config for as long as the asking goes on. No attacker is needed for this, only
+# an asymmetric link. A second deadline, armed with the first and moved by nothing, bounds
+# the whole trial at three windows.
+
+
+def _held_trial_edge(tmp_path, window_s=1):
+    edge = _make_spy_edge(tmp_path)
+    edge.set_file(AlLoRa_File(name="up.bin", content=bytearray(bytes(500)),
+                              chunk_size=edge.get_chunk_size()))
+    edge.change_rf_config({"sf": 9, "trial": window_s})
+    edge.committed = 0
+    assert edge.sf_trial and edge.connector.get_rf_config()[1] == 9
+    return edge
+
+
+def _metadata_poller(edge, stop, period=0.3):
+    # The peer re-asks METADATA well inside the window, so the window alone never elapses.
+    # Nothing drains the edge's outbox, which is the lost uplink that keeps it asking.
+    wire = edge.connector.codec.frame(_request(Packet_v3.ask_metadata))
+
+    def keep_asking():
+        while not stop.is_set():
+            edge.connector.inbox.put(wire)
+            time.sleep(period)
+
+    return threading.Thread(target=keep_asking, name="metadata-poller", daemon=True)
+
+
+def test_a_trial_held_by_repeated_polls_restores_at_the_ceiling(tmp_path):
+    # The peer polls for the whole run and never asks for a chunk, so nothing here can ever
+    # commit and every poll holds. The restore can only come from the ceiling.
+    edge = _held_trial_edge(tmp_path, window_s=1)     # window 1 s, so the ceiling is 3 s
+    stop = threading.Event()
+    poller = _metadata_poller(edge, stop)
+
+    started = time.monotonic()
+    poller.start()
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 6},
+                              name="edge-serve", daemon=True)
+    server.start()
+    server.join(timeout=20)
+    stop.set()
+
+    assert not server.is_alive(), "serve did not return"
+    assert edge.committed == 0, "no chunk ever moved, so nothing could have committed"
+    assert edge.restored == 1, (
+        "a trial held by a poll that never stops must still end: the config was never proven")
+    assert edge.connector.get_rf_config()[1] == 7, "the connector reverted to last-known-good sf7"
+    assert not edge.sf_trial, "a restored trial is over"
+    assert 2.0 < (edge.restored_at - started) < 5.5, (
+        "the restore landed {:.1f} s in; a 1 s window puts the ceiling at 3 s".format(
+            edge.restored_at - started))
+
+
+def test_a_poll_still_holds_the_trial_below_the_ceiling(tmp_path):
+    # The other side of the same bound: the ceiling must not swallow the hold it caps. A
+    # reachable but idle peer still gets its window extended, so the trial outlives the plain
+    # window and only ends at the ceiling above it.
+    edge = _held_trial_edge(tmp_path, window_s=1)
+    stop = threading.Event()
+    poller = _metadata_poller(edge, stop)
+
+    poller.start()
+    # Past the 1 s window (an unheld trial would already have restored) and clear of the 3 s
+    # ceiling, so the assertion below is about the hold and nothing else.
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 1.5},
+                              name="edge-serve", daemon=True)
+    server.start()
+    server.join(timeout=20)
+    stop.set()
+
+    assert not server.is_alive(), "serve did not return"
+    assert edge.restored == 0, (
+        "the polls were heard on the new config, so the trial must outlive its plain window")
+    assert edge.sf_trial, "a held trial is still armed below the ceiling"
+    assert edge.connector.get_rf_config()[1] == 9, "the node is still on the trial config"

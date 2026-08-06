@@ -60,9 +60,16 @@ class Node:
         # the signed RF_CONFIG payload (`trial`) with a ToA-scaled default. The deadline is armed
         # lazily by the serve/drive loop so the window counts from when the node starts running
         # on the new config, not from the flash write.
+        #
+        # `_trial_ceiling` is the second, harder deadline: any short control frame heard on the
+        # new config pushes `_trial_deadline` out, so a peer that keeps polling (an asymmetric
+        # link whose replies are lost re-asks forever) would otherwise hold an unproven config
+        # indefinitely, committing never and restoring never. Nothing moves the ceiling.
         self.sf_trial = None
         self._trial_window_s = None
         self._trial_deadline = None
+        self._trial_ceiling = None
+        self.TRIAL_CEILING_WINDOWS = 3      # how many windows a trial may last, holds included
 
         # The observability surface: the live values plus the subscribers they are pushed to.
         # It is a plain holder with no protocol in it, so a bridge board can be observed the
@@ -524,9 +531,18 @@ class Node:
         chunk_size = new_config.get("cks", None)
         if self.debug:
             print("Changing RF Config to: ", frequency, sf, bw, cr, tx_power, chunk_size)
-        changed = self.connector.change_rf_config(frequency=frequency, 
-                                        sf=sf, bw=bw, cr=cr, 
+        changed = self.connector.change_rf_config(frequency=frequency,
+                                        sf=sf, bw=bw, cr=cr,
                                         tx_power=tx_power)
+        if not changed:
+            # The radio refused: the connector already restored every parameter it had
+            # touched, so nothing above it may move either. A chunk size applied here after a
+            # rolled-back change would chunk for a config the node is not on, and the serve
+            # loop re-chunks an in-flight file whenever the chunk size moves, so a *failed*
+            # change would disturb a transfer that was proceeding fine. A failed change is a
+            # no-op, all of it or none of it.
+            return False
+
         if chunk_size:
             self.chunk_size = chunk_size
 
@@ -536,21 +552,20 @@ class Node:
             print("Chunk size too big, changing to: ", self.chunk_size)
         self._publish_frame_size()
 
-        if changed:
-            # Arm the trial. The window rides the (signed) payload as `trial` seconds; absent,
-            # a ToA-scaled default sized off the new config's receive window. The deadline is
-            # armed lazily on the loop's first service (so it counts from running on the new
-            # config), so only clear it here.
-            self.sf_trial = True
-            self._trial_window_s = new_config.get("trial", None)
-            self._trial_deadline = None
-            self.status["Freq"] = self.connector.frequency
-            self.status["SF"] = self.connector.sf
-            self.status["BW"] = self.connector.bw
-            self.status["CR"] = self.connector.cr
-            self.status["TX_P"] = self.connector.tx_power
-            return True
-        return False
+        # Arm the trial. The window rides the (signed) payload as `trial` seconds; absent,
+        # a ToA-scaled default sized off the new config's receive window. Both deadlines are
+        # armed lazily on the loop's first service (so they count from running on the new
+        # config), so only clear them here.
+        self.sf_trial = True
+        self._trial_window_s = new_config.get("trial", None)
+        self._trial_deadline = None
+        self._trial_ceiling = None
+        self.status["Freq"] = self.connector.frequency
+        self.status["SF"] = self.connector.sf
+        self.status["BW"] = self.connector.bw
+        self.status["CR"] = self.connector.cr
+        self.status["TX_P"] = self.connector.tx_power
+        return True
 
     def _publish_frame_size(self):
         # The connector sizes its receive window from the biggest frame it will really see.
@@ -837,6 +852,7 @@ class Node:
             return
         self.sf_trial = False
         self._trial_deadline = None
+        self._trial_ceiling = None
         if self.debug:
             print("RF trial committed: new config is last-known-good")
         self.backup_config()
@@ -850,6 +866,7 @@ class Node:
             return
         self.sf_trial = False
         self._trial_deadline = None
+        self._trial_ceiling = None
         if self.debug:
             print("RF trial restored: reverting to last-known-good")
         self.restore_rf_config()
@@ -861,20 +878,40 @@ class Node:
         # reachability poll must fall back to last-known-good once its window elapses. Silence
         # (unreachable) and a stalled transfer (requests heard, no progress) both land here. The
         # deadline is armed lazily so the window counts from the first turn on the new config.
+        #
+        # The ceiling is armed here too, from the same clock read so the two can never drift,
+        # and is the whole trial's bound: a held window can be pushed out forever, so without
+        # it a node can sit on an unproven config for as long as a peer keeps polling. On
+        # expiry the node RESTORES rather than commits, even though the holds prove the peer
+        # is reaching us: the commit criterion is a full payload exchange precisely because
+        # short control frames landing does not prove chunks will, and a config that carries
+        # polls but not payload is not a good config for a file transfer.
         if not self.sf_trial:
             return
         if self._trial_deadline is None:
             window = self._trial_window_s or self._default_trial_window()
-            self._trial_deadline = ticks_add(time(), int(window * 1000))
+            now = time()
+            self._trial_deadline = ticks_add(now, int(window * 1000))
+            self._trial_ceiling = ticks_add(
+                now, int(window * self.TRIAL_CEILING_WINDOWS * 1000))
             return
         if ticks_diff(self._trial_deadline, time()) <= 0:
+            self._restore_trial()
+        elif self._trial_ceiling is not None and ticks_diff(self._trial_ceiling, time()) <= 0:
+            if self.debug:
+                print("RF trial ceiling reached: the config was held but never proven")
             self._restore_trial()
 
     def _hold_trial(self):
         # A short control frame (metadata / OK connection poll) heard on the new config proves
         # the peer can still reach us: hold the provisional config and push the restore deadline
-        # out, rather than rolling back a reachable link that simply had no data to move. A
-        # stalled data transfer (repeated chunk requests) does NOT hold — only the window there.
+        # out, rather than rolling back a reachable link that simply had no data to move.
+        #
+        # A stalled CHUNK loop (the same chunk asked for again and again) does not reach here,
+        # so it is resolved by the window. A stalled METADATA loop DOES: the caller holds on
+        # every metadata request, before it can tell a retransmission from a fresh ask, so a
+        # peer whose replies keep getting lost holds the trial with every re-ask. Only the
+        # ceiling bounds that, which is why the hold may extend the window but never the trial.
         if self.sf_trial and self._trial_deadline is not None:
             window = self._trial_window_s or self._default_trial_window()
             self._trial_deadline = ticks_add(time(), int(window * 1000))
