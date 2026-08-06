@@ -25,6 +25,12 @@ _ON_DEVICE_SECURE = [
     "AlLoRa/Security/Replay_window.py",
     "AlLoRa/Codec.py",
     "AlLoRa/Status.py",
+    # The control path: the gate an Edge verifies with, the layout both ends share, and the
+    # minting half, which the manifest freezes onto every node including ones that never sign.
+    "AlLoRa/DataSinks/Control_Root_DataSink.py",
+    "AlLoRa/Control/control_envelope.py",
+    "AlLoRa/Control/Control_Root.py",
+    "AlLoRa/Control/Control_Actuator.py",
     "AlLoRa/Nodes/Node.py",
     "AlLoRa/Nodes/Edge.py",
     "AlLoRa/Nodes/Hub.py",
