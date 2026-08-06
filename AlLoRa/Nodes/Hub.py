@@ -41,6 +41,11 @@ class Hub(Node):
     # few rounds on it costs nothing the transfer loop will miss.
     _IN_BAND_ATTEMPTS = 20
 
+    # The Hub is the authority: it issues control artifacts and is never commanded by one over
+    # the radio. So the half of the control root it may hold is the signing half, and the
+    # verifying half, which it could do nothing with, is refused as a misprovisioning.
+    _MINTS_CONTROL = True
+
     def __init__(self, connector=None, config_file="LoRa.json",
                  debug_hops=False,
                  max_sleep_time=3,
@@ -106,8 +111,16 @@ class Hub(Node):
         # counter its artifacts carry. ONE number for the whole fleet: every node compares only
         # against its own high-water mark, so a single increasing sequence satisfies all of them
         # at once and gaps in any one endpoint's view are normal and harmless.
-        self.control_root = control_root
-        self.control_counter_file = control_counter_file
+        #
+        # Both normally come from config, which is where a deployment declares its control
+        # posture so it can be read off a node without running it. The constructor arguments
+        # stay as an explicit override for a Hub assembled in code (a backend handing over a
+        # root object it already holds, or a test), and an explicit one wins: it is a deliberate
+        # act at the call site, while config is the standing declaration.
+        if control_root is not None:
+            self.control_root = control_root
+        self.control_counter_file = control_counter_file or \
+            self.config.get('control_counter_file', None)
         self._control_counter = self._load_control_counter()
 
     # --- the endpoints this Hub holds -----------------------------------------------------

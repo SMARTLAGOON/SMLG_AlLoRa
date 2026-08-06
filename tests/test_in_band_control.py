@@ -17,6 +17,10 @@ Two things here are load-bearing beyond the happy path:
     wrongly retuned Edge costs that node until its trial reverts it; a wrongly retuned Hub
     moves the aggregation point for every Edge at once, and it is the one node whose recovery
     is nobody else's problem.
+  * **A node provisioned with a control root does not act on one either.** Provisioning is the
+    operator declaring an external authority, so the stronger tier becomes the only tier that
+    node accepts. If an unsigned frame could still retune it, the signed path would secure
+    nothing: anyone in radio range could simply ask in band instead.
 """
 import json
 import threading
@@ -28,12 +32,18 @@ from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Security.ec_p256 import public_key_uncompressed
 
 SESSION_ID = 42
 EDGE_MAC = "a1a1a1a1"
 HUB_MAC = "b2b2b2b2"
 NEW_CONFIG = {"sf": 9, "trial": 30}
 RF_BODY = json.dumps(NEW_CONFIG).encode("utf-8")
+
+# The verifying half an operator provisions onto a commanded node, derived from RFC 6979
+# A.2.5's published test scalar so it is unmistakably not a real key.
+CONTROL_ROOT_PUB = public_key_uncompressed(
+    0xC9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721)
 
 
 class _CapturingActuator:
@@ -159,6 +169,27 @@ def test_a_node_with_no_actuator_drops_the_command(tmp_path):
     edge.respond(edge._respond_handler)
 
     assert _replies(peer, edge) == [], "nothing to act with is not an acceptance"
+
+
+# --- a provisioned node accepts only the tier it was provisioned for -------------------------
+
+def test_a_node_holding_a_control_root_refuses_an_in_band_command(tmp_path):
+    # The security-critical one. Provisioning a control root is the operator saying an external
+    # authority commands this node; if an unsigned in-band frame could still retune it, the
+    # signed path would secure nothing, because an attacker would simply not use it. So the
+    # tier is a property of the node, not of the frame: once provisioned, the stronger tier is
+    # the only one this node accepts, and the refusal is unconditional rather than configurable.
+    actuator = _CapturingActuator()
+    edge, peer = _make_edge(tmp_path, control_actuator=actuator)
+    edge.control_root = CONTROL_ROOT_PUB
+
+    edge.connector.inbox.put(_control_frame(edge, IN_BAND | RF_CONFIG, RF_BODY))
+    edge.respond(edge._respond_handler)
+
+    assert actuator.applied == [], \
+        "a node that verifies signed control must never act on an unsigned command"
+    assert _replies(peer, edge) == [], \
+        "and must not acknowledge one: an ack would report a change that never happened"
 
 
 # --- actuation follows authority ------------------------------------------------------------

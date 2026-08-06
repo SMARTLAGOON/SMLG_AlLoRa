@@ -59,6 +59,14 @@ class Node:
         # is a capability an operator grants, not one a node has by existing.
         self.control_actuator = control_actuator
 
+        # The control root this node was provisioned with, if any. One name for both halves of
+        # the key: the minting private half on an authority that issues artifacts, the pinned
+        # public half on a node that only verifies them. Holding either is what makes this node
+        # part of a signed control deployment, and that is the whole reason the base class
+        # carries the reference: an unsigned in-band command must be refused by a node that has
+        # a stronger tier available, or provisioning one would secure nothing.
+        self.control_root = self._configure_control_root()
+
         self.LAST_IDS = list()              # IDs from my mesagges
         self.LAST_SEEN_IDS = list()         # IDs from others
         self.MAX_IDS_CACHED = 30            # Max number of IDs saved
@@ -254,6 +262,79 @@ class Node:
             if self.debug:
                 print("no identity_file configured, using an ephemeral identity "
                       "(device_id changes each boot)")
+
+    # A control root reaches a node as one hex line in a file, the format identity.key already
+    # uses, and the two halves are told apart by length alone: 130 characters is a SEC1 public
+    # key, 64 is a P-256 private scalar. Nothing else is a control root.
+    _CONTROL_ROOT_PUB_HEX = 130
+    _CONTROL_ROOT_PRIV_HEX = 64
+    # Whether this node kind issues control artifacts or only obeys them. The Hub preset is the
+    # authority and sets it; everything else verifies. It decides which half of the key a node
+    # may legitimately hold, which is why it is a property of the node kind and not of config:
+    # config chooses whether to provision, never what a node is allowed to be.
+    _MINTS_CONTROL = False
+
+    def _configure_control_root(self):
+        """Load the control root this node was provisioned with, or None if it has none.
+
+        Unlike the identity key, an absent file is never created here. A node that generated
+        its own control root would have invented its own authority, which is the opposite of
+        what provisioning one means, so the key is made once per fleet by an operator and
+        copied in. Every failure below therefore halts the node instead of degrading it: the
+        config having named a control root, coming up without one would leave the node
+        accepting unsigned commands while its configuration says it does not.
+        """
+        path = self.config.get('control_root_file', None)
+        if not path:
+            return None
+        try:
+            with open(path, "r") as f:
+                material = f.read().strip()
+        except OSError as e:
+            raise ValueError(
+                "control_root_file '{}' could not be read ({}). It is provisioned by the "
+                "operator and never generated on the node: a node that minted its own control "
+                "root would be its own authority.".format(path, e))
+        return self._control_root_from(material, path)
+
+    def _control_root_from(self, material, path):
+        # The contents decide the role, and a role this node kind cannot perform is a
+        # provisioning error rather than something to work around. Both mismatches are refused,
+        # for different reasons: a private scalar on a node that only verifies is the fleet's
+        # signing key sitting on a field node, and carrying on would hide a key compromise
+        # behind a working link; a public key on the authority cannot sign anything, so the Hub
+        # would fall back to sending unsigned commands while its config claims a signed
+        # deployment. Almost always both are the wrong half of the pair copied in.
+        if len(material) == self._CONTROL_ROOT_PRIV_HEX:
+            if not self._MINTS_CONTROL:
+                raise ValueError(
+                    "control_root_file '{}' holds a private scalar: that is the key the whole "
+                    "fleet's commands are signed with, and it does not belong on a node that "
+                    "only verifies them. Provision the public key (130 hex characters) "
+                    "instead.".format(path))
+            from AlLoRa.Control.Control_Root import Control_Root
+            return Control_Root(material)
+        if len(material) == self._CONTROL_ROOT_PUB_HEX:
+            if self._MINTS_CONTROL:
+                raise ValueError(
+                    "control_root_file '{}' holds only the public half: this node mints the "
+                    "commands it sends and cannot do so with a verifying key. Provision the "
+                    "private scalar (64 hex characters), or provision nothing here if the "
+                    "artifacts are minted elsewhere and handed to ask_change_rf.".format(path))
+            from AlLoRa.Security.ec_p256 import decode_public_key
+            try:
+                key = bytes.fromhex(material)
+            except ValueError:
+                raise ValueError(
+                    "control_root_file '{}' is not hexadecimal".format(path))
+            decode_public_key(key)   # raises on an off-curve or malformed key
+            return key
+        raise ValueError(
+            "control_root_file '{}' holds {} characters: a control root is either a SEC1 "
+            "public key ({} hex characters) or a P-256 private scalar ({}), in the same hex "
+            "format identity.key uses.".format(path, len(material),
+                                               self._CONTROL_ROOT_PUB_HEX,
+                                               self._CONTROL_ROOT_PRIV_HEX))
 
     def _resolve_session_id(self):
         # The 1-byte session address. An explicit config value always wins (debugging, or the
@@ -801,8 +882,9 @@ class Node:
 
         The command is unauthenticated by construction: an open link authenticates nothing, and
         a node in radio range of an attacker can already be disrupted worse than by a retune.
-        What must hold is that the tier is a property of the node, not of the frame, which is
-        why the two refusals below are unconditional rather than configurable.
+        What must hold is that whether this tier is accepted at all is a property of the node,
+        not of the frame, which is why the two refusals below are unconditional rather than
+        configurable. One is bound to what this node is, the other to how it was provisioned.
         """
         # One mask picks the namespace (done by the caller), one reads the type back verbatim.
         # Masked rather than subtracted so a reserved bit that later gains a meaning lands
@@ -817,6 +899,16 @@ class Node:
             # aggregation point for every node aimed at it.
             if self.debug:
                 print("Ignoring an in-band control command: this node is the authority")
+            return
+        if self.control_root is not None:
+            # Provisioning a control root is the operator declaring an external authority over
+            # this node, and a node that has the stronger tier accepts nothing below it. If an
+            # unsigned frame could still retune it, the signed path would secure nothing: an
+            # attacker in radio range would ask in band rather than forge a signature it cannot
+            # produce. Checked after the authority test only so a minting Hub, which is refused
+            # on both counts, reports the reason that holds even when it mints for no one.
+            if self.debug:
+                print("Refusing an in-band control command: this node verifies signed control")
             return
         if control_type not in CONTROL_TYPES:
             if self.debug:
