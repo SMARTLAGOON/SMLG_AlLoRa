@@ -62,13 +62,17 @@ class Control_Root:
         it, and a short way for an operator to tell two roots apart."""
         return hashlib.sha256(self._pub).digest()
 
-    def mint(self, control_type, target_device_id, payload=b"", counter=1):
+    def mint(self, control_type, target_device_id, counter, payload=b""):
         """Return a signed control artifact for one node.
 
         `counter` must be higher than any the target has already accepted, or the target will
         refuse it as a replay. The numbering belongs to whoever operates the root, since only
         that side knows what it has issued; this class does not keep it, so that a Hub and a
         backend minting for the same fleet cannot each keep their own idea of it.
+
+        It has no default on purpose. A default would mint a second artifact carrying the
+        number the first already used, which the target refuses as a replay: the command
+        simply never lands, and nothing on either side says why.
         """
         if not isinstance(control_type, int) or not (0 <= control_type <= 0xFF):
             raise ValueError("control_type must be a single byte")

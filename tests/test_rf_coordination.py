@@ -23,9 +23,15 @@ from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
-from AlLoRa.DataSinks.DataSink import DataSink
+from AlLoRa.Control.Control_Root import Control_Root
+from AlLoRa.Control.control_types import RF_CONFIG
+from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
+from AlLoRa.DataSinks.DataSink import DataSink, Reception
 from AlLoRa.DataSources.DataSource import DataSource
 from AlLoRa.File import AlLoRa_File
+from test_control_root_sink import (
+    CONTROL_ROOT_PRIV, TARGET_DEVICE_ID, _CapturingActuator, _artifact,
+)
 
 EDGE_MAC = "a1a1a1a1"
 HUB_MAC = "b2b2b2b2"
@@ -310,6 +316,46 @@ def test_hub_mirrors_endpoint_config_after_the_reconfig_downlink_is_delivered(tm
     assert hub.endpoint_trial_old(endpoint) == [868, 7, 125, 1, 14], \
         "the Hub must retain the old config as the probe fallback"
     assert not hub.downlink_pending(endpoint)
+
+
+def test_ask_change_rf_moves_both_ends_in_one_call(tmp_path):
+    # D4's whole claim. The Hub mints the artifact, queues it, and attaches the mirror itself,
+    # so an operator cannot reconfigure the Edge and forget to follow it onto the new config.
+    # The artifact is also fed back through a real gate afterwards: chunking and reassembly must
+    # not disturb a signature, or the whole signed path fails only over a radio.
+    edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
+    root = Control_Root(CONTROL_ROOT_PRIV)
+    sink = Capture_sink()
+    edge, hub, _, _ = _make_pair(tmp_path, edge_conn, hub_conn, edge_sink=sink,
+                                 reclaim_timeout=3, control_root=root,
+                                 control_counter_file=str(tmp_path / "control.counter"))
+    endpoint = Digital_Endpoint(name="edge", mac_address=EDGE_MAC, active=True,
+                                session_id=SESSION_ID, device_id=TARGET_DEVICE_ID.hex())
+
+    hub.resolve_endpoint_rf(endpoint)
+    assert endpoint.sf == 7, "the endpoint starts on the old config"
+
+    hub.ask_change_rf(endpoint, {"sf": 9, "trial": 30})
+
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 12},
+                              name="edge-serve", daemon=True)
+    server.start()
+    hub.listen_to_endpoint(endpoint, listening_time=8, save_file=True)
+    server.join(timeout=10)
+    assert not server.is_alive()
+
+    assert [name for name, _, _ in sink.received] == ["ctrl.bin"], \
+        "the minted artifact must reach the Edge"
+    assert endpoint.sf == 9, "one call must also move the Hub onto the new config"
+    assert hub.endpoint_trial_old(endpoint) == [868, 7, 125, 1, 14], \
+        "the Hub must retain the old config as the probe fallback"
+
+    actuator = _CapturingActuator()
+    gate = Control_Root_DataSink(control_root=root.public_key(), device_id=TARGET_DEVICE_ID,
+                                 actuator=actuator, counter_file=str(tmp_path / "mark.json"))
+    gate.consume(_artifact(tmp_path, sink.received[0][1]), Reception(source="hub"))
+    assert actuator.applied == [(RF_CONFIG, b'{"sf": 9, "trial": 30}')], \
+        "what arrived over the link must still verify against the root that minted it"
 
 
 # --- Slice H2: the {new, old} probe state machine (one probe per visit) --------------------

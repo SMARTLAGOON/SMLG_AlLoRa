@@ -12,10 +12,12 @@ which is why the two v2 classes it replaces are gone rather than kept as separat
 """
 import gc
 from os import urandom
-from json import loads
+from json import loads, dumps
 from AlLoRa.Nodes.Node import Node
 from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids
 from AlLoRa.DataSources.DataSource import DataSource
+from AlLoRa.Control.control_types import RF_CONFIG
+from AlLoRa.File import AlLoRa_File
 from AlLoRa.utils.time_utils import current_time_ms as time, sleep, ticks_add, ticks_diff
 from AlLoRa.utils.debug_utils import print
 
@@ -41,7 +43,9 @@ class Hub(Node):
                  reclaim_timeout=10,
                  probe_swap_after=1,
                  probe_give_up_after=6,
-                 session_recovery_after=3):
+                 session_recovery_after=3,
+                 control_root=None,
+                 control_counter_file=None):
         super().__init__(connector, config_file,
                          debug_hops=debug_hops,
                          max_sleep_time=max_sleep_time,
@@ -89,6 +93,13 @@ class Hub(Node):
         # whether the confirming connection poll is already armed).
         self.session_recovery_after = session_recovery_after
         self._session_silent_visits = {}
+        # The control root this Hub mints with, when it was provisioned with one, and the
+        # counter its artifacts carry. ONE number for the whole fleet: every node compares only
+        # against its own high-water mark, so a single increasing sequence satisfies all of them
+        # at once and gaps in any one endpoint's view are normal and harmless.
+        self.control_root = control_root
+        self.control_counter_file = control_counter_file
+        self._control_counter = self._load_control_counter()
 
     # --- the endpoints this Hub holds -----------------------------------------------------
 
@@ -239,6 +250,87 @@ class Hub(Node):
         source.add_to_queue(file)
         if mirror_config is not None:
             self._pending_mirror[sid] = mirror_config
+
+    def ask_change_rf(self, digital_endpoint, new_config, artifact=None):
+        """Move one endpoint onto a new radio configuration, both ends, in one call.
+
+        `new_config` is the {freq, sf, bw, cr, tx_power, trial} the Edge should apply. The
+        transport is selected from what this Hub was provisioned with, never configured:
+
+          * given the control root, the Hub mints the artifact itself;
+          * given `artifact`, it carries what a backend minted, untouched;
+          * given neither, the change goes as an in-band request on the link itself.
+
+        On either signed route the same `new_config` goes on as the mirror, so the Hub follows
+        the Edge onto the new parameters once delivery is confirmed. That is deliberately not
+        two calls: a caller who queued the command and forgot the mirror would leave the Hub
+        polling a configuration its Edge has already left, which is a deaf endpoint rather than
+        a partial success. The in-band route attaches none, because it applies the change on
+        both ends as the exchange completes rather than afterwards.
+
+        Returns True once a signed artifact is queued for delivery, or whatever the in-band
+        exchange reports, so a caller can tell a queued reconfiguration from a refused one.
+        """
+        if artifact is None and self.control_root is None:
+            return super().ask_change_rf(digital_endpoint, new_config)
+        if artifact is None:
+            payload = dumps(new_config).encode("utf-8")
+            artifact = self.control_root.mint(RF_CONFIG, digital_endpoint.device_id,
+                                              self._next_control_counter(), payload)
+        file = AlLoRa_File(name="ctrl.bin", content=bytearray(artifact),
+                           chunk_size=self.get_chunk_size())
+        self.queue_downlink(digital_endpoint, file, mirror_config=new_config)
+        return True
+
+    def _load_control_counter(self):
+        """Read back the highest number this Hub has issued, or 0 if it has none.
+
+        Keyed by the root that issued them, exactly as a node keys its own mark, so a Hub given
+        a rotated root starts its numbering over. That makes rotating the root the one reset for
+        the whole control plane, on both ends, rather than a second mechanism to get right.
+
+        Without a file the count is RAM-only, and a Hub that restarted would re-issue numbers
+        its fleet has already accepted: every later artifact would be delivered, verified, and
+        then dropped as a replay, with nothing on either side reporting it.
+        """
+        if not self.control_counter_file or self.control_root is None:
+            return 0
+        try:
+            with open(self.control_counter_file, "r") as f:
+                mark = loads(f.read())
+            if mark.get("root") != self.control_root.fingerprint().hex():
+                return 0    # a different authority: its numbering says nothing about this one
+            counter = mark.get("counter", 0)
+        except Exception:
+            # No file yet, or one we cannot read. Starting from 0 costs nothing on a fresh Hub
+            # and is self-correcting on an existing fleet only by rotating the root, which is
+            # the same recovery a lost file has.
+            counter = 0
+        return counter if isinstance(counter, int) and counter > 0 else 0
+
+    def _save_control_counter(self):
+        if not self.control_counter_file or self.control_root is None:
+            return
+        try:
+            with open(self.control_counter_file, "w") as f:
+                f.write(dumps({"root": self.control_root.fingerprint().hex(),
+                               "counter": self._control_counter}))
+        except Exception as e:
+            print("Hub: could not persist the control counter ({})".format(e))
+
+    def _next_control_counter(self):
+        # Issue the next number in this Hub's fleet-wide sequence. Never derived from a clock:
+        # this may run on a board whose RTC does not survive a power cycle, and a clock that
+        # once guessed high would push the number beyond anything a later command could reach,
+        # locking every node out of its own control plane until the root is rotated.
+        self._control_counter += 1
+        # Recorded BEFORE the number is handed out. Losing power after minting but before the
+        # write would re-issue a number the target has already accepted, and that artifact is
+        # refused as a replay; losing power after the write merely burns one number, and a gap
+        # in the sequence costs nothing because a node only requires each artifact to be higher
+        # than the last it took.
+        self._save_control_counter()
+        return self._control_counter
 
     def endpoint_trial_old(self, digital_endpoint):
         """The last-known-good config the Hub retained for an endpoint in an RF-config trial
