@@ -195,6 +195,38 @@ def test_the_mint_counter_file_is_configured_beside_the_root(tmp_path):
         "a Hub restarted on the same config must carry on above the number it left off at"
 
 
+def test_a_hub_that_mints_keeps_its_number_with_no_counter_file_named(tmp_path, monkeypatch):
+    # The deployment nobody configured, which is every operator who provisions a root by
+    # following the example. A node keeps the highest number it has accepted whether or not it
+    # was told to, so the minter has to keep its own the same way: a Hub that starts its
+    # sequence over is refused by every node it commands, for good, because it can only work
+    # back through the numbers it already spent one restart at a time. Recovery is rotating the
+    # root across the fleet. The two ends default together or the pair is broken by its
+    # defaults alone, with nothing misconfigured anywhere.
+    monkeypatch.chdir(tmp_path)
+    hub, _ = _hub(tmp_path, control_root_file=_key_file(tmp_path, ROOT_PRIV_HEX))
+    hub.ask_change_rf(_registered_endpoint(hub), NEW_CONFIG)
+
+    rebooted, _ = _hub(tmp_path, control_root_file=_key_file(tmp_path, ROOT_PRIV_HEX))
+    rebooted.ask_change_rf(_registered_endpoint(rebooted), NEW_CONFIG)
+
+    assert _minted_counter(rebooted) > _minted_counter(hub), \
+        "a Hub nobody named a counter file for must still not re-issue a number its fleet took"
+
+
+def test_a_hub_with_nothing_to_mint_under_leaves_no_counter_behind(tmp_path, monkeypatch):
+    # The other half of that default: it has to be inert where it is not needed. Most
+    # deployments provision no root at all, and a counter written on their behalf would put a
+    # file nobody asked for in the working directory of every one of them.
+    monkeypatch.chdir(tmp_path)
+
+    hub, _ = _hub(tmp_path)
+
+    assert hub.control_root is None
+    assert not os.path.exists("control.counter"), \
+        "a Hub with no authority to mint under has no number to keep"
+
+
 def test_a_hub_handed_only_the_public_key_halts(tmp_path):
     # A Hub cannot sign with a verifying key, and it never verifies anything itself: over the
     # radio it commands, it is not commanded. So this file has no role on this node, and it is

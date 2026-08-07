@@ -109,11 +109,14 @@ mpremote connect /dev/cu.usbmodemEDGE fs cp edge/control_root.key :control_root.
 
 ```json
   "control_root_file": "control_root.key",
-  "control_counter_file": "control.counter",
 ```
 
-`control_counter_file` is the Hub's only: it remembers how many commands this root has issued,
-so a reboot does not re-use a number the Edge has already seen and refuses as a replay.
+That one line is the whole provisioning. Both nodes then keep a counter file beside the key
+without being told to, in `control.counter`: the Hub remembers how many commands it has issued
+under this root, and the Edge remembers the highest one it has accepted. That is what stops a
+command being recorded off the air and replayed back later, and it is why a reboot on either
+end does not leave the pair unable to talk. Set `control_counter_file` if you want the file
+somewhere else.
 
 Three things that will bite otherwise:
 
