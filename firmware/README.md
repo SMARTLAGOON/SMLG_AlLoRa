@@ -47,6 +47,18 @@ a Hub polling several registered Edges needs. Both reach a board only on a rebui
 paragraph is the trigger for one: the workflow's push filter watches `firmware/**`, so a
 protocol-only commit never starts a build on its own.
 
+This freeze is the first to carry **control**. `AlLoRa/Control/` gains two modules a board flashed
+before it simply does not have: `Control_Root.py`, which mints a command, and
+`control_envelope.py`, the signed wrapper and the counter that lets one expire. `Security/ec_p256.py`
+gains signing, where it could previously only verify. Both routes a command can travel now exist on
+the device: a signed artifact, delivered through `Control_Root_DataSink` and refused unless the
+provisioned root vouches for it, and an unsigned command carried on the link itself for an open pair
+with no root to check against. The RF trial is bounded here too, so an Edge moved onto settings it
+cannot be heard on puts the old ones back by itself rather than going deaf, and the Hub now treats
+the visit after an in-band command as a real probe, without which a retune that worked is thrown
+away and the two ends drift onto different configurations. None of that reaches a board any way but
+a rebuild, and this paragraph is the trigger for one.
+
 ## Adding a target (new device or new modem)
 
 1. If it's a **new modem**, vendor its driver under `drivers/<name>/` (pin the exact version).
