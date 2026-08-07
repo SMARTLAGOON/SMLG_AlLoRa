@@ -59,6 +59,15 @@ the visit after an in-band command as a real probe, without which a retune that 
 away and the two ends drift onto different configurations. None of that reaches a board any way but
 a rebuild, and this paragraph is the trigger for one.
 
+The freeze before this one carried the control paths but could not finish a signed command on a
+board: the verify gate fingerprinted the control root with `hexdigest()`, which MicroPython's
+hashlib does not have. Anything reaching past `digest()` passes the whole CPython suite and
+throws on every device, which is worth remembering when adding a target. A board flashed from
+that build actuates a signed command, then aborts the reception, so the commanding end never
+mirrors the change and the two finish on different radio configurations. It also leaves the
+replay counter as an empty file that reads back as zero on the next boot. Reflash any board
+carrying it.
+
 ## Adding a target (new device or new modem)
 
 1. If it's a **new modem**, vendor its driver under `drivers/<name>/` (pin the exact version).
