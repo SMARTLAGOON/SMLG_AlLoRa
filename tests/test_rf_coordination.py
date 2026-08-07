@@ -24,6 +24,7 @@ from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Control.Control_Root import Control_Root
+from AlLoRa.Control.Node_Control_Actuator import Node_Control_Actuator
 from AlLoRa.Control.control_types import RF_CONFIG
 from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
 from AlLoRa.DataSinks.DataSink import DataSink, Reception
@@ -446,3 +447,81 @@ def test_probe_gives_up_and_restores_old_after_total_silence(tmp_path):
 
     assert hub.endpoint_trial_old(endpoint) is None, "the trial must end after total silence"
     assert endpoint.sf == 7, "a total failure restores the endpoint to the old config"
+
+
+# --- Slice H6: the same reconvergence, driven in band on an unprovisioned pair -------------
+
+def _in_band_pair(tmp_path, edge_conn, hub_conn, **hub_kwargs):
+    # An open pair with nothing provisioned, which is what selects the in-band transport. The
+    # Edge carries the actuator directly: in band there is no verify gate to hang one off, and
+    # a node with no actuator drops the command rather than acting on it.
+    edge, hub, endpoint, _ = _make_pair(tmp_path, edge_conn, hub_conn,
+                                        edge_sink=Capture_sink(), **hub_kwargs)
+    edge.control_actuator = Node_Control_Actuator(edge)
+    hub.resolve_endpoint_rf(endpoint)
+    assert endpoint.sf == 7, "the endpoint starts on the old config"
+    return edge, hub, endpoint
+
+
+def test_an_in_band_retune_commits_on_both_ends_when_the_new_config_works(tmp_path):
+    # What the Hub example does on an open pair, with the gated loopback standing in for the
+    # radio: reach a safe boundary, command a retune with no envelope around it, then keep
+    # pulling. The signed route has had this coverage since slice H5. The in-band one has been
+    # pinned only as far as the Edge acknowledging and arming a trial, which is the half that
+    # cannot strand a node; the half that can is everything after the acknowledgement.
+    edge_conn, hub_conn = _make_gated_pair()      # no dead configs: sf9 is a good link
+
+    hub_sink = Capture_sink()
+    edge, hub, endpoint = _in_band_pair(tmp_path, edge_conn, hub_conn,
+                                        reclaim_timeout=2, data_sink=hub_sink,
+                                        probe_swap_after=2, probe_give_up_after=20)
+    up = bytes((i * 9) % 256 for i in range(400))
+    edge.datasource = _Uplink_source(edge.get_chunk_size(), "up.bin", up)
+
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 30},
+                              name="edge-serve", daemon=True)
+    server.start()
+    assert hub.ask_change_rf(endpoint, {"sf": 9, "trial": 30}) is True, \
+        "the Edge acknowledged, so the retune is under way on both ends"
+    _run_rotation(hub, endpoint, visits=20, listening_time=1.5)
+    server.join(timeout=32)
+    assert not server.is_alive(), "the Edge serve loop never came home"
+
+    assert hub.endpoint_trial_old(endpoint) is None, "the Hub trial never committed"
+    assert endpoint.sf == 9, "the committed endpoint must stay on the new config"
+    assert edge.connector.get_rf_config()[1] == 9, "the Edge rolled back a config that worked"
+    assert not edge.sf_trial, "the Edge trial committed"
+    assert ("up.bin", up) in [(n, c) for n, c, _ in hub_sink.received], \
+        "the uplink that proved the new config never reached the Hub"
+
+
+def test_an_in_band_retune_reconverges_on_old_when_the_new_config_is_a_dead_link(tmp_path):
+    # The undo, on the transport that has no envelope to fall back on. An unsigned command is
+    # the only way an open deployment can retune at all, so it is also the only way an open
+    # deployment can be told to go somewhere it cannot be heard. sf9 is a dead link here: the
+    # Edge applies it, hears nothing, self-restores, and the Hub's probe finds it back on sf7
+    # with nobody intervening. Without this the survey mode can be bricked from radio range by
+    # a single frame.
+    edge_conn, hub_conn = _make_gated_pair()
+    edge_conn.set_dead_rf(sf=9)
+    hub_conn.set_dead_rf(sf=9)
+
+    edge, hub, endpoint = _in_band_pair(tmp_path, edge_conn, hub_conn,
+                                        reclaim_timeout=2, probe_swap_after=1,
+                                        probe_give_up_after=12)
+    edge.datasource = _Uplink_source(edge.get_chunk_size(), "up.bin",
+                                     bytes((i * 3) % 256 for i in range(300)))
+
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 30},
+                              name="edge-serve", daemon=True)
+    server.start()
+    assert hub.ask_change_rf(endpoint, {"sf": 9, "trial": 1}) is True, \
+        "the command landed on the old config, which is the only one that still works"
+    _run_rotation(hub, endpoint, visits=25, listening_time=1.0)
+    server.join(timeout=32)
+    assert not server.is_alive(), "the Edge serve loop never came home"
+
+    assert hub.endpoint_trial_old(endpoint) is None, "the Hub trial never settled"
+    assert endpoint.sf == 7, "the Hub did not reconverge the endpoint on the old config"
+    assert edge.connector.get_rf_config()[1] == 7, "the Edge did not self-restore to sf7"
+    assert not edge.sf_trial, "the Edge trial is resolved"

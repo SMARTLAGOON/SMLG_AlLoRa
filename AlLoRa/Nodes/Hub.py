@@ -337,7 +337,9 @@ class Hub(Node):
                 # The peer accepted, so this end follows it onto the new configuration, exactly
                 # as the signed route does once its artifact is delivered. Moving only the Edge
                 # is not a partial success: it is an endpoint this Hub can no longer hear.
-                self._mirror_endpoint_config(digital_endpoint, new_config)
+                # Sent between visits, so the next visit already polls on the new config and
+                # counts as a probe.
+                self._mirror_endpoint_config(digital_endpoint, new_config, mid_visit=False)
                 return True
             try_for -= 1
         return False
@@ -414,10 +416,17 @@ class Hub(Node):
         trial = self._endpoint_trial.get(digital_endpoint.session_id)
         return trial["old"] if trial else None
 
-    def _mirror_endpoint_config(self, digital_endpoint, mirror):
+    def _mirror_endpoint_config(self, digital_endpoint, mirror, mid_visit=True):
         # Switch the Hub's view of this endpoint to the new config, snapshotting the old as the
         # probe fallback and arming the trial. prepare_connector tunes to endpoint.* on the next
         # visit, so updating those fields IS the Hub following the Edge onto the new config.
+        #
+        # `mid_visit` says whether the caller is inside a visit that already tuned the radio.
+        # A reconfig delivered as a downlink is: the mirror fires when the Edge's final-OK
+        # lands, part way through a visit polling on the old config. A command sent on the link
+        # itself is not: it happens between visits, so the very next visit polls on the new
+        # config and is a real probe. Assuming otherwise throws that probe away, and it is the
+        # one the proving exchange arrives in.
         sid = digital_endpoint.session_id
         # The rollback target has to be a real config, never an endpoint's "follow this node"
         # placeholder: giving up on a trial has to put the radio somewhere concrete.
@@ -434,7 +443,7 @@ class Hub(Node):
         # that whole visit on the OLD config (prepare_connector already ran), so it never
         # actually probed the new one — the first real probe visit is the next one.
         self._endpoint_trial[sid] = {"old": old, "new": new, "misses": 0, "total": 0,
-                                     "fresh": True}
+                                     "fresh": mid_visit}
         if self.debug:
             print("Mirrored endpoint {} to new config; old retained {}".format(sid, old))
 
