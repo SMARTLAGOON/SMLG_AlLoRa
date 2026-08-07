@@ -48,7 +48,9 @@ class Control_Root_DataSink(DataSink):
 
     @staticmethod
     def _root_fingerprint(root_key):
-        return hashlib.sha256(root_key).hexdigest()
+        # digest().hex() rather than hexdigest(): MicroPython's hashlib has no hexdigest, so the
+        # latter runs everywhere the tests run and throws on every board. Same string either way.
+        return hashlib.sha256(root_key).digest().hex()
 
     def _load_counter(self):
         """Read back the highest counter this node has accepted, or 0 if it has none.
@@ -80,12 +82,19 @@ class Control_Root_DataSink(DataSink):
         if not self.counter_file:
             return
         try:
+            # Built before the file is opened. Opening for write truncates, so composing this
+            # inside the `with` turns any failure here into an empty mark that reads back as
+            # "no counter" and silently re-opens the replay window on the next boot.
+            mark = json.dumps({"root": self._root_fingerprint(self.control_root),
+                               "counter": counter})
             with open(self.counter_file, "w") as f:
-                f.write(json.dumps({"root": self._root_fingerprint(self.control_root),
-                                    "counter": counter}))
-        except OSError as e:
-            # A read-only or full filesystem must not turn an accepted command into a failed
-            # one: the RAM mark still holds for this boot.
+                f.write(mark)
+        except Exception as e:
+            # Persisting is best-effort and must never turn an accepted command into a failed
+            # transfer: the caller treats a raise here as a delivery failure, so the peer never
+            # hears the final OK and the two ends can end up on different configurations. The
+            # RAM mark still holds for this boot. Deliberately broader than OSError, which let
+            # a missing-attribute slip escape as an aborted reception.
             print("Control_Root_DataSink: could not persist the control counter ({})".format(e))
 
     @staticmethod

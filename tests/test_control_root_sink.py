@@ -362,3 +362,73 @@ def test_a_failed_actuation_leaves_the_artifact_deliverable_again(tmp_path):
     failing.consume(_artifact(tmp_path, artifact, name="try2.bin"), Reception(source="hub"))
 
     assert recovered.applied == [(RF_CONFIG, RF_PAYLOAD)], "the re-pull must still be accepted"
+
+
+# --- the gate on a MicroPython hashlib -----------------------------------------------------
+
+# Bound before anything patches the name: the stand-in below has to hash with the real
+# implementation, and hashlib is one shared module object, so patching it would otherwise send
+# the stand-in straight back into itself.
+_REAL_SHA256 = hashlib.sha256
+
+
+class _Micropython_sha256:
+    """CPython's sha256 minus hexdigest, which is what a board actually provides.
+
+    MicroPython's hashlib offers digest() and nothing else. Anything the gate reaches for
+    beyond that passes every test here and throws on every device, so the only way to hold
+    this layer to the target runtime is to take the extra methods away.
+    """
+
+    def __init__(self, data=b""):
+        self._h = _REAL_SHA256(data)
+
+    def update(self, data):
+        self._h.update(data)
+
+    def digest(self):
+        return self._h.digest()
+
+
+def test_the_mark_persists_on_a_runtime_whose_sha256_has_no_hexdigest(monkeypatch, tmp_path):
+    # Found on hardware: the gate fingerprinted the root with hexdigest(), which MicroPython
+    # does not have. The throw escaped _accept_counter's OSError-only catch and aborted the
+    # reception *after* a successful verify, so the peer never heard the final OK, never
+    # mirrored the change, and the two ends finished on different configurations. The command
+    # itself had already been actuated, which is the split this whole layer exists to avoid.
+    #
+    # Minting happens first, on the real hashlib, because that is where it happens for real:
+    # the authority signs on a laptop or a backend, and only this gate runs on the board.
+    # Signing also needs an HMAC, which wants more of the hash object than a board exposes.
+    mark = str(tmp_path / "control.mark")
+    first = _artifact(tmp_path, _envelope(RF_CONFIG, RF_PAYLOAD, counter=5))
+    replay = _artifact(tmp_path, _envelope(RF_CONFIG, RF_PAYLOAD, counter=5), name="replay.bin")
+
+    monkeypatch.setattr(
+        "AlLoRa.DataSinks.Control_Root_DataSink.hashlib.sha256", _Micropython_sha256)
+
+    actuator = _CapturingActuator()
+    _sink(actuator, counter_file=mark).consume(first, Reception(source="hub"))
+
+    assert actuator.applied == [(RF_CONFIG, RF_PAYLOAD)], "the artifact must still actuate"
+    assert os.path.getsize(mark) > 0, \
+        "an empty mark reads back as 'no counter' and re-opens the replay window every boot"
+
+    # The reboot half: the mark is only worth writing if the next boot can read it back.
+    after = _CapturingActuator()
+    _sink(after, counter_file=mark).consume(replay, Reception(source="hub"))
+    assert after.applied == [], "a captured artifact must not replay across a reboot"
+
+
+def test_a_mark_that_cannot_be_written_still_completes_the_transfer(tmp_path):
+    # Persisting is best-effort. Whatever goes wrong writing it, the accepted command must not
+    # come back to the caller as a failed delivery: that is what turns a working reconfiguration
+    # into two ends on different configurations.
+    actuator = _CapturingActuator()
+    sink = _sink(actuator, counter_file=str(tmp_path / "nope" / "deep" / "control.mark"))
+
+    sink.consume(_artifact(tmp_path, _envelope(RF_CONFIG, RF_PAYLOAD, counter=2)),
+                 Reception(source="hub"))
+
+    assert actuator.applied == [(RF_CONFIG, RF_PAYLOAD)]
+    assert sink.counter == 2, "the RAM mark still has to hold for this boot"
