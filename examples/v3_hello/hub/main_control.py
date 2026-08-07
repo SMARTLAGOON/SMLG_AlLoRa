@@ -10,9 +10,11 @@ from AlLoRa.Connectors.SX127x_connector import SX127x_connector
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 
 # Where to move the pair. `trial` is how many seconds the Edge holds this provisionally before
-# rolling itself back, and it wants to be longer than one poll rotation: the Edge commits only
-# once a whole file has crossed on the new settings, so a window shorter than a visit restores
-# a configuration that was working.
+# rolling itself back, and it wants to be longer than one poll rotation. What commits the trial
+# is the peer asking for a chunk later than the last one served, which is the first evidence a
+# full-payload frame was demodulated on the new settings; a bare reachability poll is not
+# evidence and does not commit. So the window has to be long enough for a visit to reach that
+# point, or it restores a configuration that was working.
 NEW_CONFIG = {"sf": 9, "trial": 300}
 
 gc.enable()

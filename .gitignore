@@ -10,3 +10,10 @@ manifest.py
 
 # serial capture logs from hardware runs (debug artifacts, not part of the example)
 examples/**/*.log
+
+# Provisioning material and per-node state. provision_control_root.py writes the fleet's
+# signing half into examples/, and a node writes its identity and replay mark beside it; none
+# of it belongs in a published repo, and the signing half is the fleet's whole control plane.
+**/control_root.key
+**/identity.key
+**/control.counter
