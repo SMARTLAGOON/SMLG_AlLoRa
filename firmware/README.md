@@ -144,3 +144,10 @@ so a live read would make every unstated endpoint inherit its neighbour). The pr
 a hardcoded SF7, so at SF7 the old and new code are indistinguishable and a green run proves
 nothing. Flash a Hub whose own config is some other spreading factor, register an endpoint with no
 `connector` block, and confirm the transfer completes at the Hub's factor.
+
+**A refused control command no longer reads as a dead link.** Asking an endpoint to change its
+radio now answers `accepted`, `refused`, `pending` or `unreachable` rather than true or false, and
+`rf_change_status` reads the verdict that a signed change cannot have yet at the moment it is
+queued. Both halves live in the frozen library, so a board flashed from an older `.bin` still
+reports a refusal as silence and still reports a signed refusal as success: reflash both ends
+before testing any of it. The wire is untouched, so a new build and an old one interoperate.
