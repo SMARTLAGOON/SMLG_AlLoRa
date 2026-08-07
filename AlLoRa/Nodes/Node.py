@@ -40,6 +40,27 @@ from AlLoRa.utils.json_utils import json
 
 class Node:
 
+    # What asking a peer to change its radio configuration can come to. Four outcomes and not
+    # two, because delivering a command is not the same as having it taken, and a peer that
+    # says no is not the same as a peer that is not there. A boolean forced the caller to
+    # guess between them, and it guessed optimistically: a refusal read as success, and a
+    # policy refusal read as a broken link, which sends someone to a site when the repair is a
+    # missing key. Each value names a different next move for whoever reads it:
+    #
+    #   ACCEPTED    both ends are on the new configuration. Nothing left to do.
+    #   REFUSED     the peer heard the command and declined it. Look at its provisioning.
+    #   PENDING     a signed artifact was handed over; the probe decides later which way it
+    #               went. The only honest answer while the verdict is still on the far node.
+    #   UNREACHABLE nothing answered at all, so the command was never even considered. Look
+    #               at the link.
+    #
+    # Plain lowercase strings rather than an enum or an int: they cross into a backend's JSON
+    # and onto an operator's screen unchanged, and MicroPython has no enum to lean on anyway.
+    ACCEPTED = "accepted"
+    REFUSED = "refused"
+    PENDING = "pending"
+    UNREACHABLE = "unreachable"
+
     def __init__(self, connector: Connector = None, config_file="LoRa.json",
                  debug_hops=False,
                  max_sleep_time=3,

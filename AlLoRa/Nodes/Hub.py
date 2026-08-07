@@ -41,6 +41,16 @@ class Hub(Node):
     # few rounds on it costs nothing the transfer loop will miss.
     _IN_BAND_ATTEMPTS = 20
 
+    # Connection polls spent telling a peer that declined a command from a peer that is not
+    # there. More than one because the attempts above prove nothing about the return path: a
+    # node that refuses hears every one of them and answers none, by design, so the first frame
+    # that tests whether anything can come back at all is this poll. Resting the whole
+    # diagnosis on a single frame over a lossy radio would report a refusing node as a dead one
+    # every time the link dropped one short packet, which is the wrong answer this exists to
+    # stop giving. Three, and it stops at the first reply: it costs nothing on the path that
+    # succeeds and three short frames on the path that has already spent twenty.
+    _DIAGNOSIS_POLLS = 3
+
     # The Hub is the authority: it issues control artifacts and is never commanded by one over
     # the radio. So the half of the control root it may hold is the signing half, and the
     # verifying half, which it could do nothing with, is refused as a misprovisioning.
@@ -100,6 +110,13 @@ class Hub(Node):
         #   _endpoint_trial[sid] = {"old": [f,sf,bw,cr,txp], ...} while a trial is live.
         self._pending_mirror = {}
         self._endpoint_trial = {}
+        # What became of the last RF change asked of each endpoint, per sid, so a caller can
+        # still read the verdict after the call that started it has returned. It has to
+        # outlive the call because on the signed route the verdict does not exist yet when the
+        # call returns: the Edge decides alone, after the transfer closed, and the only thing
+        # that can observe which way it went is the probe, visits later. Bounded by the
+        # endpoint count, one short string each.
+        self._rf_change_status = {}
         # Secure-session liveness, counted in visits. A peer that reboots loses its RAM-held
         # session and has no way to say so, and only this side can offer a new one, so the
         # authority has to notice by itself. How that is decided (and why silence alone does
@@ -305,15 +322,26 @@ class Hub(Node):
         reconfiguration where only the far end moves is not a partial success, it is an endpoint
         this Hub can no longer hear, so following is not left to the caller to remember.
 
-        Returns True once a signed artifact is queued for delivery, or once an in-band command
-        has been acknowledged, so a caller can tell a reconfiguration that landed from one that
-        was refused. Note the two are not the same claim: on the signed route the change is
-        queued and will be delivered on a later visit, while in band it has already been taken.
+        Returns one of ACCEPTED, REFUSED, PENDING or UNREACHABLE. Four words rather than a
+        yes/no, because the two things a yes/no had to fuse are the two things a caller most
+        needs kept apart. `True` used to mean "the peer acknowledged" in band and "an artifact
+        is queued and nothing has happened yet" when signed, which is one value carrying a fact
+        and a prediction; and `False` covered both a peer that declined the command and a peer
+        that was not there, which are the same silence on the air and opposite repairs on the
+        ground. `pending` is settled later by the probe, readable through `rf_change_status`.
         """
         if artifact is None and self.control_root is None:
             if self.protocol_version >= 3:
-                return self._ask_change_rf_in_band(digital_endpoint, new_config)
-            return super().ask_change_rf(digital_endpoint, new_config)
+                outcome = self._ask_change_rf_in_band(digital_endpoint, new_config)
+            else:
+                # The v2 loop predates the vocabulary and answers yes or no, so translate here
+                # rather than teach a legacy encoding a distinction it cannot draw. A v2 link
+                # reaches only two of the four words, and that is honest: a v2 node holds no
+                # control root and has no verify gate, so it has nothing to refuse a command
+                # with. Its only failure is one nobody answered.
+                outcome = self.ACCEPTED if super().ask_change_rf(digital_endpoint, new_config) \
+                    else self.UNREACHABLE
+            return self._record_rf_change(digital_endpoint, outcome)
         if artifact is None:
             payload = dumps(new_config).encode("utf-8")
             artifact = self.control_root.mint(RF_CONFIG, digital_endpoint.device_id,
@@ -321,7 +349,33 @@ class Hub(Node):
         file = AlLoRa_File(name="ctrl.bin", content=bytearray(artifact),
                            chunk_size=self.get_chunk_size())
         self.queue_downlink(digital_endpoint, file, mirror_config=new_config)
-        return True
+        # Queued, and nothing more can honestly be said yet. The Edge's verify gate runs after
+        # the transfer has closed and this end has stopped listening, so the verdict is reached
+        # somewhere this Hub cannot see it. The probe is what observes which way it went.
+        return self._record_rf_change(digital_endpoint, self.PENDING)
+
+    def rf_change_status(self, digital_endpoint):
+        """What became of the last RF change asked of this endpoint: one of ACCEPTED, REFUSED,
+        PENDING, UNREACHABLE, or None if none was ever asked.
+
+        The reader for the half of the answer that does not exist when `ask_change_rf` returns.
+        A signed change leaves here as PENDING and is settled by the probe on a later visit, so
+        a backend or an operator screen watches this rather than the call's return value alone.
+        """
+        return self._rf_change_status.get(digital_endpoint.session_id)
+
+    def _record_rf_change(self, digital_endpoint, outcome):
+        self._rf_change_status[digital_endpoint.session_id] = outcome
+        return outcome
+
+    def _settle_rf_change(self, sid, outcome):
+        # The probe only ever answers a question that is still open. A change the peer already
+        # answered for itself is not re-judged by where its trial ended up: an in-band command
+        # that was acknowledged WAS accepted, and an Edge whose trial later reverts is the
+        # trial working, not the command being refused. Overwriting it would report a refusal
+        # to whoever has to fix one, and send them to look at provisioning that is fine.
+        if self._rf_change_status.get(sid) == self.PENDING:
+            self._rf_change_status[sid] = outcome
 
     def _ask_change_rf_in_band(self, digital_endpoint, new_config):
         """Ask one Edge to retune over the link itself, with no envelope around the command.
@@ -352,9 +406,46 @@ class Hub(Node):
                 # Sent between visits, so the next visit already polls on the new config and
                 # counts as a probe.
                 self._mirror_endpoint_config(digital_endpoint, new_config, mid_visit=False)
-                return True
+                return self.ACCEPTED
             try_for -= 1
-        return False
+        return self._diagnose_in_band_silence(digital_endpoint)
+
+    def _diagnose_in_band_silence(self, digital_endpoint):
+        """Tell a peer that declined the command from a peer that is not there at all.
+
+        Both produce the same observation, twenty unanswered rounds, and until now both produced
+        the same report. A node holding a control root refuses an unsigned command by answering
+        nothing, which is right on the wire: acknowledging would tell this end that a change
+        happened which did not. So the silence has to be interrogated rather than read.
+
+        The interrogation is the one request an Edge always replies to, the connection poll. It
+        is asked on the very configuration the command went out on, which is sound because this
+        end never moves its own radio on the in-band route until an acknowledgement arrives, so
+        a failed exchange leaves both ends where they started. Twenty unanswered commands
+        followed by an answered poll is not ambiguous: the peer can hear this Hub and chose not
+        to acknowledge the command.
+
+        Deliberately the same question session liveness already asks, rather than a second
+        liveness concept beside it, and deliberately not gated on posture: an open deployment
+        can be commanding a node that was provisioned with a root, and that is exactly the
+        half-provisioned rollout this diagnosis is for.
+        """
+        for _ in range(self._DIAGNOSIS_POLLS):
+            poll = self.create_request(digital_endpoint.get_mac_address(),
+                                       digital_endpoint.get_mesh(),
+                                       digital_endpoint.get_sleep(),
+                                       digital_endpoint.session_id)
+            answered, _ = self.ask_ok(poll)
+            if answered:
+                if self.debug:
+                    print("Endpoint {} answered a poll after refusing the command: it declined "
+                          "rather than went missing (check its signed provisioning)".format(
+                              digital_endpoint.session_id))
+                return self.REFUSED
+        if self.debug:
+            print("Endpoint {} answered neither the command nor a poll: report the link, "
+                  "not a refusal".format(digital_endpoint.session_id))
+        return self.UNREACHABLE
 
     @staticmethod
     def _is_control_ack(reply, prefix):
@@ -488,6 +579,7 @@ class Hub(Node):
                 which = "old (Edge rolled back)" if active_is_old else "new (committed)"
                 print("RF probe settled endpoint {} on {}".format(sid, which))
             self._endpoint_trial.pop(sid, None)
+            self._settle_rf_change(sid, self.REFUSED if active_is_old else self.ACCEPTED)
             return
 
         if heard:
@@ -505,6 +597,10 @@ class Hub(Node):
                 print("RF probe gave up on endpoint {}; restoring old config".format(sid))
             self._set_endpoint_rf(digital_endpoint, trial["old"])
             self._endpoint_trial.pop(sid, None)
+            # Located on neither configuration, so nothing here says the peer refused anything.
+            # Same rule the in-band route follows: an outcome nobody answered for is reported
+            # as the link, never as a decision the peer did not make.
+            self._settle_rf_change(sid, self.UNREACHABLE)
             return
         if trial["misses"] >= self.probe_swap_after:
             trial["misses"] = 0

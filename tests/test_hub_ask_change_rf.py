@@ -12,6 +12,12 @@ minter may be a board whose RTC does not survive a power cycle, and a clock that
 once would push the number past what any later command can reach, locking the whole fleet out
 of its own control plane until the root is rotated and every node re-provisioned.
 
+The call answers with one of four words, and half these tests are about which one. Delivering a
+command is not the same as having it taken, and a peer that says no is not a peer that is not
+there: a boolean fused both pairs, so a refusal was reported as a success on one route and as a
+dead antenna on the other. The Hub now reports what it can observe and says `pending` for what
+it cannot yet, and the {new, old} probe is what turns that into a verdict.
+
 These tests compose the two halves the way the field does: what the Hub queues, a real node's
 verify gate has to accept.
 """
@@ -22,6 +28,7 @@ from AlLoRa.Control.control_types import RF_CONFIG
 from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
 from AlLoRa.DataSinks.DataSink import Reception
 from AlLoRa.DataSources.DataSource import DataSource
+from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Nodes.Node import Node
 from AlLoRa.Packet_v3 import Packet_v3
 from test_control_root_sink import (
@@ -135,7 +142,7 @@ def test_a_hub_with_neither_a_root_nor_an_artifact_asks_in_band(tmp_path):
     hub, endpoint, source = _hub(tmp_path)
     hub.send_request = lambda packet: None      # a peer that never answers
 
-    assert hub.ask_change_rf(endpoint, {"sf": 9}) is False, \
+    assert hub.ask_change_rf(endpoint, {"sf": 9}) == Hub.UNREACHABLE, \
         "the in-band exchange reports whether it landed"
     assert source.queued == [], "the in-band route must queue no downlink"
 
@@ -196,7 +203,7 @@ def test_an_echoed_prefix_is_the_acknowledgement(tmp_path):
 
     hub.send_request = _echo
 
-    assert hub.ask_change_rf(endpoint, NEW_CONFIG) is True, \
+    assert hub.ask_change_rf(endpoint, NEW_CONFIG) == Hub.ACCEPTED, \
         "an echoed prefix is the peer accepting the command"
     assert len(sent) == 1, "an acknowledged command must not be sent again"
 
@@ -207,6 +214,10 @@ def test_an_ordinary_keepalive_is_not_mistaken_for_an_acknowledgement(tmp_path):
     # as a peer that accepted the change: the Hub would report success, stop retrying, and
     # move itself onto a configuration the Edge never applied. That is the deaf-endpoint
     # failure, reached by believing an ack that was never sent.
+    #
+    # A peer this shape is alive and did not accept, so the report is a refusal rather than a
+    # link problem. That is the whole point of asking the poll: the outcome follows what the
+    # peer did, not what the Hub failed to hear.
     hub, endpoint, source = _hub(tmp_path)
 
     def _keepalive(packet):
@@ -216,8 +227,183 @@ def test_an_ordinary_keepalive_is_not_mistaken_for_an_acknowledgement(tmp_path):
 
     hub.send_request = _keepalive
 
-    assert hub.ask_change_rf(endpoint, NEW_CONFIG) is False, \
-        "only a control ack acknowledges a control command"
+    assert hub.ask_change_rf(endpoint, NEW_CONFIG) == Hub.REFUSED, \
+        "only a control ack acknowledges a control command, and a peer that answers is not gone"
+
+
+def test_an_edge_that_heard_the_command_and_declined_is_reported_as_a_refusal(tmp_path):
+    # The defect. A node holding a control root refuses an unsigned command and answers nothing,
+    # which is correct on the wire: acknowledging would tell the Hub a change happened that did
+    # not. But silence is also what a broken antenna produces, so the two outcomes arrived at the
+    # operator as one, and the repair a Hub that needs the signing key was reported as a site
+    # visit. That is the normal state of a half-provisioned rollout, not an edge case.
+    #
+    # The disambiguator is the one question an Edge always answers. Answered, on the very config
+    # the command went out on, means it heard the command and chose not to acknowledge it.
+    hub, endpoint, source = _hub(tmp_path)
+
+    def _declines_control_but_is_alive(packet):
+        if packet.get_command() == Packet_v3.CTRL:
+            return None             # heard it, refused it, said nothing: the provisioned Edge
+        reply = hub.new_packet()
+        reply.set_ok()
+        return reply
+
+    hub.send_request = _declines_control_but_is_alive
+
+    assert hub.ask_change_rf(endpoint, NEW_CONFIG) == Hub.REFUSED, \
+        "a peer that answers the connection poll heard the command and declined it"
+
+
+def test_a_queued_artifact_is_pending_and_not_a_success(tmp_path):
+    # The other direction of the same defect. On the signed route all this Hub can observe is
+    # that a file was handed over, and the Edge reaches its verdict afterwards, alone, with the
+    # transaction already closed. So "delivered" was being reported as "applied", which is a
+    # prediction dressed as an observation, and it was wrong exactly when a node refused the
+    # artifact as a replay on a stale counter.
+    #
+    # At the moment of queuing the honest answer is that nothing has happened yet. The probe
+    # settles it later.
+    root = Control_Root(CONTROL_ROOT_PRIV)
+    hub, endpoint, source = _hub(tmp_path, control_root=root,
+                                 control_counter_file=str(tmp_path / "control.counter"))
+
+    assert hub.ask_change_rf(endpoint, NEW_CONFIG) == Hub.PENDING, \
+        "queuing an artifact is not the Edge taking it"
+    assert hub.rf_change_status(endpoint) == Hub.PENDING, \
+        "and the outstanding change stays readable, because the verdict arrives later"
+
+
+def _pending_signed_change(tmp_path):
+    """A Hub that minted a change, saw it delivered, and is now probing for the verdict.
+
+    The two steps after the call are what the drive loop does when an Edge's pull completes:
+    mirror this end onto the new config, then start probing {new, old}. The first probe visit
+    is consumed here because the mirror happened part way through a visit that polled entirely
+    on the old config, so it never actually probed anything.
+    """
+    root = Control_Root(CONTROL_ROOT_PRIV)
+    hub, endpoint, source = _hub(tmp_path, control_root=root,
+                                 control_counter_file=str(tmp_path / "control.counter"),
+                                 probe_swap_after=1, probe_give_up_after=4)
+    hub.ask_change_rf(endpoint, NEW_CONFIG)
+    hub._mirror_endpoint_config(endpoint, NEW_CONFIG)
+    hub._probe_visit_end(endpoint, heard=False, completed=False)
+    assert hub.rf_change_status(endpoint) == Hub.PENDING, "the verdict is not in yet"
+    return hub, endpoint
+
+
+def test_the_probe_settles_a_pending_change_as_accepted_when_the_edge_took_it(tmp_path):
+    # The verdict this Hub could never see before. A full exchange on the new configuration is
+    # the Edge running on it, which is the only proof that exists: the Edge's own acceptance
+    # happened alone, after the transfer closed, with nothing on the air to carry it back.
+    hub, endpoint = _pending_signed_change(tmp_path)
+
+    hub._probe_visit_end(endpoint, heard=True, completed=True)
+
+    assert hub.rf_change_status(endpoint) == Hub.ACCEPTED, \
+        "an endpoint working on the new configuration took the change"
+
+
+def test_the_probe_settles_a_pending_change_as_refused_when_the_edge_never_moved(tmp_path):
+    # What happened on the bench on 2026-08-07, reported as a success. The Hub queued an
+    # artifact, the pull completed, the Hub moved its own radio and called it done. The Edge
+    # then verified the artifact and refused it as a replay on a stale counter, which was the
+    # correct thing for it to do. The two ends were split, and the pair only came back because
+    # the probe happened to find the Edge on the configuration it had never left.
+    #
+    # Finding it there is not luck, it is the evidence. An endpoint answering on the old
+    # configuration after a delivery that completed did not take the change.
+    hub, endpoint = _pending_signed_change(tmp_path)
+
+    hub._probe_visit_end(endpoint, heard=False, completed=False)   # silence: swap to old
+    hub._probe_visit_end(endpoint, heard=True, completed=False)    # and there it is
+
+    assert endpoint.sf == 7, "the endpoint is back where it started"
+    assert hub.rf_change_status(endpoint) == Hub.REFUSED, \
+        "an endpoint found on the old configuration after a completed delivery did not take it"
+
+
+def test_a_change_the_probe_never_locates_is_a_link_problem_not_a_refusal(tmp_path):
+    # The probe can also just run out. It looked on both configurations, found the endpoint on
+    # neither, and restored the old one as the best chance of re-contact. Nothing there says
+    # the Edge refused anything, so nothing here may claim it did: the same rule the in-band
+    # route follows, that an outcome nobody answered for is a link report.
+    hub, endpoint = _pending_signed_change(tmp_path)
+
+    for _ in range(4):                          # probe_give_up_after=4
+        hub._probe_visit_end(endpoint, heard=False, completed=False)
+
+    assert hub.endpoint_trial_old(endpoint) is None, "the probe gave up"
+    assert hub.rf_change_status(endpoint) == Hub.UNREACHABLE, \
+        "an endpoint located on neither configuration is a link report"
+
+
+def test_an_acknowledged_in_band_change_is_not_rewritten_by_its_own_trial(tmp_path):
+    # Where the probe has to keep quiet. In band the peer answered for itself: it acknowledged
+    # the command and applied it, so the change WAS accepted, and no later observation makes
+    # that untrue. An Edge whose trial then reverts is the trial doing its job on a
+    # configuration that could not carry a transfer, which is a different event with a
+    # different repair. Rewriting the verdict to "refused" would send whoever reads it to
+    # re-provision a node whose provisioning was never the problem.
+    hub, endpoint, source = _hub(tmp_path, probe_swap_after=1, probe_give_up_after=4)
+
+    def _echo(packet):
+        reply = hub.new_packet()
+        reply.set_kind(Packet_v3.CTRL)
+        reply.set_payload(bytes([0x80 | RF_CONFIG]))
+        return reply
+
+    hub.send_request = _echo
+    assert hub.ask_change_rf(endpoint, NEW_CONFIG) == Hub.ACCEPTED
+
+    hub._probe_visit_end(endpoint, heard=False, completed=False)   # silence: swap to old
+    hub._probe_visit_end(endpoint, heard=True, completed=False)    # the Edge self-restored
+
+    assert endpoint.sf == 7, "the Edge rolled back and the Hub followed it"
+    assert hub.rf_change_status(endpoint) == Hub.ACCEPTED, \
+        "a command the peer acknowledged stays accepted, whatever its trial later decided"
+
+
+def test_one_lost_poll_does_not_turn_a_refusal_back_into_a_link_report(tmp_path):
+    # The diagnosis rests on a single short frame, so it has to survive the link losing one.
+    # The twenty unanswered commands say nothing about the return path: a node that refuses
+    # hears every one of them and simply does not reply, so the first frame that actually
+    # tests whether anything can come back is the poll. Betting the whole diagnosis on one
+    # frame over a lossy radio would put the old wrong answer back for free.
+    hub, endpoint, source = _hub(tmp_path)
+    polls = []
+
+    def _drops_the_first_poll(packet):
+        if packet.get_command() == Packet_v3.CTRL:
+            return None                     # the refusal: heard, declined, silent
+        polls.append(packet)
+        if len(polls) == 1:
+            return None                     # and the radio eats the first poll
+        reply = hub.new_packet()
+        reply.set_ok()
+        return reply
+
+    hub.send_request = _drops_the_first_poll
+
+    assert hub.ask_change_rf(endpoint, NEW_CONFIG) == Hub.REFUSED, \
+        "a peer that answers the second poll was there for the first one too"
+
+
+def test_a_peer_that_answers_nothing_at_all_is_reported_as_a_link_problem(tmp_path):
+    # The other half of the same branch, and the half that keeps the fix honest. Diagnosing a
+    # refusal is only worth anything if a broken antenna is still diagnosed as a broken antenna:
+    # a Hub that reported every silence as a refusal would have swapped one wrong answer for
+    # another, and sent whoever is on call to re-provision a node that is off the air.
+    #
+    # An unanswered poll is also the case where the Edge heard the command, applied it, and had
+    # its acknowledgement lost, so it is now on a configuration this Hub cannot hear. That is
+    # the same report and the same repair, which is why one value covers both.
+    hub, endpoint, source = _hub(tmp_path)
+    hub.send_request = lambda packet: None      # a peer that answers nothing, command or poll
+
+    assert hub.ask_change_rf(endpoint, NEW_CONFIG) == Hub.UNREACHABLE, \
+        "silence to the poll as well as to the command is a link report, never a refusal"
 
 
 def test_a_restarted_hub_does_not_reissue_numbers_the_fleet_has_seen(tmp_path):

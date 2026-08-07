@@ -82,9 +82,12 @@ def test_ask_data_reports_a_timeout_instead_of_raising(tmp_path):
 
 def test_ask_change_rf_gives_up_without_an_exception(tmp_path):
     # The in-band reconfiguration, which is what a v3 open Hub selects. A silent peer must
-    # exhaust the attempts and report a refused change, not raise: the give-up value is the
-    # only thing distinguishing "the Edge did not accept" from "the Edge accepted", and a
-    # caller that got an exception instead would have no way to tell which.
+    # exhaust the attempts and report the outcome, not raise: the give-up value is the only
+    # thing distinguishing "the Edge did not accept" from "the Edge accepted", and a caller
+    # that got an exception instead would have no way to tell which.
+    #
+    # This peer answers nothing at all, including the poll that follows the attempts, so the
+    # report is the link rather than a refusal.
     #
     # Retargeted deliberately when the v3 in-band transport landed. It used to reach the
     # legacy loop through the no-authority fallback, which on a v3 link put frames on the air
@@ -92,7 +95,7 @@ def test_ask_change_rf_gives_up_without_an_exception(tmp_path):
     hub = _make_hub(tmp_path)
     hub.send_request = lambda packet: None
 
-    assert hub.ask_change_rf(_endpoint(), {"sf": 9}) is False
+    assert hub.ask_change_rf(_endpoint(), {"sf": 9}) == Hub.UNREACHABLE
 
 
 def test_the_legacy_reconfig_loop_gives_up_without_an_exception_on_a_v2_hub(tmp_path):
@@ -100,10 +103,14 @@ def test_the_legacy_reconfig_loop_gives_up_without_an_exception_on_a_v2_hub(tmp_
     # The unguarded dereference lived here, inside a try/except that already spent a try on
     # it, so guarding it changed nothing except that a silent peer stopped printing a crash
     # for each of the twenty attempts.
+    #
+    # One call, one vocabulary, whichever transport it picked: a caller must not have to know
+    # the link's protocol version to read the answer. A v2 link reaches only two of the four
+    # words, because a v2 node has no control root and so nothing it can refuse with.
     hub = _make_hub(tmp_path, protocol_version=2)
     hub.send_request = lambda packet: None
 
-    assert hub.ask_change_rf(_endpoint(), {"sf": 9}) is False
+    assert hub.ask_change_rf(_endpoint(), {"sf": 9}) == Hub.UNREACHABLE
 
 
 # --- what the crash used to do, and now has to be done on purpose ---------------------------

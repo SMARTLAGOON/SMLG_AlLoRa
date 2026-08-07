@@ -481,7 +481,7 @@ def test_an_in_band_retune_commits_on_both_ends_when_the_new_config_works(tmp_pa
     server = threading.Thread(target=edge.serve, kwargs={"timeout": 30},
                               name="edge-serve", daemon=True)
     server.start()
-    assert hub.ask_change_rf(endpoint, {"sf": 9, "trial": 30}) is True, \
+    assert hub.ask_change_rf(endpoint, {"sf": 9, "trial": 30}) == Hub.ACCEPTED, \
         "the Edge acknowledged, so the retune is under way on both ends"
     _run_rotation(hub, endpoint, visits=20, listening_time=1.5)
     server.join(timeout=32)
@@ -515,13 +515,16 @@ def test_an_in_band_retune_reconverges_on_old_when_the_new_config_is_a_dead_link
     server = threading.Thread(target=edge.serve, kwargs={"timeout": 30},
                               name="edge-serve", daemon=True)
     server.start()
-    assert hub.ask_change_rf(endpoint, {"sf": 9, "trial": 1}) is True, \
+    assert hub.ask_change_rf(endpoint, {"sf": 9, "trial": 1}) == Hub.ACCEPTED, \
         "the command landed on the old config, which is the only one that still works"
     _run_rotation(hub, endpoint, visits=25, listening_time=1.0)
     server.join(timeout=32)
     assert not server.is_alive(), "the Edge serve loop never came home"
 
     assert hub.endpoint_trial_old(endpoint) is None, "the Hub trial never settled"
+    assert hub.rf_change_status(endpoint) == Hub.ACCEPTED, \
+        "the Edge did acknowledge the command, and a trial that reverts afterwards is the "\
+        "trial working rather than the command being refused: the two need different repairs"
     assert endpoint.sf == 7, "the Hub did not reconverge the endpoint on the old config"
     assert edge.connector.get_rf_config()[1] == 7, "the Edge did not self-restore to sf7"
     assert not edge.sf_trial, "the Edge trial is resolved"

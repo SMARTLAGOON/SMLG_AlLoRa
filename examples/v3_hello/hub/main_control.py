@@ -41,17 +41,23 @@ hub.listen_to_endpoint(endpoint, listening_time=60, save_file=True, one_file=Tru
 #    air, and this Hub follows it onto the same settings: a reconfiguration where only the far
 #    end moves is not a partial success, it is an endpoint this Hub can no longer hear.
 #
-#    True means two different things and it is worth knowing which. In band the Edge has
-#    already acknowledged and applied the change by the time this returns. Signed, the artifact
-#    is only queued: it is handed over on one of the pulls below, and nothing has moved yet.
+#    The answer is one of four words, and each one sends you somewhere different. They are worth
+#    reading in full, because two of them used to be the same word and the wrong one cost a trip
+#    to a site: a node that heard the command and declined it looked exactly like a dead antenna.
 print("asking for", NEW_CONFIG)
-accepted = hub.ask_change_rf(endpoint, NEW_CONFIG)
-if not accepted:
-    print("the command did not land; leaving the pair where it is")
-elif hub.control_root is not None:
-    print("artifact queued: it is delivered on one of the pulls below")
-else:
+outcome = hub.ask_change_rf(endpoint, NEW_CONFIG)
+if outcome == Hub.ACCEPTED:
     print("acknowledged: the Edge is now on trial with the new configuration")
+elif outcome == Hub.PENDING:
+    print("artifact queued: it is delivered on one of the pulls below, and the probe below "
+          "is what says whether the Edge took it")
+elif outcome == Hub.REFUSED:
+    # It answered a poll, so it is alive and listening. It heard the command and said no,
+    # which for an unsigned command means the node holds a control root and wants a signed
+    # one. Check what this Hub was provisioned with, not the antenna.
+    print("refused: the Edge is there and declined the command; check its provisioning")
+else:
+    print("unreachable: nothing answered at all, so the command was never considered")
 
 # 3. Keep polling. This is not idling: on the new configuration a completed transfer is what
 #    commits the Edge's trial, and if the new configuration cannot carry one, the Edge restores

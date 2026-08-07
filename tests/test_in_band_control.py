@@ -249,7 +249,7 @@ def test_a_hub_retunes_an_edge_over_the_link_itself(tmp_path):
     server = threading.Thread(target=serve, daemon=True)
     server.start()
     try:
-        assert hub.ask_change_rf(endpoint, NEW_CONFIG) is True, \
+        assert hub.ask_change_rf(endpoint, NEW_CONFIG) == Hub.ACCEPTED, \
             "the Edge acknowledged, so the exchange landed"
     finally:
         stop.set()

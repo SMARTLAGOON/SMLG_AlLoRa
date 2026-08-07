@@ -89,6 +89,20 @@ If the new configuration cannot carry a transfer, nobody has to intervene: the E
 only for `trial` seconds, rolls back to the last configuration that worked, and the Hub's
 `{new, old}` probe finds it there. That undo is the reason a retune is safe to try at all.
 
+`ask_change_rf` answers with one of four words, and each one is a different next move:
+
+| It says | It means | What to do |
+|---|---|---|
+| `accepted` | The Edge acknowledged the command and both ends moved. | Nothing. |
+| `pending` | A signed artifact is queued. It is handed over on one of the pulls, and the Edge decides afterwards, on its own. | Keep polling and read `hub.rf_change_status(endpoint)`, which the probe settles a few visits later. |
+| `refused` | The Edge answered a poll, so it is there and listening, and it declined the command. | Look at provisioning, not at the radio. An unsigned command is refused by a node that holds a control root. |
+| `unreachable` | Nothing answered, command or poll. | Look at the link. The command was never considered. |
+
+Telling `refused` from `unreachable` is why the Hub asks one extra short question after a
+command goes unanswered, and only then. A refusal and a broken antenna produce exactly the same
+silence, and reporting them as one thing sent people to check hardware when the repair was a
+missing key.
+
 Create the fleet's root once, on your laptop:
 
 ```bash
