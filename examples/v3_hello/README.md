@@ -10,13 +10,16 @@ Both boards run the same AlLoRa firmware. Then put each node's files on its boar
 
 ```bash
 # Edge device
-ampy -p /dev/cu.usbmodemXXXX put edge/main.py main.py
-ampy -p /dev/cu.usbmodemXXXX put edge/LoRa.json LoRa.json
+mpremote connect /dev/cu.usbmodemXXXX fs cp edge/main.py :main.py
+mpremote connect /dev/cu.usbmodemXXXX fs cp edge/LoRa.json :LoRa.json
 
 # Hub device
-ampy -p /dev/cu.usbmodemYYYY put hub/main.py main.py
-ampy -p /dev/cu.usbmodemYYYY put hub/LoRa.json LoRa.json
+mpremote connect /dev/cu.usbmodemYYYY fs cp hub/main.py :main.py
+mpremote connect /dev/cu.usbmodemYYYY fs cp hub/LoRa.json :LoRa.json
 ```
+
+Use `mpremote`, not `ampy`: on a board with native USB (the T3S3 and anything else ESP32-S3)
+`ampy` hangs on the REPL rather than copying.
 
 Then open a serial monitor on each (`screen /dev/cu.usbmodemXXXX 115200`, or `picocom -b 115200 …`)
 and reset the board. Each prints its type + MAC on boot; the Hub then pulls the file and
@@ -51,7 +54,7 @@ Then the ECDH handshake runs automatically on first contact (needs the CTR-flag 
 the CI build has) and every frame is AEAD-sealed. Watch the Edge's serial: instead of
 `Could not parse frame`, you'll see it answer the handshake CTRL frames, then the sealed transfer.
 
-## Signed control: let the Hub retune the Edge
+## Control: let the Hub retune the Edge over the air
 
 Changing the radio settings above means editing two files and rebooting two boards. A Hub can
 also do it over the air with `hub.ask_change_rf(endpoint, {"sf": 9, "trial": 300})`. How that
@@ -67,6 +70,25 @@ the whole of the setup:
 Signed control needs `"security_mode": "secure"` on both nodes, because an artifact names the
 node it is for by its `device_id`, and an open node has none.
 
+### Running it
+
+`edge/main.py` already carries the receiving half, and picks its side from the config: with no
+control root it accepts commands on the link itself, with one it accepts only what that root
+signed. Nothing to change there. On the Hub board, load `hub/main_control.py` as `main.py`
+instead of `hub/main.py`:
+
+```bash
+mpremote connect /dev/cu.usbmodemYYYY fs cp hub/main_control.py :main.py
+```
+
+It pulls one file first so the link is known good, commands the retune, and keeps polling.
+Watch the Edge's serial for `Changing RF Config to:` and then, once a whole file has crossed on
+the new settings, `RF trial committed`. The Hub prints which transport it chose on boot.
+
+If the new configuration cannot carry a transfer, nobody has to intervene: the Edge holds it
+only for `trial` seconds, rolls back to the last configuration that worked, and the Hub's
+`{new, old}` probe finds it there. That undo is the reason a retune is safe to try at all.
+
 Create the fleet's root once, on your laptop:
 
 ```bash
@@ -81,8 +103,8 @@ it again never replaces an existing root, so adding a node later is safe.
 Copy each half to its own board and add one line to **both** `LoRa_secure.json`:
 
 ```bash
-ampy -p /dev/cu.usbmodemHUB  put hub/control_root.key  control_root.key
-ampy -p /dev/cu.usbmodemEDGE put edge/control_root.key control_root.key
+mpremote connect /dev/cu.usbmodemHUB  fs cp hub/control_root.key  :control_root.key
+mpremote connect /dev/cu.usbmodemEDGE fs cp edge/control_root.key :control_root.key
 ```
 
 ```json
