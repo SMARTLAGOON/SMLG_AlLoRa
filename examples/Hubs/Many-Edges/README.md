@@ -48,4 +48,29 @@ and it prints which keys it skipped. The timeouts in particular never need copyi
 recalculates them from the spreading factor and bandwidth every time it retunes.
 
 Older `Nodes.json` files set `sf`, `bw` and `cr` directly on the entry instead of in a `connector`
-block. That still works and does the same thing.
+block. That still works and does the same thing. If the Hub ever writes an entry that was spelled
+the old way, it replaces those keys with a `connector` block, so the file never says two things at
+once.
+
+## The Hub writes this file back
+
+`Nodes.json` is not only read at boot. When the Hub asks an Edge to change its radio and that change
+settles, the Hub records the Edge's new settings in that Edge's entry, so a restart brings it back
+polling where it actually left its fleet. Without that, a Hub power cycle after a successful change
+leaves the two ends on different configurations with no way back.
+
+Three things follow, all of them visible in the file:
+
+- **Nothing is written while a change is still on trial.** The entry is updated on the visit where
+  the Hub confirms where the Edge actually ended up, never at the moment the change is sent. An Edge
+  that tried the new settings and fell back to the old ones leaves the file alone.
+- **A retuned Edge becomes pinned.** An entry that stated no radio settings gets a `connector` block
+  the first time one of its changes settles, and from then on it follows its own settings rather than
+  the Hub's. That is what actually happened on the air, so it is what the file should say.
+- **Edit it while the Hub is running and your edit can be overwritten.** Stop the Hub to edit the
+  roster, the same way you would for any file a running program owns. Everything the Hub does not
+  model is preserved untouched: inactive entries, comments, and any key of your own stay exactly as
+  you wrote them.
+
+A Hub built in code rather than from a file writes nothing. `Hub(connector, nodes_file="Nodes.json")`
+is what opts in, and it is the default.

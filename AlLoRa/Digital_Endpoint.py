@@ -4,6 +4,26 @@ from AlLoRa.utils.time_utils import get_time
 from AlLoRa.utils.debug_utils import print
 
 
+# The mac_address an endpoint carries when it was registered by anything other than a MAC.
+# Not an address: it is the absence of one, and the one label that names no single node.
+NO_ADDRESS = "00000000"
+
+
+def label_for_config(config):
+    """The off-air label the endpoint described by a Nodes.json entry would carry.
+
+    The same rule as `Digital_Endpoint.get_label()`, applied to an entry that has not been
+    built into one: named by device_id[:4] when it registers a fingerprint, by the short MAC
+    otherwise. It is what lets a node find an entry again in the file it read, including the
+    inactive entries that never become endpoints at all.
+    """
+    raw = config.get('device_id')
+    if raw is not None:
+        device_id = bytes.fromhex(raw) if isinstance(raw, str) else bytes(raw)
+        return device_id[:4].hex()
+    return config.get('mac_address', NO_ADDRESS)[-8:]
+
+
 def assign_session_ids(endpoints):
     """Give every endpoint a unique 1-byte sid, resolving device_id[0] clashes.
 
@@ -39,7 +59,7 @@ class Digital_Endpoint:
     PROCESS_CHUNK_STATE = "PROCESS_CHUNK_STATE"
     OK = "OK"
 
-    def __init__(self, config=None, name="N", mac_address="00000000", active=True,
+    def __init__(self, config=None, name="N", mac_address=NO_ADDRESS, active=True,
                  sleep_mesh=True, asking_frequency=60, listening_time=30,
                  MAX_RETRANSMISSIONS_BEFORE_MESH=10, lock_on_file_receive=False,
                  max_listen_time_when_locked=300,
@@ -102,7 +122,7 @@ class Digital_Endpoint:
             self.session_id = explicit_sid
         elif self.device_id is not None:
             self.session_id = self.device_id[0]        # secure: device_id[0]
-        elif self.mac_address and self.mac_address != "00000000":
+        elif self.mac_address and self.mac_address != NO_ADDRESS:
             self.session_id = int(self.mac_address[-2:], 16)  # open: short-MAC low byte
         else:
             self.session_id = 0

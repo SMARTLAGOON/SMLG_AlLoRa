@@ -435,6 +435,28 @@ class Node:
         if self.debug:
             print(self.config)
 
+    def _commit_json(self, path, content):
+        """Replace a config file with new content, all of it or none of it.
+
+        Write to a temporary file and rename it into place, the pattern File.py already runs
+        on device for chunk reassembly. A node interrupted while rewriting a config file in
+        place comes back to truncated JSON, which is not a wrong setting but an unreadable
+        file: an Edge that loses LoRa.json is off its own network, and a Hub that loses
+        Nodes.json has no fleet left to poll. Both are worse than the change never landing.
+        """
+        temp = path + ".tmp"
+        with open(temp, "w") as f:
+            f.write(dumps(content))
+        try:
+            os.rename(temp, path)
+        except OSError:
+            # A FAT volume refuses to rename onto a name already in use (littlefs replaces the
+            # target instead), and an ESP32 can be flashed either way. Clearing the way first
+            # narrows the crash window to two filesystem operations rather than dropping the
+            # write altogether, and the complete new file sits in `temp` throughout it.
+            os.remove(path)
+            os.rename(temp, path)
+
     def backup_config(self):
         # Lossless round-trip: re-read the persisted config and overlay ONLY what changes at
         # runtime (the chunk size and the live RF params), then write the whole dict back.

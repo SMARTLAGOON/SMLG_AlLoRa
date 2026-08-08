@@ -14,7 +14,8 @@ import gc
 from os import urandom
 from json import loads, dumps
 from AlLoRa.Nodes.Node import Node
-from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids
+from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids, \
+    label_for_config, NO_ADDRESS
 from AlLoRa.DataSources.DataSource import DataSource
 from AlLoRa.Control.control_types import RF_CONFIG, IN_BAND
 from AlLoRa.File import AlLoRa_File
@@ -557,6 +558,80 @@ class Hub(Node):
         (digital_endpoint.freq, digital_endpoint.sf, digital_endpoint.bw,
          digital_endpoint.cr, digital_endpoint.tx_power) = cfg
 
+    def _persist_endpoint_rf(self, digital_endpoint):
+        """Write an endpoint's settled RF back to the roster file this Hub registered it from.
+
+        A node writes back the config file it read: the Edge its own LoRa.json, this node the
+        Nodes.json it was given. Without this half, a Hub that commanded a retune, saw it
+        accepted and was then restarted came back polling the old config while its Edge sat on
+        the new one, and neither side could return.
+
+        The roster is overlaid, never rebuilt from the live endpoints: an endpoint keeps only
+        the ten-odd keys it models, so rebuilding would drop every key it does not know about
+        and delete outright every entry marked inactive, which never becomes an endpoint at
+        all. Same defect `backup_config` records one level down.
+        """
+        # A roster assembled in code has no file behind it, so there is nothing to write back
+        # to; naming one is how such a Hub opts in.
+        if not self.nodes_file:
+            return
+        label = digital_endpoint.get_label()
+        if label == NO_ADDRESS:
+            # Registered with neither a MAC nor a device_id, so it has no durable name to key a
+            # record by. It also cannot be polled, so this is a misconfiguration to report
+            # rather than a case to engineer around.
+            print("Hub: endpoint {} has no address; its config is not persisted".format(
+                digital_endpoint.get_name()))
+            return
+        try:
+            with open(self.nodes_file, "r") as f:
+                roster = loads(f.read())
+            entry = None
+            for node in roster:
+                if label_for_config(node) == label:
+                    entry = node
+                    break
+            if entry is None:
+                # The endpoint outlived its record: registered by MAC and later re-registered
+                # by fingerprint, or simply removed from the file. Falling back to what the
+                # file says is the safe direction, and it is visible where the operator looks.
+                print("Hub: no entry for endpoint {} in {}; config not persisted".format(
+                    label, self.nodes_file))
+                return
+            if not self._overlay_endpoint_rf(entry, digital_endpoint):
+                return
+            self._commit_json(self.nodes_file, roster)
+            if self.debug:
+                print("Persisted endpoint {} config: {}".format(
+                    label, digital_endpoint.describe_rf()))
+        except Exception as e:
+            # A roster that cannot be read or written leaves the Hub running on its in-memory
+            # view, which is still correct until the next restart. Losing the poll loop over a
+            # bookkeeping write would be the worse trade.
+            print("Hub: could not persist endpoint {} config ({})".format(label, e))
+
+    def _overlay_endpoint_rf(self, entry, digital_endpoint):
+        # Bring one roster entry into line with the config its endpoint settled on, and say
+        # whether anything actually changed. Compared against the entry RESOLVED, not against
+        # its raw keys: an entry that states no RF means "poll me wherever you already are",
+        # so an endpoint that rolled back to exactly that is unchanged and must not be pinned
+        # by a block it never asked for.
+        stated = Digital_Endpoint(entry)
+        stated.resolve_rf(self.rf_defaults)
+        if all(getattr(stated, field) == getattr(digital_endpoint, field)
+               for field in Digital_Endpoint._RF_FIELDS):
+            return False
+        block = entry.get("connector", {})
+        for field, key in Digital_Endpoint._RF_FROM_CONNECTOR.items():
+            block[key] = getattr(digital_endpoint, field)
+        entry["connector"] = block
+        # The legacy flat spelling is superseded by the block, which wins outright when both
+        # are present. Leaving it would give the operator a file that contradicts itself.
+        for field in Digital_Endpoint._RF_FIELDS:
+            if field in entry:
+                del entry[field]
+        return True
+
     def _probe_visit_end(self, digital_endpoint, heard, completed):
         # Advance the {new, old} probe once per visit. The endpoint's current config IS the
         # config this visit polled on (prepare_connector tuned to it); the trial retains both
@@ -579,6 +654,12 @@ class Hub(Node):
                 which = "old (Edge rolled back)" if active_is_old else "new (committed)"
                 print("RF probe settled endpoint {} on {}".format(sid, which))
             self._endpoint_trial.pop(sid, None)
+            # The config stopped being provisional, so now it can be written down. Never
+            # earlier: a Hub that persisted the optimistic value and then restarted mid-trial
+            # would come back on the new config while the Edge, starved of the exchange its
+            # trial needed, restored the old one. That split does not heal, while persisting
+            # nothing leaves both ends converging on old unaided.
+            self._persist_endpoint_rf(digital_endpoint)
             self._settle_rf_change(sid, self.REFUSED if active_is_old else self.ACCEPTED)
             return
 
@@ -597,6 +678,10 @@ class Hub(Node):
                 print("RF probe gave up on endpoint {}; restoring old config".format(sid))
             self._set_endpoint_rf(digital_endpoint, trial["old"])
             self._endpoint_trial.pop(sid, None)
+            # Restored to where the file already had it, so this normally writes nothing; it
+            # runs anyway because "the trial is over" is the one rule, and an endpoint that
+            # was pinned by an earlier change is still owed a correction.
+            self._persist_endpoint_rf(digital_endpoint)
             # Located on neither configuration, so nothing here says the peer refused anything.
             # Same rule the in-band route follows: an outcome nobody answered for is reported
             # as the link, never as a decision the peer did not make.
