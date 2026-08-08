@@ -476,8 +476,7 @@ class Node:
         connector["coding_rate"] = cr
         connector["tx_power"] = tx_power
         conf["connector"] = connector
-        with open(self.config_file, "w") as f:
-            f.write(dumps(conf))
+        self._commit_json(self.config_file, conf)
 
     def config_connector(self):
         self.connector.config(self.config_connector_dic)

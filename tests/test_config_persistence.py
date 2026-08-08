@@ -149,6 +149,26 @@ def test_a_node_rebuilt_from_the_backup_still_boots_as_v3(tmp_path):
     assert rebuilt.session_id == 42
 
 
+def test_a_backup_that_dies_part_way_leaves_the_node_bootable(tmp_path, monkeypatch):
+    # Same rule at the other end, and the worse blast radius of the two: a node that loses
+    # LoRa.json mid-write is in the field, off its own network, and cannot be recovered over
+    # the air. The half-written bytes have to land somewhere other than the file it boots from.
+    path = str(tmp_path / "LoRa.json")
+    config = _write_v3_config(path)
+    node = Edge(Loopback_connector("a1a1a1a1"), config_file=path)
+    node.change_rf_config({"sf": 9})
+    monkeypatch.setattr(node_module, "open", _dying_open, raising=False)
+
+    try:
+        node.backup_config()
+    except OSError:
+        pass                     # the write failed; what matters is what it left behind
+    monkeypatch.undo()
+
+    assert json.load(open(path)) == config, "the config the node boots from is untouched"
+    assert Edge(Loopback_connector("a1a1a1a1"), config_file=path).protocol_version == 3
+
+
 # --- Seam B: a bridge reads the same LoRa.json, and never writes to it ---------------------
 
 def test_an_adapter_reads_its_v3_posture_and_link_block_without_persisting(tmp_path):
