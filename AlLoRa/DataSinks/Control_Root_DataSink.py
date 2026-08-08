@@ -7,6 +7,7 @@ from AlLoRa.Control.control_envelope import (
 from AlLoRa.DataSinks.DataSink import DataSink
 from AlLoRa.Security.ec_p256 import ecdsa_verify, decode_public_key
 from AlLoRa.utils.debug_utils import print
+from AlLoRa.utils.file_utils import commit_file
 from AlLoRa.utils.json_utils import json
 
 # The envelope layout (and the version that names it) is shared with the minting side, so the
@@ -82,13 +83,14 @@ class Control_Root_DataSink(DataSink):
         if not self.counter_file:
             return
         try:
-            # Built before the file is opened. Opening for write truncates, so composing this
-            # inside the `with` turns any failure here into an empty mark that reads back as
-            # "no counter" and silently re-opens the replay window on the next boot.
-            mark = json.dumps({"root": self._root_fingerprint(self.control_root),
-                               "counter": counter})
-            with open(self.counter_file, "w") as f:
-                f.write(mark)
+            # Committed through a rename rather than written in place, and the reason is the
+            # same one that keeps this composed before any file is touched: a mark that ends up
+            # half-written reads back as "no counter" and silently re-opens the replay window on
+            # the next boot. Whether the new number landed matters far less than whether the
+            # old one is still readable.
+            commit_file(self.counter_file,
+                        json.dumps({"root": self._root_fingerprint(self.control_root),
+                                    "counter": counter}))
         except Exception as e:
             # Persisting is best-effort and must never turn an accepted command into a failed
             # transfer: the caller treats a raise here as a delivery failure, so the peer never

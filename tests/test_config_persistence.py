@@ -24,7 +24,7 @@ import json
 from AlLoRa.Adapters.Adapter import Adapter
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
-from AlLoRa.Nodes import Node as node_module
+from AlLoRa.utils import file_utils
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 
@@ -74,8 +74,14 @@ class _Half_written_file:
         raise OSError("power lost mid-write")
 
 
+_real_open = open
+
+
 def _dying_open(path, mode="r"):
-    handle = open(path, mode)
+    # Installed over the builtin, so it does not care which module holds the write. That is
+    # the point: what a test pins here is that the file a node boots from survives, not where
+    # in the library the bytes are written.
+    handle = _real_open(path, mode)
     return _Half_written_file(handle) if "w" in mode else handle
 
 
@@ -157,7 +163,7 @@ def test_a_backup_that_dies_part_way_leaves_the_node_bootable(tmp_path, monkeypa
     config = _write_v3_config(path)
     node = Edge(Loopback_connector("a1a1a1a1"), config_file=path)
     node.change_rf_config({"sf": 9})
-    monkeypatch.setattr(node_module, "open", _dying_open, raising=False)
+    monkeypatch.setattr("builtins.open", _dying_open)
 
     try:
         node.backup_config()
@@ -478,7 +484,7 @@ def test_the_write_completes_on_a_filesystem_that_will_not_rename_over_a_file(tm
     hub, nodes_file = _hub(tmp_path, [_entry("edge", EDGE_MAC)])
     endpoint = hub.digital_endpoints[0]
     _arm(hub, endpoint)
-    monkeypatch.setattr(node_module, "os", _Fat_os(node_module.os))
+    monkeypatch.setattr(file_utils, "os", _Fat_os(file_utils.os))
 
     hub._probe_visit_end(endpoint, heard=True, completed=True)
 
@@ -497,7 +503,7 @@ def test_a_write_that_dies_part_way_leaves_the_roster_whole(tmp_path, monkeypatc
     endpoint = hub.digital_endpoints[0]
     _arm(hub, endpoint)
     before = json.load(open(nodes_file))
-    monkeypatch.setattr(node_module, "open", _dying_open, raising=False)
+    monkeypatch.setattr("builtins.open", _dying_open)
 
     hub._probe_visit_end(endpoint, heard=True, completed=True)
 

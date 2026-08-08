@@ -494,9 +494,12 @@ class Hub(Node):
         if not self.control_counter_file or self.control_root is None:
             return
         try:
-            with open(self.control_counter_file, "w") as f:
-                f.write(dumps({"root": self.control_root.fingerprint().hex(),
-                               "counter": self._control_counter}))
+            # Committed through a rename like the config files, and for a sharper reason: a
+            # truncated mark reads back as no counter at all, which starts the sequence over,
+            # and a fleet only takes numbers above the highest it has already accepted.
+            self._commit_json(self.control_counter_file,
+                              {"root": self.control_root.fingerprint().hex(),
+                               "counter": self._control_counter})
         except Exception as e:
             print("Hub: could not persist the control counter ({})".format(e))
 

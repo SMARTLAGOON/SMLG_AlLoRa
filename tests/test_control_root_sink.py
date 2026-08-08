@@ -31,6 +31,7 @@ from AlLoRa.Control.Control_Actuator import Control_Actuator
 from AlLoRa.Control.control_types import RF_CONFIG, RESET, MODEL, OTA
 from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink, ENVELOPE_VERSION
 from AlLoRa.Security.ec_p256 import ecdsa_sign, public_key_uncompressed
+from test_config_persistence import _dying_open
 
 # --- the deployment's control root, and the artifacts it mints -----------------------------
 
@@ -304,6 +305,37 @@ def test_the_high_water_mark_survives_a_reboot(tmp_path):
         _artifact(tmp_path, artifact, name="after.bin"), Reception(source="hub"))
 
     assert after_reboot.applied == [], "the replay window re-opened across a reboot"
+
+
+def test_a_mark_write_that_dies_part_way_leaves_the_window_closed(tmp_path, monkeypatch):
+    # The same hazard as losing the mark entirely, reached a different way: a node that loses
+    # power part way through writing it comes back to a truncated file, which reads as no
+    # counter at all. Every artifact the node has already accepted becomes replayable again,
+    # which is the whole thing the mark exists to prevent. Whether the write landed matters far
+    # less than whether the file is still readable.
+    mark = str(tmp_path / "control.mark")
+    artifact = _envelope(RF_CONFIG, RF_PAYLOAD, counter=5)
+    settled = _CapturingActuator()
+    _sink(settled, counter_file=mark).consume(
+        _artifact(tmp_path, artifact, name="first.bin"), Reception(source="hub"))
+    assert settled.applied == [(RF_CONFIG, RF_PAYLOAD)]
+
+    interrupted = _CapturingActuator()
+    gate = _sink(interrupted, counter_file=mark)
+    # Built before the write is broken, so the only thing that dies is the mark write itself.
+    second = _artifact(tmp_path, _envelope(RF_CONFIG, RF_PAYLOAD, counter=6), name="second.bin")
+    monkeypatch.setattr("builtins.open", _dying_open)
+    gate.consume(second, Reception(source="hub"))
+    monkeypatch.undo()
+    assert interrupted.applied == [(RF_CONFIG, RF_PAYLOAD)], \
+        "the command still ran; persisting the mark is what failed"
+
+    after_reboot = _CapturingActuator()
+    _sink(after_reboot, counter_file=mark).consume(
+        _artifact(tmp_path, artifact, name="replay.bin"), Reception(source="hub"))
+
+    assert after_reboot.applied == [], \
+        "a failed mark write must not re-open the replay window on the next boot"
 
 
 def test_rotating_the_control_root_starts_the_count_over(tmp_path):

@@ -34,6 +34,7 @@ from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Packet_v3 import Packet_v3
 from AlLoRa.Security.ec_p256 import public_key_uncompressed
+from test_config_persistence import _dying_open
 from test_hub_ask_change_rf import _Capturing_downlink
 
 SESSION_ID = 42
@@ -212,6 +213,31 @@ def test_a_hub_that_mints_keeps_its_number_with_no_counter_file_named(tmp_path, 
 
     assert _minted_counter(rebooted) > _minted_counter(hub), \
         "a Hub nobody named a counter file for must still not re-issue a number its fleet took"
+
+
+def test_a_counter_write_that_dies_part_way_leaves_the_number_readable(tmp_path, monkeypatch):
+    # The counter file is small, so it is tempting to write it in place, and it is the one file
+    # where losing the contents is worse than losing the write. Truncated JSON reads back as no
+    # counter at all, which starts the sequence over, and a fleet only accepts numbers above
+    # the highest it has already taken: every command the Hub sends after that is delivered,
+    # verified and dropped as a replay, silently, and it cannot climb back because it burns one
+    # number per restart. The recovery is rotating the root across every node.
+    counter_file = str(tmp_path / "control.counter")
+    hub, _ = _hub(tmp_path, control_root_file=_key_file(tmp_path, ROOT_PRIV_HEX),
+                  control_counter_file=counter_file)
+    hub.ask_change_rf(_registered_endpoint(hub), NEW_CONFIG)
+    spent = _minted_counter(hub)
+    monkeypatch.setattr("builtins.open", _dying_open)
+
+    hub.ask_change_rf(_registered_endpoint(hub), NEW_CONFIG)   # the write dies part way
+
+    monkeypatch.undo()
+    rebooted, _ = _hub(tmp_path, control_root_file=_key_file(tmp_path, ROOT_PRIV_HEX),
+                       control_counter_file=counter_file)
+    rebooted.ask_change_rf(_registered_endpoint(rebooted), NEW_CONFIG)
+
+    assert _minted_counter(rebooted) > spent, \
+        "a Hub restarted after a failed counter write must not re-issue a number its fleet took"
 
 
 def test_a_hub_with_nothing_to_mint_under_leaves_no_counter_behind(tmp_path, monkeypatch):

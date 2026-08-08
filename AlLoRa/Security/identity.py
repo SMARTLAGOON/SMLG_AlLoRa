@@ -17,6 +17,7 @@ Wire use of the fingerprint:
 import hashlib
 
 from AlLoRa.Security.ec_p256 import generate_private_key, public_key_uncompressed
+from AlLoRa.utils.file_utils import commit_file
 
 
 def device_id_from_pubkey(pubkey):
@@ -35,7 +36,11 @@ def load_or_create_identity(path, randfunc):
             priv = int(f.read().strip(), 16)
     except OSError:
         priv = generate_private_key(randfunc)
-        with open(path, "w") as f:
-            f.write("{:064x}".format(priv))
+        # Committed through a rename, because a key file written in place fails silently rather
+        # than loudly. Half of a 64-character scalar still parses as an integer, so a node
+        # interrupted here would come back working, with a stable device_id, and with a key of
+        # half the intended size. Either the whole key is on disk or none of it is, and a node
+        # with none simply generates another.
+        commit_file(path, "{:064x}".format(priv))
     pub = public_key_uncompressed(priv)
     return priv, pub, device_id_from_pubkey(pub)
