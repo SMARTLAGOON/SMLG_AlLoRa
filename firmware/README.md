@@ -151,3 +151,15 @@ radio now answers `accepted`, `refused`, `pending` or `unreachable` rather than 
 queued. Both halves live in the frozen library, so a board flashed from an older `.bin` still
 reports a refusal as silence and still reports a signed refusal as success: reflash both ends
 before testing any of it. The wire is untouched, so a new build and an old one interoperate.
+
+**A node now writes a durable file whole, or not at all.** A Hub remembers where it moved an
+endpoint by writing the settled radio settings back into `Nodes.json`, and the files a node cannot
+afford to lose (its own config backup, the two counter files, and the identity key) are written to a
+temporary file and renamed into place rather than rewritten where they sit, so an interrupted write
+leaves the previous file intact instead of half a file. Two parts of this only show on a board.
+Whether `os.rename` can replace an existing file depends on how the flash was formatted, since
+littlefs replaces the target and FAT refuses, so the write retries with a remove first; and if that
+fallback is the path a board takes, there is a brief moment where `Nodes.json` is absent and
+`Nodes.json.tmp` holds the whole file, which nothing recovers on boot. All of it lives in the frozen
+library, so a board flashed from an older `.bin` still rewrites each of those files in place and
+still forgets an endpoint it retuned: reflash both ends before testing any of it.
