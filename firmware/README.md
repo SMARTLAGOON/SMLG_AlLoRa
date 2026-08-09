@@ -163,3 +163,25 @@ fallback is the path a board takes, there is a brief moment where `Nodes.json` i
 `Nodes.json.tmp` holds the whole file, which nothing recovers on boot. All of it lives in the frozen
 library, so a board flashed from an older `.bin` still rewrites each of those files in place and
 still forgets an endpoint it retuned: reflash both ends before testing any of it.
+
+**A node can now queue readings on flash, and a replay mark survives a restart.** Three changes
+that only reach a device on a rebuild:
+
+- **The outbound queue can live in a folder instead of in RAM.** `Disk_DataSource` writes each
+  reading to flash and serves the backlog in order, so a node that takes measurements while the link
+  is down still has them after a reboot. Serving now borrows the head of the queue and only drops it
+  once the far end confirms, which means an interrupted transfer is retried rather than lost, and a
+  lost acknowledgement produces a duplicate. On a board this is the part worth testing: pull power
+  mid-transfer and confirm the backlog comes back in order. Whether it holds depends on the flash
+  format for the same reason the durable config writes do, so run it on the card the deployment will
+  actually use.
+- **A node that verifies signed commands now keeps its replay mark in a file by default.** It used
+  to sit in RAM unless whoever built the node named a file for it, so a signed command recorded off
+  the air could be replayed after a restart and accepted a second time. Both node kinds now read
+  where that file goes from the same config line. A board flashed from an older `.bin` still forgets
+  the mark on every reboot: reflash both ends before trusting any replay test.
+- **`short_mac` is gone from the v3 configs.** It selected a long-MAC option v3 never had, and no v3
+  path read it. Copy the current `LoRa.json` onto the device rather than keeping an older one; the
+  key was inert either way, so nothing changes on the air.
+
+The wire is untouched by all three, so a new build and an old one still interoperate.
