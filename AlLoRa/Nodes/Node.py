@@ -194,6 +194,10 @@ class Node:
         # file whenever the node is idle. Without one, files arrive via set_file as ever.
         self.datasource = datasource
         self._datasource_ready = False
+        # Whether the file currently installed came from that boundary, which decides
+        # whether finishing with it is also the datasource's business. A file handed in
+        # by set_file belongs to the caller and the queue is never told about it.
+        self._file_from_datasource = False
 
         # --- drive-side state (the node as poller/reassembler) -------------------------
         self.debug_hops = debug_hops
@@ -768,9 +772,13 @@ class Node:
 
     def set_file(self, file: AlLoRa_File):
         # Installing a file to serve starts a fresh delivery, even if this same
-        # object was already served once (re-queued downlink, broadcast).
+        # object was already served once (re-queued downlink, broadcast, or a queued
+        # file whose first attempt did not finish).
         file.reset_delivery()
         self.file = file
+        # A caller handing in its own file owns it. _pump_datasource sets this back
+        # after calling us, so the queue is only credited for what the queue supplied.
+        self._file_from_datasource = False
 
     def restore_file(self, file: AlLoRa_File):
         self.set_file(file)
@@ -779,9 +787,15 @@ class Node:
 
     def _pump_datasource(self):
         # One cooperative round of the input boundary, from inside the serve loop: it
-        # shares the radio loop, so check() must never block. The queue's pop is the
-        # handover. Once installed, the file is the node's to serve to completion (the
-        # RAM queue wouldn't survive a reboot anyway, so peek-retain buys nothing here).
+        # shares the radio loop, so check() must never block.
+        #
+        # The head is borrowed, not taken: it stays queued until _retire_file says it
+        # was delivered. A queue that only ever lived in RAM lost nothing by handing the
+        # file over at the start, since a reboot took the rest of the queue with it. A
+        # queue backed by flash does not work that way, and dropping the file here would
+        # erase it before a single chunk of it reached the air. Serving from the head is
+        # also how the same node already serves a downlink it was delegated, so both
+        # directions retire a queued file on the same evidence: the peer confirmed it.
         if self.datasource is None:
             return
         if not self._datasource_ready:
@@ -789,7 +803,24 @@ class Node:
             self._datasource_ready = True
         self.datasource.check()
         if self.file is None and self.datasource.has_pending():
-            self.set_file(self.datasource.get_next_file())
+            self.set_file(self.datasource.peek_file())
+            self._file_from_datasource = True
+
+    def _retire_file(self, delivered):
+        """Finish with the installed file, and tell the queue whether it made it.
+
+        `delivered` is the peer's confirmation, not this node's opinion: only a transfer
+        the far end acknowledged drops the file off the queue. Anything else (a timeout,
+        a partial send, a link that died mid-file) leaves it queued to be served again,
+        which is the at-least-once the durable queue exists to provide. The cost of that
+        choice is a duplicate whenever a confirmation is the thing that got lost, and a
+        duplicate is recoverable where a missing reading is not.
+        """
+        if self._file_from_datasource:
+            self._file_from_datasource = False
+            if delivered and self.datasource is not None:
+                self.datasource.confirm_file()
+        self.file = None
 
     def establish_connection(self, try_for=None):
         """v2 only. Wait for a peer and optionally agree an RF change before transferring.
@@ -1137,9 +1168,10 @@ class Node:
 
             if ticks_diff(time(), t0) > timeout_ms:
                 last_sent = self.file.last_chunk_sent
-                del(self.file)
+                # Not delivered even if some chunks went out: a file the peer never
+                # acknowledged stays queued rather than being counted as sent.
+                self._retire_file(False)
                 gc.collect()
-                self.file = None
                 if self.debug:
                     print("Timeout reached")
                 # If something was sent, but not all, we return a True
@@ -1148,9 +1180,8 @@ class Node:
                     return True
                 return False
 
-        del(self.file)
+        self._retire_file(True)
         gc.collect()
-        self.file = None
         return True
 
     def response(self, packet):

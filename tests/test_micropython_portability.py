@@ -38,11 +38,15 @@ _ON_DEVICE_SECURE = [
     # The MQTT bridge halves are frozen and reached on-device too (a bridge Edge runs
     # the datasource + sink pair against its local broker).
     "AlLoRa/DataSources/DataSource.py",
+    "AlLoRa/DataSources/Disk_DataSource.py",
     "AlLoRa/DataSources/MQTT_DataSource.py",
     "AlLoRa/DataSources/mqtt_naming.py",
     "AlLoRa/DataSources/Loop_guard.py",
     "AlLoRa/DataSinks/DataSink.py",
     "AlLoRa/DataSinks/MQTT_DataSink.py",
+    # The all-or-nothing write itself, now on the send path too: a queued payload is
+    # committed through it before the node will serve the file.
+    "AlLoRa/utils/file_utils.py",
 ]
 
 # Names CPython provides but MicroPython v1.24.1 does not (each one broke secure mode on-device).

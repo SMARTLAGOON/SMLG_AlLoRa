@@ -277,6 +277,28 @@ Together they are a bidirectional, topic-preserving MQTT bridge over AlLoRa, wit
 carrying the downlink direction and a shared `Loop_guard` preventing a republished message from being
 bridged back again.
 
+[`Disk_DataSource`](AlLoRa/DataSources/Disk_DataSource.py) is the outbound queue that survives losing
+power, and the mirror of `Disk_DataSink`: one is the folder files land in, the other is the folder
+they wait in. The base queue lives in RAM, so a node that lost power between taking a reading and
+getting it on the air lost the reading with nothing to retry. Here the file is on flash before it is
+queued and is deleted only once the far end confirms it, so a node that reboots mid-transfer repeats
+itself rather than going quiet.
+
+It keeps two truths and reconciles them instead of trusting either. The **directory** says what is
+pending: a file in it is queued, its absence is delivery. A small **`queue.json`** beside it says in
+what order they go, holding names rather than contents. A file the index has never heard of is
+adopted onto the end, so a producer can still drop one into the folder by hand; a name with no file
+behind it is forgotten. So the worst an index can do is send a file in the wrong order, never lose
+one. The split is needed because a directory does not remember the order things were put into it:
+`listdir` returns entries however the filesystem is holding them, which is not a promise on either
+filesystem an ESP32 might be flashed with, and file timestamps are no help when board clocks come up
+unset. Writes are ordered payload first, index second, so an interruption costs order and never data.
+
+The node's serve loop borrows the head of a queue rather than taking it, and drops it only on the
+peer's acknowledgement. That is the same rule a Hub already followed when serving a delegated
+downlink, so both directions now retire a queued file on the same evidence. The trade is
+at-least-once: if the acknowledgement is what goes missing, the file is sent twice.
+
 ### [DataSinks/](AlLoRa/DataSinks/DataSink.py)
 
 A `DataSink` takes ownership of each completed file: `consume(file, reception)`, where `Reception` is

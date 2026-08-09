@@ -16,9 +16,25 @@ def commit_file(path, text):
     None of that is recoverable over the radio, and all of it is avoided by never writing to
     the name the node boots from.
     """
+    _commit(path, text, "w")
+
+
+def commit_bytes(path, data):
+    """`commit_file` for a payload rather than a config: same all-or-nothing rename.
+
+    What a queued outbound file needs is the same guarantee for a different reason. The
+    node does not read this one back to learn what it is; it reads it back to send it. A
+    half-written payload is not a node that boots wrong, it is a reading that crosses the
+    link truncated and is believed, because nothing downstream can tell a short file from
+    a small one.
+    """
+    _commit(path, data, "wb")
+
+
+def _commit(path, data, mode):
     temp = path + ".tmp"
-    with open(temp, "w") as f:
-        f.write(text)
+    with open(temp, mode) as f:
+        f.write(data)
     try:
         os.rename(temp, path)
     except OSError:

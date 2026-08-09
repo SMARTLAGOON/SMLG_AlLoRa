@@ -32,6 +32,10 @@ class DataSource:
 
         self.backup_file = None
 
+        # The file handed out by peek_file and not yet confirmed. Held so confirm_file
+        # drops that file rather than whatever is at the head when it is called.
+        self._borrowed = None
+
     def get_file_chunk_size(self):
         return self.file_chunk_size
 
@@ -79,12 +83,27 @@ class DataSource:
         """The head of the queue WITHOUT consuming it, or None. A server that may fail
         mid-delivery peeks, serves, and only confirms once delivery completed, so a
         failed attempt retries the same file (at-least-once, no delivered-marker)."""
-        return self.file_queue[0] if self.file_queue else None
+        self._borrowed = self.file_queue[0] if self.file_queue else None
+        return self._borrowed
 
     def confirm_file(self):
-        """Delivery completed: drop the head off the queue and return it (None if empty).
-        The pop half of peek_file's peek-retain contract."""
-        return self.file_queue.pop(0) if self.file_queue else None
+        """Delivery completed: drop the borrowed file off the queue and return it (None
+        if the queue is empty). The pop half of peek_file's peek-retain contract.
+
+        It removes the file that was actually peeked rather than whatever sits at the
+        head now. A queue that fills up while a delivery is in flight evicts its oldest
+        entry, which is the very file being served, and popping by position would then
+        delete the file that took its place: one that was never sent, and never will be.
+        """
+        borrowed = self._borrowed
+        self._borrowed = None
+        if borrowed is None:
+            return self.file_queue.pop(0) if self.file_queue else None
+        try:
+            self.file_queue.remove(borrowed)
+        except ValueError:
+            pass    # evicted mid-delivery; it is gone either way
+        return borrowed
 
     def prepare(self):
         pass

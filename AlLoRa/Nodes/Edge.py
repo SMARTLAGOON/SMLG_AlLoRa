@@ -50,8 +50,10 @@ class Edge(Node):
             self.respond(self._respond_handler)
             if self.file is not None and self.file.sent:
                 # The uplink completed (the Hub's final-OK landed): retire it, or the idle
-                # metadata poll would serve the same file over and over.
-                self.file = None
+                # metadata poll would serve the same file over and over. That final-OK is
+                # also the confirmation a queued file needs before it leaves the queue, so
+                # this is the one place an uplink may drop it.
+                self._retire_file(True)
             self._service_grant()
             self._service_trial_window()
             gc.collect()

@@ -39,6 +39,19 @@ def test_peek_retains_the_head_until_confirm():
     assert ds.confirm_file() is None
 
 
+def test_a_queue_that_fills_up_mid_delivery_does_not_confirm_the_wrong_file():
+    # peek hands out the head, then the queue overflows and evicts that same head. The
+    # confirm that follows must drop the file that was served, not the one that replaced
+    # it at position zero, which has not been sent.
+    ds = _base(file_queue_size=2)
+    ds.add_to_queue(_file("a"))
+    ds.add_to_queue(_file("b"))
+    assert ds.peek_file().get_name() == "a"
+    ds.add_to_queue(_file("c"))     # evicts "a" while it is in flight
+    ds.confirm_file()
+    assert [f.get_name() for f in ds.file_queue] == ["b", "c"]
+
+
 def test_legacy_get_next_file_still_pops_destructively():
     ds = _base()
     ds.add_to_queue(_file("a"))
