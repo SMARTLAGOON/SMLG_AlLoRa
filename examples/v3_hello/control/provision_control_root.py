@@ -34,7 +34,7 @@ that only obeys commands must never be given a copy.
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 
 from AlLoRa.Control.Control_Root import Control_Root                # noqa: E402
 from AlLoRa.Security.ec_p256 import generate_private_key            # noqa: E402

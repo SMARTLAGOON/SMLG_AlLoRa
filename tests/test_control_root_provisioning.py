@@ -302,7 +302,7 @@ def test_the_provisioning_tool_writes_what_the_nodes_load(tmp_path):
     # can generate a root and the nodes can load one, but nothing checked that what the
     # operator's tool writes is what a node accepts. Run end to end, as an operator runs it.
     script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "examples", "v3_hello", "provision_control_root.py")
+                          "examples", "v3_hello", "control", "provision_control_root.py")
     subprocess.check_call([sys.executable, script, str(tmp_path)])
 
     hub, _ = _hub(tmp_path, control_root_file=str(tmp_path / "hub" / "control_root.key"))
@@ -319,7 +319,7 @@ def test_re_provisioning_never_replaces_a_live_root(tmp_path):
     # every board already deployed would be pinned to the old one and would refuse every
     # command from then on, recoverable only by re-provisioning each node by hand.
     script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "examples", "v3_hello", "provision_control_root.py")
+                          "examples", "v3_hello", "control", "provision_control_root.py")
     subprocess.check_call([sys.executable, script, str(tmp_path)])
     with open(str(tmp_path / "hub" / "control_root.key")) as f:
         first = f.read()

@@ -1,8 +1,8 @@
 # v3 control: the Hub moves the pair onto a new radio configuration, over the air.
 #
-# Same two boards as the hello-world, same Edge. Put this on the Hub board as main.py instead
-# of hub/main.py. Nothing here selects how the command travels: that follows from what the two
-# nodes were provisioned with, which is the whole of the setup (see the README).
+# Same two boards as the hello-world, same Edge. Nothing here selects how the command travels:
+# that follows from what the two nodes were provisioned with, which is the whole of the setup
+# (see the README). This example is the provisioned case, so the command is a signed artifact.
 import gc
 import time
 from AlLoRa.Nodes.Hub import Hub
@@ -22,14 +22,20 @@ gc.enable()
 hub = Hub(SX127x_connector(), config_file="LoRa.json")
 print("HUB ready | MAC:", hub.MAC)
 
-# OPEN mode, exactly as in hub/main.py: session_id must match the Edge's LoRa.json.
-endpoint = Digital_Endpoint(name="src", mac_address="9eeff0dc", active=True, session_id=42)
+# This Hub holds the signing half. Without it every command below goes out unsigned, a
+# provisioned Edge refuses all of them, and the run reads as a link problem.
+if hub.control_root is None:
+    raise SystemExit("This Hub has no control root, so it cannot sign a command. Add "
+                     "control_root_file to LoRa.json and copy the signing half onto the board.")
 
-# SECURE mode: register the Edge by the device_id it prints on boot, and give both boards a
-# control_root_file. Swap the line above for:
-#   endpoint = Digital_Endpoint(name="src", device_id="<paste the Edge's device_id>", active=True)
+# Register the Edge by the device_id it prints on boot, as in ../../secure. A signed artifact is
+# addressed to that same identity, so it is the one value this whole example turns on.
+EDGE_DEVICE_ID = "<paste the Edge's device_id>"
 
-print("control transport:", "signed artifact" if hub.control_root is not None else "in band")
+if EDGE_DEVICE_ID.startswith("<"):
+    raise SystemExit("Set EDGE_DEVICE_ID to the device_id the Edge prints on boot.")
+
+endpoint = Digital_Endpoint(name="src", device_id=EDGE_DEVICE_ID, active=True)
 
 # 1. A safe boundary. One complete pull first, so the link is known good before it is moved and
 #    a failure afterwards means the new configuration, not the antenna. Commanding a retune part
@@ -49,12 +55,15 @@ outcome = hub.ask_change_rf(endpoint, NEW_CONFIG)
 if outcome == Hub.ACCEPTED:
     print("acknowledged: the Edge is now on trial with the new configuration")
 elif outcome == Hub.PENDING:
+    # The expected answer here. A signed artifact is not acted on where it is handed over: it
+    # rides one of the pulls below, and the Edge decides afterwards, on its own.
     print("artifact queued: it is delivered on one of the pulls below, and the probe below "
           "is what says whether the Edge took it")
 elif outcome == Hub.REFUSED:
-    # It answered a poll, so it is alive and listening. It heard the command and said no,
-    # which for an unsigned command means the node holds a control root and wants a signed
-    # one. Check what this Hub was provisioned with, not the antenna.
+    # It answered a poll, so it is alive and listening. It heard the command and said no. With
+    # both ends provisioned that points at the root itself: a node checks against the root it
+    # was given, so an Edge carrying a different fleet's verifying half refuses every command
+    # this Hub signs. Compare the fingerprints, not the antenna.
     print("refused: the Edge is there and declined the command; check its provisioning")
 else:
     print("unreachable: nothing answered at all, so the command was never considered")
