@@ -29,7 +29,7 @@ class Control_Root_DataSink(DataSink):
     knowledge does, so the same gate is reused on any node with any actuator behind it.
     """
 
-    def __init__(self, control_root, device_id, actuator, counter_file=None):
+    def __init__(self, control_root, device_id, actuator, counter_file="control.counter"):
         # Fail closed at construction: a mis-provisioned gate must refuse to start, never
         # silently forward unverified commands.
         if not control_root:
@@ -44,6 +44,10 @@ class Control_Root_DataSink(DataSink):
         self.control_root = self._load_control_root(control_root)
         self.device_id = bytes(device_id)
         self.actuator = actuator
+        # Named by default, under the same filename the authority that commands this node keeps
+        # its own number in. Passing None asks for the mark in RAM, which is a deliberate act at
+        # the call site rather than something a caller falls into by not knowing the argument
+        # exists; what that costs is in _load_counter.
         self.counter_file = counter_file
         self.counter = self._load_counter()
 
@@ -60,9 +64,20 @@ class Control_Root_DataSink(DataSink):
         replay window, which is most of what the counter buys. It is keyed by the root that
         accepted it, which is also how a reset happens without a command for it: a rotated
         control root does not match the stored fingerprint, so the count starts over, and a
-        re-provisioned node has a new device_id that old artifacts no longer address. Given no
-        file (a board with no filesystem) the mark is RAM-only and the window does re-open at
-        reboot: a provisioning fact to know about, not a choice made here.
+        re-provisioned node has a new device_id that old artifacts no longer address.
+
+        It persists whether or not anyone named a file for it. Leaving that to configuration
+        assumed an Edge is always the radio board, and it is not: an Edge is just as often the
+        logic-holder on a host with a real filesystem, with the radio a dumb adapter beside it.
+        There RAM-only is not a hardware limit but a default nobody chose, and it costs a
+        security property rather than an outage: an attacker in radio range records a signed
+        artifact off the air, waits for a reboot, and sends it again, authentic and already
+        spent. The counter is the only thing that makes it un-reusable, so a mark that resets
+        hands back every artifact this node has ever accepted.
+
+        Given no file at all (`counter_file=None`, a board with nowhere to write) the mark is
+        RAM-only and the window does re-open at reboot: still available, now as a choice made
+        at the call site rather than one made by silence.
         """
         if not self.counter_file:
             return 0

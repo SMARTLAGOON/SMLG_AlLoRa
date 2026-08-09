@@ -137,20 +137,21 @@ class Hub(Node):
         # act at the call site, while config is the standing declaration.
         if control_root is not None:
             self.control_root = control_root
-        # The counter persists by default, under the same filename the node it commands keeps
-        # its own mark in. A node remembers the highest number it has accepted whether or not
-        # anyone configured it to, so the side issuing those numbers has to remember too: a Hub
-        # that began its sequence again would be refused by every node it commands, and it
-        # could only work back through the numbers it already spent one restart at a time, so
-        # it never catches up. The recovery is rotating the root across the whole fleet. That
-        # is far too much to hang on a line of config an operator has to know to write.
+        # Where the counter is kept comes from the node, which reads it off the same config key
+        # an Edge does and defaults it the same way. That default matters most here: a node
+        # remembers the highest number it has accepted whether or not anyone configured it to,
+        # so the side issuing those numbers has to remember too. A Hub that began its sequence
+        # again would be refused by every node it commands, and it could only work back through
+        # the numbers it already spent one restart at a time, so it never catches up. The
+        # recovery is rotating the root across the whole fleet, which is far too much to hang
+        # on a line of config an operator has to know to write.
         #
         # Nothing is written where there is nothing to mint under: both the load and the save
         # do nothing unless this Hub holds a control root, so an open deployment never sees the
         # file. A filesystem that refuses the write degrades to RAM-only rather than failing
         # the command.
-        self.control_counter_file = control_counter_file or \
-            self.config.get('control_counter_file', 'control.counter')
+        if control_counter_file:
+            self.control_counter_file = control_counter_file
         self._control_counter = self._load_control_counter()
 
     # --- the endpoints this Hub holds -----------------------------------------------------

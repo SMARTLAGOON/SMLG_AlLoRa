@@ -179,7 +179,7 @@ def test_rf_config_without_trial_falls_back_to_a_toa_scaled_default(tmp_path):
 
 # --- Slice 6: end-to-end gate -> actuator, on a genuinely signed envelope -------------------
 
-def test_verified_envelope_through_the_gate_reaches_the_actuator_and_queues(tmp_path):
+def test_verified_envelope_through_the_gate_reaches_the_actuator_and_queues(tmp_path, monkeypatch):
     # Compose the real verifier with the real actuator and feed a correctly-signed
     # RF_CONFIG envelope: the gate must verify it and hand the actuator the (type, payload), the
     # actuator must defer, and draining must apply exactly the config the signed envelope carried.
@@ -187,6 +187,9 @@ def test_verified_envelope_through_the_gate_reaches_the_actuator_and_queues(tmp_
     from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
     from AlLoRa.DataSinks.DataSink import Reception
 
+    # The gate keeps its replay mark beside itself unless told otherwise, so this accepts a real
+    # artifact and writes one: give it somewhere of its own rather than the working tree.
+    monkeypatch.chdir(tmp_path)
     node = _FakeNode()
     gate = Control_Root_DataSink(control_root=CONTROL_ROOT_HEX, device_id=TARGET_DEVICE_ID,
                                  actuator=Node_Control_Actuator(node))

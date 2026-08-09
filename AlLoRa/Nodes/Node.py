@@ -89,6 +89,16 @@ class Node:
         # a stronger tier available, or provisioning one would secure nothing.
         self.control_root = self._configure_control_root()
 
+        # Where this node keeps its control counter: the highest number it has minted on a Hub,
+        # the highest it has accepted on an Edge. One key for both kinds, named beside the root
+        # because it belongs to the same provisioning act, and resolved here rather than by
+        # whatever assembles the verify gate. An Edge is not always the radio board: it is just
+        # as often the logic-holder on a host with a real filesystem, where the working
+        # directory may be read-only or cleared at every start, and moving the mark somewhere
+        # that survives is one line of config. Read only by the example, that line would do
+        # nothing on a node someone wrote themselves, and nothing would say so.
+        self.control_counter_file = self.config.get('control_counter_file', 'control.counter')
+
         self.LAST_IDS = list()              # IDs from my mesagges
         self.LAST_SEEN_IDS = list()         # IDs from others
         self.MAX_IDS_CACHED = 30            # Max number of IDs saved

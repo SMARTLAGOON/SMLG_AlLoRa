@@ -215,6 +215,58 @@ def test_a_hub_that_mints_keeps_its_number_with_no_counter_file_named(tmp_path, 
         "a Hub nobody named a counter file for must still not re-issue a number its fleet took"
 
 
+def test_an_edge_reads_where_to_keep_its_mark_from_the_same_key_a_hub_does(tmp_path, monkeypatch):
+    # One key, both node kinds, resolved by the node rather than by whatever assembles the
+    # verify gate. An Edge is not always the radio board: it is just as often the logic-holder
+    # on a host with a real filesystem, where the working directory may be read-only or cleared
+    # at every start, and the operator moves the mark by writing this one line. Read only by the
+    # example, that line does nothing on a node someone wrote themselves, and nothing says so.
+    monkeypatch.chdir(tmp_path)
+    mark = str(tmp_path / "state" / "control.counter")
+    os.makedirs(str(tmp_path / "state"))
+
+    edge, _ = _edge(tmp_path,
+                    control_root_file=_key_file(tmp_path, ROOT_PUB_HEX),
+                    control_counter_file=mark)
+
+    assert edge.control_counter_file == mark, \
+        "an Edge must obey the same config line a Hub obeys, without being wired up in code"
+
+
+def test_an_edge_told_nothing_keeps_its_mark_beside_the_key(tmp_path):
+    # The unconfigured deployment, which is every operator who provisions a root by following
+    # the example. Both ends default to the same filename or the pair is broken by its defaults
+    # alone, with nothing misconfigured anywhere.
+    edge, _ = _edge(tmp_path, control_root_file=_key_file(tmp_path, ROOT_PUB_HEX))
+
+    assert edge.control_counter_file == "control.counter", \
+        "a node nobody configured still keeps its number, under the filename the other end uses"
+
+
+def test_the_configured_mark_file_is_where_the_verify_gate_writes(tmp_path, monkeypatch):
+    # The config line is only worth reading if it reaches the file the gate actually writes.
+    # This is the example's own wiring, minus the example: build the gate off the node.
+    from AlLoRa.DataSinks.DataSink import Reception
+    from test_control_root_sink import (CONTROL_ROOT_HEX, ENV_RF_CONFIG_VALID,
+                                        TARGET_DEVICE_ID, _artifact)
+
+    monkeypatch.chdir(tmp_path)
+    mark = str(tmp_path / "state" / "control.counter")
+    os.makedirs(str(tmp_path / "state"))
+    edge, _ = _edge(tmp_path,
+                    control_root_file=_key_file(tmp_path, CONTROL_ROOT_HEX),
+                    control_counter_file=mark)
+
+    gate = Control_Root_DataSink(control_root=edge.control_root, device_id=TARGET_DEVICE_ID,
+                                 actuator=_CapturingActuator(),
+                                 counter_file=edge.control_counter_file)
+    gate.consume(_artifact(tmp_path, ENV_RF_CONFIG_VALID), Reception(source="hub"))
+
+    assert os.path.exists(mark), "the mark must land where the config put it"
+    assert not os.path.exists("control.counter"), \
+        "and nowhere else: a second mark in the working directory is one nobody reads back"
+
+
 def test_a_counter_write_that_dies_part_way_leaves_the_number_readable(tmp_path, monkeypatch):
     # The counter file is small, so it is tempting to write it in place, and it is the one file
     # where losing the contents is worse than losing the write. Truncated JSON reads back as no

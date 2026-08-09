@@ -50,8 +50,10 @@ edge.data_sink = Control_Root_DataSink(
     device_id=edge.device_id,
     actuator=actuator,
     # Remembers the highest command number this node has accepted, so a command the Hub already
-    # sent cannot be recorded off the air and replayed back at it later.
-    counter_file=edge.config.get("control_counter_file", "control.counter"))
+    # sent cannot be recorded off the air and replayed back at it later. The node resolves where
+    # that file goes, from the same config key the Hub reads, so both ends agree by default and
+    # move together if a deployment puts it somewhere else.
+    counter_file=edge.control_counter_file)
 print("EDGE verifying signed control against the provisioned root")
 
 # a 1000-byte test file (~5 chunks at chunk_size 200)

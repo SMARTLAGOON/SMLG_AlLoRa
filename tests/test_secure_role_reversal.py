@@ -584,8 +584,12 @@ def _control_pair(tmp_path, envelope, reset_log=None, probe=None):
     actuator = Node_Control_Actuator(edge, reset_fn=(lambda: reset_log.append("reset"))
                                  if reset_log is not None else None)
     # device_id is what the node was provisioned with; here it is the frozen vectors' target.
+    # The gate keeps its replay mark on the node's own filesystem, so give this node one: the
+    # frozen envelopes all carry counter 1, and a mark shared between two of these pairs is two
+    # different boards sharing one flash. The second would then correctly refuse a first command.
     gate = _Probed_gate(control_root=CONTROL_ROOT_HEX, device_id=TARGET_DEVICE_ID,
-                        actuator=actuator, probe=probe or (lambda: None))
+                        actuator=actuator, probe=probe or (lambda: None),
+                        counter_file=str(tmp_path / "control.counter"))
     edge.data_sink = gate
 
     hub.queue_downlink(endpoint, AlLoRa_File(name="ctl.bin", content=bytearray(envelope),

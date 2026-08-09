@@ -307,6 +307,53 @@ def test_the_high_water_mark_survives_a_reboot(tmp_path):
     assert after_reboot.applied == [], "the replay window re-opened across a reboot"
 
 
+def test_a_gate_nobody_named_a_mark_file_for_still_closes_the_window(tmp_path, monkeypatch):
+    # The node someone assembles in code rather than copying out of the example, which is the
+    # deployment where an Edge is the logic-holder on a host with a real filesystem. RAM-only
+    # was a default nobody chose there, and it hands an attacker in radio range every artifact
+    # this node has ever accepted: record one off the air, wait for a reboot, send it again.
+    # The minting end already keeps its number without being told to; both ends default
+    # together or the pair is broken by its defaults alone, with nothing misconfigured anywhere.
+    monkeypatch.chdir(tmp_path)
+    artifact = _envelope(RF_CONFIG, RF_PAYLOAD, counter=5)
+
+    before = _CapturingActuator()
+    Control_Root_DataSink(control_root=CONTROL_ROOT_HEX, device_id=TARGET_DEVICE_ID,
+                          actuator=before).consume(
+        _artifact(tmp_path, artifact, name="before.bin"), Reception(source="hub"))
+    assert before.applied == [(RF_CONFIG, RF_PAYLOAD)]
+
+    after_reboot = _CapturingActuator()
+    Control_Root_DataSink(control_root=CONTROL_ROOT_HEX, device_id=TARGET_DEVICE_ID,
+                          actuator=after_reboot).consume(
+        _artifact(tmp_path, artifact, name="after.bin"), Reception(source="hub"))
+
+    assert after_reboot.applied == [], \
+        "a gate nobody named a mark file for must still refuse a replay across a reboot"
+
+
+def test_a_gate_told_to_hold_the_mark_in_ram_still_does(tmp_path, monkeypatch):
+    # The other half of that default: it has to remain possible to say no. A board with no
+    # filesystem at all cannot write anywhere, and asking for the mark in RAM is then a
+    # deliberate act at the call site rather than the silence it used to be. It must also leave
+    # nothing behind, or the escape hatch would write the file it was told not to.
+    monkeypatch.chdir(tmp_path)
+    artifact = _envelope(RF_CONFIG, RF_PAYLOAD, counter=5)
+
+    _sink(_CapturingActuator(), counter_file=None).consume(
+        _artifact(tmp_path, artifact, name="before.bin"), Reception(source="hub"))
+
+    assert not os.path.exists("control.counter"), \
+        "a gate asked for a RAM-only mark must not write one anyway"
+
+    after_reboot = _CapturingActuator()
+    _sink(after_reboot, counter_file=None).consume(
+        _artifact(tmp_path, artifact, name="after.bin"), Reception(source="hub"))
+
+    assert after_reboot.applied == [(RF_CONFIG, RF_PAYLOAD)], \
+        "RAM-only is a working choice with a known cost, not a broken one"
+
+
 def test_a_mark_write_that_dies_part_way_leaves_the_window_closed(tmp_path, monkeypatch):
     # The same hazard as losing the mark entirely, reached a different way: a node that loses
     # power part way through writing it comes back to a truncated file, which reads as no
