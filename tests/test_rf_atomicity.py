@@ -39,7 +39,7 @@ class Rejecting_loopback(Loopback_connector):
 def _edge(tmp_path, chunk_size=100, sf=7):
     config = {
         "name": "atomicity", "chunk_size": chunk_size, "mesh_mode": False,
-        "short_mac": True, "protocol_version": 3, "security_mode": "open",
+ "protocol_version": 3, "security_mode": "open",
         "session_id": 42, "debug": False,
         "connector": {"sf": sf, "freq": 868, "bandwidth": 125, "coding_rate": 1,
                       "tx_power": 14, "timeout_delta": 0.1, "debug": False},

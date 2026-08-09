@@ -108,7 +108,7 @@ HUB_MAC = "b2b2b2b2"
 
 def _make_edge(tmp_path):
     config = {
-        "name": "edge", "chunk_size": 243, "mesh_mode": False, "short_mac": True,
+        "name": "edge", "chunk_size": 243, "mesh_mode": False,
         "protocol_version": 3, "security_mode": "open", "session_id": 42, "debug": False,
         "connector": {"sf": 7, "freq": 868, "bandwidth": 125, "coding_rate": 1,
                       "tx_power": 14, "timeout_delta": 0.1, "debug": False},

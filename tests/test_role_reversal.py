@@ -99,7 +99,6 @@ def _write_config(path, result_path, session_id):
         "name": "rr",
         "chunk_size": 243,
         "mesh_mode": False,
-        "short_mac": True,
         "protocol_version": 3,
         "security_mode": "open",
         "session_id": session_id,

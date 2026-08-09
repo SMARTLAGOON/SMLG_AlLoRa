@@ -26,7 +26,7 @@ COLLECTOR_MAC = "b2b2b2b2"
 
 def _config(path, result_path):
     config = {
-        "name": "hs", "chunk_size": 243, "mesh_mode": False, "short_mac": True,
+        "name": "hs", "chunk_size": 243, "mesh_mode": False,
         "protocol_version": 3, "security_mode": "secure",   # no session_id -> derive from device_id
         "debug": False, "result_path": result_path,
         "connector": {"sf": 7, "freq": 868, "bandwidth": 125, "coding_rate": 1,

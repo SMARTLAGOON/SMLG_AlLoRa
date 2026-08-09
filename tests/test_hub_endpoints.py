@@ -28,7 +28,7 @@ _TICKS_PERIOD = 1 << 30
 
 def _write_config(path, result_path):
     config = {
-        "name": "hub", "chunk_size": 243, "mesh_mode": False, "short_mac": True,
+        "name": "hub", "chunk_size": 243, "mesh_mode": False,
         "protocol_version": 3, "security_mode": "open", "session_id": 9,
         "debug": False, "result_path": result_path,
         "connector": {"sf": 7, "freq": 868, "bandwidth": 125, "coding_rate": 1,

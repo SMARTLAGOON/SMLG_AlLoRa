@@ -2,7 +2,6 @@
   "name": "R",
   "chunk_size": 200,
   "mesh_mode": false,
-  "short_mac": true,
   "protocol_version": 3,
   "security_mode": "open",
   "session_id": 42,

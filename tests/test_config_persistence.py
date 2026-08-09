@@ -109,7 +109,7 @@ def test_connector_backup_reflects_the_live_rf_config():
 
 def _write_v3_config(path, extra_top=None):
     config = {
-        "name": "S", "chunk_size": 200, "mesh_mode": False, "short_mac": True,
+        "name": "S", "chunk_size": 200, "mesh_mode": False,
         "protocol_version": 3, "security_mode": "open", "session_id": 42,
         "result_path": "Results", "debug": False,
         "connector": _connector_config(),
@@ -135,7 +135,6 @@ def test_node_backup_config_preserves_the_v3_posture_and_persists_the_live_rf(tm
     assert reloaded["security_mode"] == "open"
     assert reloaded["session_id"] == 42
     assert reloaded["result_path"] == "Results"
-    assert reloaded["short_mac"] is True
     assert reloaded["custom_field"] == "keep-me"
     # (b) the connector block reflects the live RF (sf 9), other connector keys intact.
     assert reloaded["connector"]["sf"] == 9
@@ -180,7 +179,7 @@ def test_a_backup_that_dies_part_way_leaves_the_node_bootable(tmp_path, monkeypa
 def test_an_adapter_reads_its_v3_posture_and_link_block_without_persisting(tmp_path):
     path = str(tmp_path / "LoRa.json")
     config = {
-        "name": "T", "chunk_size": 235, "mesh_mode": False, "short_mac": True,
+        "name": "T", "chunk_size": 235, "mesh_mode": False,
         "protocol_version": 3, "security_mode": "open", "session_id": 7, "debug": False,
         "connector": _connector_config(),
         "adapter": {"uartid": 0, "baud": 9600},
@@ -213,7 +212,7 @@ EDGE_MAC = "a1a1a1a1"
 
 def _write_hub_config(path):
     config = {
-        "name": "hub", "chunk_size": 243, "mesh_mode": False, "short_mac": True,
+        "name": "hub", "chunk_size": 243, "mesh_mode": False,
         "protocol_version": 3, "security_mode": "open", "session_id": 9, "debug": False,
         "connector": _connector_config(),
     }

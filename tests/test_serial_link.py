@@ -138,7 +138,7 @@ def test_rpc_flushes_a_stale_reply_before_the_next_request():
 
 def _write_config(path, result_path):
     config = {
-        "name": "tunnel-serial", "chunk_size": 243, "mesh_mode": False, "short_mac": True,
+        "name": "tunnel-serial", "chunk_size": 243, "mesh_mode": False,
         "protocol_version": 3, "security_mode": "open", "session_id": SESSION_ID,
         "debug": False, "result_path": result_path,
         "connector": {"sf": 7, "freq": 868, "bandwidth": 125, "coding_rate": 1,

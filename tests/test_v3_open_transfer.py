@@ -30,7 +30,6 @@ def _write_config(path, result_path):
         "name": "loopback-v3",
         "chunk_size": 243,
         "mesh_mode": False,
-        "short_mac": True,
         # --- v3 open mode ---
         "protocol_version": 3,
         "security_mode": "open",

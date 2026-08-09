@@ -60,7 +60,7 @@ def test_full_v3_transfer_over_wifi_link(tmp_path):
     result_path = str(tmp_path / "Results")
     config_file = str(tmp_path / "LoRa.json")
     config = {
-        "name": "tunnel-wifi", "chunk_size": 243, "mesh_mode": False, "short_mac": True,
+        "name": "tunnel-wifi", "chunk_size": 243, "mesh_mode": False,
         "protocol_version": 3, "security_mode": "open", "session_id": SESSION_ID,
         "debug": False, "result_path": result_path,
         "connector": {"sf": 7, "freq": 868, "bandwidth": 125, "coding_rate": 1,

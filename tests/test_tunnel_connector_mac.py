@@ -55,7 +55,7 @@ def test_v2_tunnel_adopts_the_bridge_mac_and_rebuilds_the_codec():
 
 def test_v3_open_tunnel_does_not_need_or_fetch_a_mac():
     config = {"sf": 7, "freq": 868, "protocol_version": 3, "addressing": "sid",
-              "short_mac": True, "debug": False}
+ "debug": False}
     client_link, stop, pump = _bridge(BRIDGE_MAC, config)
     try:
         conn = Tunnel_connector(link=client_link)

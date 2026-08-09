@@ -25,7 +25,6 @@ def _write_config(path, session_id=SESSION_ID):
         "name": "engine",
         "chunk_size": 243,
         "mesh_mode": False,
-        "short_mac": True,
         "protocol_version": 3,
         "security_mode": "open",
         "session_id": session_id,

@@ -30,7 +30,6 @@ def _make_edge(tmp_path):
         "name": "watched",
         "chunk_size": 243,
         "mesh_mode": False,
-        "short_mac": True,
         "protocol_version": 3,
         "security_mode": "open",
         "session_id": 42,
