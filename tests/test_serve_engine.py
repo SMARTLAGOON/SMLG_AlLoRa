@@ -77,6 +77,16 @@ def _chunk_request(index):
     return _request(Packet_v3.ask_data, index)
 
 
+def _announce(edge):
+    # The METADATA exchange every real transfer opens with. A source serves chunks only
+    # for a file it remembers announcing, so a setup that jumps straight to chunk requests
+    # is answered with METADATA rather than data, which is correct behavior and not what
+    # these tests are pinning.
+    reply, _ = edge.response(_request(Packet_v3.ask_metadata))
+    assert reply is not None and reply.get_command() == Packet_v3.METADATA
+    return edge
+
+
 # --- send_file exit accounting ------------------------------------------------
 
 def test_send_file_timeout_after_only_chunk_zero_reports_partial(tmp_path):
@@ -85,6 +95,7 @@ def test_send_file_timeout_after_only_chunk_zero_reports_partial(tmp_path):
     edge = _make_edge(tmp_path)
     edge.set_file(AlLoRa_File(name="up.bin", content=bytearray(bytes(500)),
                               chunk_size=edge.get_chunk_size()))
+    _announce(edge)
 
     reply, _ = edge.response(_chunk_request(0))
     assert reply is not None, "chunk 0 was never served — test setup broken"
@@ -211,6 +222,7 @@ def _served_edge(tmp_path, chunks_served):
     edge = _make_edge(tmp_path)
     edge.set_file(AlLoRa_File(name="up.bin", content=bytearray(bytes(500)),
                               chunk_size=edge.get_chunk_size()))
+    _announce(edge)
     for index in range(chunks_served):
         reply, _ = edge.response(_chunk_request(index))
         assert reply is not None
@@ -248,6 +260,13 @@ def test_v2_poll_ok_is_always_answered(tmp_path):
     edge = _make_v2_edge(tmp_path)
     edge.set_file(AlLoRa_File(name="up.bin", content=bytearray(bytes(500)),
                               chunk_size=edge.get_chunk_size()))
+
+    metadata_req = Packet(mesh_mode=False, short_mac=True)
+    metadata_req.set_source(HUB_MAC)
+    metadata_req.set_destination(EDGE_MAC)
+    metadata_req.ask_metadata()
+    reply, _ = edge.response(metadata_req)
+    assert reply is not None and reply.get_command() == Packet.METADATA
 
     chunk_req = Packet(mesh_mode=False, short_mac=True)
     chunk_req.set_source(HUB_MAC)
@@ -313,6 +332,7 @@ def _armed_edge_with_file(tmp_path, chunks_bytes=500):
     edge = _make_spy_edge(tmp_path)
     edge.set_file(AlLoRa_File(name="up.bin", content=bytearray(bytes(chunks_bytes)),
                               chunk_size=edge.get_chunk_size()))
+    _announce(edge)                      # before arming: the announcement holds the trial
     edge.change_rf_config({"sf": 9})     # arms the trial (connector now on sf9)
     edge.committed = 0                   # ignore any bookkeeping the arm itself did
     assert edge.sf_trial, "change_rf_config must arm the trial"
@@ -377,6 +397,7 @@ def _armed_edge_single_chunk(tmp_path):
     edge = _make_spy_edge(tmp_path)
     edge.set_file(AlLoRa_File(name="tiny.bin", content=bytearray(bytes(100)),
                               chunk_size=edge.get_chunk_size()))
+    _announce(edge)
     edge.change_rf_config({"sf": 9})
     edge.committed = 0
     assert edge.get_chunk_size() > 100 and edge.file.get_length() == 1

@@ -751,13 +751,9 @@ class Hub(Node):
     @staticmethod
     def _rearm_connection_poll(digital_endpoint):
         # Send the endpoint back to its pre-contact state so the next visit opens with an OK
-        # poll. A reassembly still in flight is already dead if the peer has gone this quiet,
-        # and its buffer holds an open file handle nothing else will close, so release it
-        # here rather than leak it (the on-device descriptor table is tiny).
-        in_flight = digital_endpoint.get_current_file()
-        if in_flight is not None:
-            in_flight.discard()
-            digital_endpoint.set_current_file(None)
+        # poll. A reassembly still in flight is already dead if the peer has gone this quiet;
+        # dropping it releases its writer and temp file (set_current_file owns that now).
+        digital_endpoint.set_current_file(None)
         digital_endpoint.state = Digital_Endpoint.OK
 
     def downlink_pending(self, digital_endpoint):

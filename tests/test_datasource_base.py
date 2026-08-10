@@ -52,6 +52,15 @@ def test_a_queue_that_fills_up_mid_delivery_does_not_confirm_the_wrong_file():
     assert [f.get_name() for f in ds.file_queue] == ["b", "c"]
 
 
+def test_the_base_queue_does_not_vouch_for_surviving_a_restart():
+    # Durability is declared, not detected, because only the boundary knows its own
+    # storage. The base queue lives in RAM and genuinely loses its files on a reboot, so
+    # it says nothing and the node restarts an interrupted transfer rather than resuming
+    # one. The default has to be the safe answer: a source that never thought about this
+    # question must not be taken to have answered it.
+    assert _base().is_durable() is False
+
+
 def test_legacy_get_next_file_still_pops_destructively():
     ds = _base()
     ds.add_to_queue(_file("a"))

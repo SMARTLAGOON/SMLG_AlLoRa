@@ -34,7 +34,7 @@ class OnDemandFileWriter:
 
 class AlLoRa_File:
 
-    def __init__(self, name: str = None, content: bytearray = None, chunk_size: int = None, length: int = None, report=False, path="Results"):
+    def __init__(self, name: str = None, content: bytearray = None, chunk_size: int = None, length: int = None, total_len: int = None, report=False, path="Results"):
         self.name = name
         self.report = report
         if content:
@@ -59,6 +59,13 @@ class AlLoRa_File:
             # absolute offset (positioned writes). In a matched deployment this is the
             # node's own configured chunk_size, threaded in by the Collector.
             self.chunk_size = chunk_size
+            # The sender's exact byte count, when it advertised one. `length` above is a
+            # chunk *count*, and counting is what let a peer splice two files together: a
+            # full-size chunk standing in for the real short tail leaves no index missing,
+            # so the file looked complete at the wrong size. The byte total fixes every
+            # chunk's expected length in advance, which is what makes a wrong one visible.
+            # None on a v2 link, whose METADATA carries no byte count at all.
+            self.total_len = total_len
             self.path = path
             # Check if Temp folder exists
             try:
@@ -94,19 +101,48 @@ class AlLoRa_File:
     def get_missing_chunks(self) -> list:
         return self.missing_chunks
 
+    def expected_chunk_len(self, order: int):
+        # What chunk `order` must weigh, derived from the advertised byte total: every
+        # chunk is full except the last, which carries the remainder. Keyed on the index
+        # and not on how many chunks have landed, so it holds for a burst arriving out of
+        # order exactly as it does for the in-order case. None means unanswerable, and
+        # therefore unenforceable: no advertised total (a v2 peer), or an index outside
+        # the file.
+        if self.total_len is None or not self.chunk_size:
+            return None
+        if order < 0 or order >= self.chunk_counter:
+            return None
+        last = self.chunk_counter - 1
+        if order < last:
+            return self.chunk_size
+        return self.total_len - last * self.chunk_size
+
     def add_chunk(self, order: int, chunk: bytes):
         # Positioned + idempotent: place the chunk at its absolute offset, so
         # out-of-order arrival reassembles correctly and a duplicate just
         # overwrites the same bytes (no append, no double-count). v2 appended in
         # arrival order and ignored `order` -- the silent-corruption bug.
+        #
+        # Returns True when the chunk was placed, False when it was refused. A refusal
+        # means the answer disagrees with what the sender advertised for this file, which
+        # is not damage in transit (the frame already passed its integrity check) but a
+        # peer serving something else: it rebooted, or its file was swapped mid-transfer.
+        # Refuse before writing, so the reassembly keeps only bytes that belong to it.
+        expected = self.expected_chunk_len(order)
+        if expected is not None and len(chunk) != expected:
+            print("Refusing chunk {} of {}: {} bytes where {} were advertised".format(
+                order, self.name, len(chunk), expected))
+            return False
         try:
             self.file_writer.seek(order * self.chunk_size)
             self.file_writer.write(chunk)
             if order in self.missing_chunks:
                 self.missing_chunks.remove(order)
                 self.received_chunks += 1
+            return True
         except Exception as e:
             print("Error adding chunk: ", e)
+            return False
 
     def finalize(self, path=None):
         self.file_writer.close()

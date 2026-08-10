@@ -62,6 +62,13 @@ class Node:
     PENDING = "pending"
     UNREACHABLE = "unreachable"
 
+    # ask_data's third answer: the peer replied to a chunk request by announcing what it is
+    # serving, because it does not remember announcing the file being assembled. Neither a
+    # chunk nor the None that means nothing came back, and it must not be confused with the
+    # latter: silence is a lost frame and is repaired by re-asking, while this is the peer
+    # saying that re-asking is pointless.
+    RE_ANNOUNCED = "RE_ANNOUNCED"
+
     def __init__(self, connector: Connector = None, config_file="LoRa.json",
                  debug_hops=False,
                  max_sleep_time=3,
@@ -229,6 +236,7 @@ class Node:
         self.source_mac = None
         self.time_request = time()
         self._wire_chunk_size = None   # v3: sender's chunk_size, read from typed METADATA
+        self._wire_total_len = None    # v3: sender's exact byte count, from the same METADATA
 
         # While serving a delegated downlink, requests arrive under the *session's* sid
         # (the Edge's), not this node's own; is_for_me accepts that one sid for the duration.
@@ -781,6 +789,27 @@ class Node:
         self._file_from_datasource = False
 
     def restore_file(self, file: AlLoRa_File):
+        """v2 only. Put a file back mid-flight, announced, so a transfer carries on.
+
+        The caller's word is what makes this safe, and in v2 it was earned a line earlier:
+        `establish_connection` had just heard the peer ask for something other than a
+        connection poll, which is the peer saying a transfer is already open. v3 retired
+        that step, so the same call here would assert an announcement nobody made, and the
+        chunks served on the back of it would come out of whatever file this node is
+        holding now: honest frames, a saved file spliced from two.
+
+        A v3 node resumes by asking its input boundary instead. Only a DataSource that
+        keeps its queue on flash can promise the file it hands back after a reboot is the
+        one that was being sent, and only then does the serve loop install it as announced.
+        """
+        if self.protocol_version >= 3:
+            # Refused at the call, where the mistake is. Left unguarded it would surface as
+            # a corrupt file at the far end, days later, with nothing pointing back here.
+            raise NotImplementedError(
+                "restore_file() is v2 only: it installs a file as already announced, which "
+                "in v2 was proven by establish_connection first. A v3 node resumes across a "
+                "restart by serving from a DataSource that vouches for its queue "
+                "(is_durable), and restarts the transfer when none does.")
         self.set_file(file)
         self.file.first_sent = time()
         self.file.metadata_sent = True
@@ -803,7 +832,20 @@ class Node:
             self._datasource_ready = True
         self.datasource.check()
         if self.file is None and self.datasource.has_pending():
-            self.set_file(self.datasource.peek_file())
+            file = self.datasource.peek_file()
+            self.set_file(file)
+            if self.datasource.is_durable():
+                # The queue vouches that this name is still the same bytes, so a transfer
+                # the reboot interrupted can be continued rather than started over: the
+                # collector drives, and it asks for its own missing indexes. Installing the
+                # file as already announced is what allows that, and it is safe only here,
+                # where a boundary that keeps its files on flash has said so. From a queue
+                # that lost the file it would be a lie, and the chunks served on the back of
+                # it would come out of whatever took its place.
+                #
+                # It costs nothing when no transfer was interrupted: a collector opening a
+                # fresh one asks for METADATA anyway, and gets it.
+                file.metadata_sent = True
             self._file_from_datasource = True
 
     def _retire_file(self, delivered):
@@ -1184,6 +1226,20 @@ class Node:
         gc.collect()
         return True
 
+    def _fill_metadata(self, response_packet, v3):
+        # The announcement: which file this node is serving and how big it is. Written by
+        # both the METADATA branch, where the collector asked for it, and the CHUNK branch,
+        # where the collector asked for data this node cannot honestly serve.
+        #
+        # v3 typed METADATA carries chunk_size + total byte length so the receiver's
+        # positioned writes stop depending on both ends being configured with the same
+        # chunk_size. v2 sent only chunk_count + filename.
+        if v3:
+            response_packet.set_metadata(self.file.chunk_size, self.file.length,
+                                         self.file.get_name())
+        else:
+            response_packet.set_metadata(self.file.get_length(), self.file.get_name())
+
     def response(self, packet):
         command = packet.get_command()
         if not Packet.check_command(command):
@@ -1223,6 +1279,33 @@ class Node:
                 # Nothing to serve: stay silent like a node that isn't serving yet. The
                 # poller times out and retries, exactly the pre-transfer behavior.
                 return None, new_sf
+            if not self.file.metadata_sent:
+                # A chunk request for a file this node does not remember announcing.
+                #
+                # The peer is not wrong that a transfer is open: that is precisely why it
+                # is asking for an index mid-file instead of opening with METADATA. What a
+                # restart destroyed is THIS end's memory of announcing it, and only the end
+                # that cannot remember is in a position to say so. Serving the chunk would
+                # answer out of whatever the queue handed back after the restart, and those
+                # bytes would be written into a reassembly they do not belong to: every
+                # frame honest, the saved file spliced from two.
+                #
+                # Answering with METADATA rather than going quiet is the point. Silence and
+                # a dead link are the same observation, so a peer must never be left to
+                # infer a refusal from one; and a collector reads a missing reply as a lost
+                # frame and re-asks the same index forever. METADATA answers the question
+                # actually at issue: what is this node serving now, and how long is it.
+                #
+                # This deliberately does NOT record an announcement. Nothing acknowledges a
+                # re-announcement, so a lost one leaves the collector repeating this same
+                # request, and marking the file announced here would serve that repeat from
+                # the new file: the very splice being prevented. Repeating the METADATA
+                # instead heals as soon as one of them lands.
+                self._fill_metadata(response_packet, v3)
+                if self.debug:
+                    print("Chunk asked for a file not announced from here; re-announcing {}".format(
+                        self.file.get_name()))
+                return response_packet, new_sf
             requested_chunk = packet.get_chunk_index() if v3 else int(packet.get_payload().decode())
             # RF trial commit signal: the peer asking for a chunk LATER than the last one we
             # served means the prior full-payload chunk was demodulated on the new config.
@@ -1251,13 +1334,7 @@ class Node:
             if self.file is None:
                 return None, new_sf
             filename = self.file.get_name()
-            if v3:
-                # Typed METADATA: carry chunk_size + total byte length so the receiver's
-                # positioned writes stop depending on both ends being configured with the
-                # same chunk_size. v2 sent only chunk_count + filename.
-                response_packet.set_metadata(self.file.chunk_size, self.file.length, filename)
-            else:
-                response_packet.set_metadata(self.file.get_length(), filename)
+            self._fill_metadata(response_packet, v3)
 
             if self.file.metadata_sent:
                 self.file.retransmission += 1
@@ -1445,6 +1522,10 @@ class Node:
             try:
                 metadata = response_packet.get_metadata()
                 self._wire_chunk_size = metadata.get("CHUNK_SIZE")  # v3 carries it; None for v2
+                # Kept, not dropped: the byte total is what tells a full-size chunk
+                # standing in for the real short tail apart from the real one. Without
+                # it a file is only ever counted complete, never measured.
+                self._wire_total_len = metadata.get("TOTAL_LEN")    # v3 carries it; None for v2
                 hop = response_packet.get_hop()
                 length = metadata["LENGTH"]
                 filename = metadata["FILENAME"]
@@ -1462,6 +1543,13 @@ class Node:
             return None, None
         if self.save_hops(response_packet):
             return b"0", response_packet.get_hop()
+        if response_packet.get_command() == Packet.METADATA:
+            # The peer answered a request for a chunk by announcing what it is serving.
+            # It does not remember announcing the file this reassembly is for, so the
+            # bytes to continue with are not coming and asking again cannot produce them.
+            # A third answer, distinct from the None that means nothing came back: that
+            # one is a lost frame and is answered by re-asking the same index.
+            return Node.RE_ANNOUNCED, response_packet.get_hop()
         if response_packet.get_command() == Packet.DATA:
             try:
                 chunk = response_packet.get_payload()
@@ -1483,6 +1571,19 @@ class Node:
                     print("ASKING DATA ERROR: {} Node {}".format(e, self.source_mac))
                 return None, None
         return None, None
+
+    @staticmethod
+    def _reopen_transfer(digital_endpoint):
+        """Drop what has been collected and go back to asking METADATA.
+
+        The repair for every answer that is about a different file than the one being
+        assembled, whether it disagreed by its length or the peer said so outright. Nothing
+        already collected can be trusted to belong together, and METADATA is the only
+        exchange that says what the peer is serving now and how long it is. The reassembly
+        goes through set_current_file, which releases its writer and temp file.
+        """
+        digital_endpoint.set_current_file(None)
+        digital_endpoint.state = Digital_Endpoint.REQUEST_DATA_STATE
 
     def listen_to_endpoint(self, digital_endpoint: Digital_Endpoint, listening_time=None,
                        print_file=False, save_file=False, one_file=False):
@@ -1570,7 +1671,8 @@ class Node:
                     # v3 typed METADATA carries the sender's chunk_size; v2 falls back to
                     # our own configured chunk_size (the matched-config stopgap).
                     cks = self._wire_chunk_size or self.chunk_size
-                    digital_endpoint.set_metadata(metadata, hop, self.mesh_mode, save_to, cks)
+                    digital_endpoint.set_metadata(metadata, hop, self.mesh_mode, save_to, cks,
+                                                  total_len=self._wire_total_len)
                     if self.debug:
                         print("METADATA from {}: {}".format(label, metadata))
 
@@ -1584,8 +1686,27 @@ class Node:
                         if self._heard_authority_poll():
                             return False
                         self.status['Chunk'] = digital_endpoint.file_reception_info["total_chunks"] - next_chunk
-                        file = digital_endpoint.set_data(data, hop, self.mesh_mode)
-                        if file:
+                        if data is Node.RE_ANNOUNCED:
+                            # The peer says it is serving something else: it came back from
+                            # a restart with no memory of announcing this file, so it
+                            # announced what it holds now instead of answering with data.
+                            # Nothing it can send would continue this reassembly.
+                            self._reopen_transfer(digital_endpoint)
+                            if self.debug:
+                                print("{} re-announced mid-transfer: re-asking METADATA".format(label))
+                            file = None
+                        else:
+                            file = digital_endpoint.set_data(data, hop, self.mesh_mode)
+                        if file is Digital_Endpoint.CHUNK_REFUSED:
+                            # The peer answered with bytes from some other file, so every
+                            # chunk already collected may belong to a file it no longer
+                            # holds. Re-asking this index would only ask the same question
+                            # again: the answer was not lost or damaged, it was about
+                            # something else.
+                            self._reopen_transfer(digital_endpoint)
+                            if self.debug:
+                                print("Chunk refused by {}: re-asking METADATA".format(label))
+                        elif file:
                             # The sink is fed BEFORE the fire-and-forget final-OK: that OK
                             # retires the file on the serving side (and pops a delegated
                             # downlink off its queue), so a sink failure after it would

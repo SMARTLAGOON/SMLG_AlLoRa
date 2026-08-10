@@ -79,6 +79,23 @@ class DataSource:
     def has_pending(self):
         return bool(self.file_queue)
 
+    def is_durable(self):
+        """Does this queue still hold the same file, byte for byte, after a restart?
+
+        Declared rather than detected, because only the boundary knows its own storage.
+        A node that reboots mid-transfer comes back with no memory of having announced
+        anything, and it cannot tell on its own whether the file it is now handed is the
+        one it was sending or a different one that took its place. The answer decides
+        whether an interrupted transfer may continue from the collector's next missing
+        index or has to start over, and getting it wrong the optimistic way is how bytes
+        from two files end up in one.
+
+        False here, so a source that never considered the question is never taken to have
+        answered it: this queue lives in RAM and genuinely lost its files. A subclass
+        overrides it only if it can keep the promise.
+        """
+        return False
+
     def peek_file(self):
         """The head of the queue WITHOUT consuming it, or None. A server that may fail
         mid-delivery peeks, serves, and only confirms once delivery completed, so a

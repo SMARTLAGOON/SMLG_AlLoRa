@@ -228,6 +228,14 @@ def test_legacy_get_next_file_still_pops_destructively(tmp_path):
     assert ds.get_next_file() is None
 
 
+def test_the_disk_queue_vouches_that_it_survives_a_restart(tmp_path):
+    # What it actually promises is narrower than "durable" suggests: the same name in the
+    # queue is the same bytes. enqueue refuses a repeated name and a file leaves only on
+    # the peer's confirmation, so a name handed back after a reboot is the file that was
+    # being sent. That is what lets an interrupted transfer continue instead of restarting.
+    assert _queue(tmp_path).is_durable() is True
+
+
 # -- the node's serve loop against it -------------------------------------------------------
 
 

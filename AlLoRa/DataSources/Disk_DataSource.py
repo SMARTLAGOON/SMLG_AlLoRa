@@ -142,6 +142,22 @@ class Disk_DataSource(DataSource):
     def has_pending(self):
         return bool(self._order)
 
+    def is_durable(self):
+        """Yes, and what that promises is narrower than the word suggests: **the same name
+        in this queue is the same bytes**.
+
+        It holds because `enqueue` refuses a name already queued and a file leaves only on
+        the peer's confirmation, so a name still at the front after a reboot belongs to the
+        file that was being sent, with its contents untouched. That is exactly what the
+        serve loop needs in order to carry on from the collector's next missing index
+        instead of re-sending an hour of chunks.
+
+        The known hole is a file dropped into the folder by hand, adopted by the reconcile,
+        and then replaced under the same name across a restart. That is a documented limit
+        of hand-dropped files rather than something this queue can check.
+        """
+        return True
+
     def peek_file(self):
         """The file at the front as an AlLoRa_File, without removing it. None if empty."""
         while self._order:

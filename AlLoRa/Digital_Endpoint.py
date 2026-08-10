@@ -59,6 +59,11 @@ class Digital_Endpoint:
     PROCESS_CHUNK_STATE = "PROCESS_CHUNK_STATE"
     OK = "OK"
 
+    # set_data's third answer, distinct from both "here is the finished file" and the
+    # None that means nothing arrived. A chunk the reassembly refused is neither: the
+    # peer answered, and answered with bytes from some other file.
+    CHUNK_REFUSED = "CHUNK_REFUSED"
+
     def __init__(self, config=None, name="N", mac_address=NO_ADDRESS, active=True,
                  sleep_mesh=True, asking_frequency=60, listening_time=30,
                  MAX_RETRANSMISSIONS_BEFORE_MESH=10, lock_on_file_receive=False,
@@ -283,6 +288,16 @@ class Digital_Endpoint:
                 self.disable_mesh()
 
     def set_current_file(self, file: AlLoRa_File):
+        # Replacing a reassembly abandons it, and an abandoned one holds an open writer
+        # and a temp file that nothing else will ever close. Release it here rather than
+        # at each call site: re-opening a transfer part-way through is ordinary now (a
+        # chunk refused for its length, a source that answers with METADATA because it
+        # does not remember announcing the file), where it used to happen only when a
+        # session had already been given up for dead. On a board the descriptor table is
+        # tiny and the flash is smaller.
+        previous = self.current_file
+        if previous is not None and previous is not file:
+            previous.discard()
         self.current_file = file
 
     def get_current_file(self):
@@ -297,9 +312,19 @@ class Digital_Endpoint:
             if mesh_mode:
                 self.count_retransmission()
         
-    def set_metadata(self, metadata, hop, mesh_mode, path=None, chunk_size=None):
+    def set_metadata(self, metadata, hop, mesh_mode, path=None, chunk_size=None,
+                     total_len=None):
         if metadata:
-            new_file = AlLoRa_File(name=metadata[1], length=metadata[0], chunk_size=chunk_size, path=path)
+            # Release whatever was being assembled BEFORE opening the new buffer. The two
+            # can share a temp path, because the file being re-announced is very often the
+            # same one (a sink that raised, a chunk refused, a source that re-announced),
+            # and releasing afterwards would delete the buffer just created. Nothing would
+            # fail at the time: an open handle survives the unlink and the writes keep
+            # going, so it only comes apart at the end, with every chunk received and no
+            # file left to rename into place.
+            self.set_current_file(None)
+            new_file = AlLoRa_File(name=metadata[1], length=metadata[0], chunk_size=chunk_size,
+                                   total_len=total_len, path=path)
             self.set_current_file(new_file)
             self.file_reception_info["current_receiving_file_name"] = new_file.name
             self.file_reception_info["total_chunks"] = new_file.length
@@ -327,7 +352,14 @@ class Digital_Endpoint:
 
     def set_data(self, data, hop, mesh_mode):
         if data:
-            self.current_file.add_chunk(self.current_chunk, data)
+            if not self.current_file.add_chunk(self.current_chunk, data):
+                # The answer disagrees with the length this file was advertised at, so it
+                # belongs to a different file: the peer rebooted, or its file was swapped
+                # mid-transfer. Say so rather than return None, which the driver reads as
+                # "nothing came back" and would answer by asking the same index again.
+                # The repair is the driver's to make, because only it can re-open the
+                # transfer from METADATA.
+                return Digital_Endpoint.CHUNK_REFUSED
             self.file_reception_info["latest_chunk_index"] = self.current_chunk
             self.file_reception_info["latest_chunk_reception_time"] = get_time()
             if len(self.current_file.get_missing_chunks()) == 0:  # All chunks received
