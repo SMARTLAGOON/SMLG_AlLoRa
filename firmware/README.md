@@ -185,3 +185,24 @@ that only reach a device on a rebuild:
   key was inert either way, so nothing changes on the air.
 
 The wire is untouched by all three, so a new build and an old one still interoperate.
+
+**A node that resets mid-transfer now re-announces its file instead of splicing it into the last
+one.** This only reaches a device on a rebuild, and both ends need the new `.bin`.
+
+A node that reset while serving a file used to answer the collector's next chunk request out of
+whatever file it queued next. Nothing caught it: every frame was intact and no chunk index was
+missing, so the collector saved one file whose bytes came from two different files and reported
+success. A node now answers a chunk request with METADATA whenever it cannot remember announcing
+the file it is holding, which is exactly what a reset destroys, and the collector reads that reply
+as a re-opened transfer and pulls the file from the beginning.
+
+On a board this is the part worth testing, and it takes two runs. Reset a node serving from the
+RAM queue mid-transfer and confirm the collector reports asking for metadata rather than re-asking
+the same chunk, that nothing lands under the interrupted file's name, and that the replacement
+arrives byte-correct under its own. Then run the same reset with `Disk_DataSource` and confirm the
+transfer still picks up where it left off: a source whose files survive a restart is the one case
+allowed to resume, and that is the behaviour the first run must not have broken.
+
+A collector on an older build re-asks the same chunk index and reads the METADATA as no reply, so
+it stalls until its visit expires instead of saving a spliced file. A wasted visit rather than a
+corrupt one.
