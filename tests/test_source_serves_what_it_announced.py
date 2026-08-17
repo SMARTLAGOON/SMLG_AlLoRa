@@ -143,7 +143,7 @@ def test_a_lost_re_announcement_does_not_let_the_next_request_through(tmp_path):
 def test_a_ram_queue_restarts_the_transfer_after_a_restart(tmp_path):
     # The base queue lived in RAM and lost the file, so whatever it hands back now is a
     # different file wearing the position: announce it and let the collector start over.
-    source = _make_source(tmp_path, datasource=DataSource(file_chunk_size=CHUNK_SIZE))
+    source = _make_source(tmp_path, datasource=DataSource())
     source.datasource.add_to_queue(_file("hello.bin", PAYLOAD))
 
     source._pump_datasource()
@@ -153,8 +153,7 @@ def test_a_ram_queue_restarts_the_transfer_after_a_restart(tmp_path):
 
 
 def _durable_queue(tmp_path):
-    queue = Disk_DataSource(file_chunk_size=CHUNK_SIZE,
-                            queue_path=str(tmp_path / "Outbox"))
+    queue = Disk_DataSource(queue_path=str(tmp_path / "Outbox"))
     queue.prepare()
     return queue
 

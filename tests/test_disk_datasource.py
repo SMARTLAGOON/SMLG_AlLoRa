@@ -19,7 +19,7 @@ HUB_MAC = "b2b2b2b2"
 
 
 def _queue(tmp_path, name="outbox", **kwargs):
-    ds = Disk_DataSource(file_chunk_size=8, queue_path=str(tmp_path / name), **kwargs)
+    ds = Disk_DataSource(queue_path=str(tmp_path / name), **kwargs)
     ds.prepare()
     return ds
 

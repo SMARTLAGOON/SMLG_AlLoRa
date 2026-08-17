@@ -19,10 +19,10 @@ class MQTT_DataSource(DataSource):
     paho delivers on its own network thread, leaving check() nothing to do.
     """
 
-    def __init__(self, file_chunk_size, host="localhost", port=1883,
+    def __init__(self, host="localhost", port=1883,
                  topics=("#",), client=None, client_id="allora-datasource",
                  keepalive=60, file_queue_size=25, timestamp_fn=None, loop_guard=None):
-        super().__init__(file_chunk_size, file_queue_size=file_queue_size)
+        super().__init__(file_queue_size=file_queue_size)
         self.host = host
         self.port = port
         self.topics = tuple(topics)
@@ -82,8 +82,11 @@ class MQTT_DataSource(DataSource):
         ts = self._timestamp_fn() if self._timestamp_fn is not None else None
         self._artifact_id = (self._artifact_id + 1) & 0xFFFFFFFF
         name = encode_name(topic, self._artifact_id, ts)
-        self.add_to_queue(AlLoRa_File(name=name, content=bytearray(payload),
-                                      chunk_size=self.file_chunk_size))
+        # Built with no chunk size, and this is the clearest reason why: on paho this runs on
+        # the client's network thread, which can deliver a message before the node has pumped
+        # anything at all. There is no value that could be stamped here and still be the right
+        # one when the file is served.
+        self.add_to_queue(AlLoRa_File(name=name, content=bytearray(payload)))
 
     def _build_client(self):
         # Host -> paho; on-device -> umqtt. Lazy imports keep both optional.

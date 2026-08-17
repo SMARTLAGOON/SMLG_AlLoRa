@@ -6,13 +6,17 @@ lives in the DataSources package (the input-boundary mirror of DataSinks), impor
 both runtimes, and keeps the legacy surface intact: the top-level import path, the
 thread API, and get_next_file's destructive pop all behave as v2 student subclasses
 expect.
+
+One thing it does not keep is v2's `file_chunk_size`: how a file is cut belongs to the node,
+which clamps the number against its framing, and a copy held here drifted from it. See
+test_chunk_size_one_store.py.
 """
 
 
 def test_base_imports_and_constructs_on_cpython():
     from AlLoRa.DataSources.DataSource import DataSource
-    ds = DataSource(file_chunk_size=200)
-    assert ds.get_file_chunk_size() == 200
+    ds = DataSource()
+    assert ds.has_pending() is False
 
 
 def _file(name, payload=b"x"):
@@ -22,7 +26,7 @@ def _file(name, payload=b"x"):
 
 def _base(**kwargs):
     from AlLoRa.DataSources.DataSource import DataSource
-    return DataSource(file_chunk_size=8, **kwargs)
+    return DataSource(**kwargs)
 
 
 def test_peek_retains_the_head_until_confirm():

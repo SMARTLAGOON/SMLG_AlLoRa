@@ -38,7 +38,7 @@ class Fake_client:
 
 def _source(**kwargs):
     client = Fake_client()
-    ds = MQTT_DataSource(file_chunk_size=200, topics=("sensors/#",),
+    ds = MQTT_DataSource(topics=("sensors/#",),
                          client=client, **kwargs)
     ds.prepare()
     return ds, client
@@ -60,7 +60,10 @@ def test_check_turns_a_publish_into_an_envelope_named_file():
     assert topic == "sensors/greenhouse/temp"
     assert ts is None                      # no timestamp_fn -> no fake clock shipped
     assert bytes(file.get_content()) == b"21.5"
-    assert file.chunk_size == 200
+    # And nothing about how it will be cut: this ran on the client's delivery path, which on
+    # paho is a network thread that can beat the node's first pump. The node stamps its own
+    # clamped size when it installs the file (test_chunk_size_one_store.py).
+    assert file.chunk_size is None
 
 
 def test_artifact_ids_make_repeated_payloads_distinct_files():

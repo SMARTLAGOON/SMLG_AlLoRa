@@ -97,7 +97,7 @@ def _registered_endpoint(hub):
     endpoint = Digital_Endpoint(name="edge", mac_address=EDGE_MAC, active=True,
                                 device_id=DEVICE_ID.hex())
     hub.set_digital_endpoints([endpoint])
-    hub.set_downlink_source(endpoint, _Capturing_downlink(hub.get_chunk_size()))
+    hub.set_downlink_source(endpoint, _Capturing_downlink())
     return endpoint
 
 

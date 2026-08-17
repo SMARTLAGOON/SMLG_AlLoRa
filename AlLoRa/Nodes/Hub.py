@@ -294,11 +294,19 @@ class Hub(Node):
         `mirror_config` (a reconfig downlink) is the {freq, sf, bw, cr, tx_power, trial} the
         backend minted alongside the signed artifact. When this file is delivered, the Hub
         mirrors the endpoint to that config and enters a {new, old} probe trial — so the Hub
-        follows the Edge onto the new radio parameters it is about to apply."""
+        follows the Edge onto the new radio parameters it is about to apply.
+
+        A file waits here until a safe boundary opens, which may be several visits and a
+        retune away, so how it is cut is settled when it is delivered and not now. A caller
+        may still state a chunk size, and one wider than this Hub's frames can carry is
+        refused here, at the call that made the mistake: left to the delegation boundary it
+        would surface visits later, inside the drive loop, reading as a fault of the endpoint.
+        """
+        self._refuse_oversized_chunks(file)
         sid = digital_endpoint.session_id
         source = self._downlink.get(sid)
         if source is None:
-            source = _Downlink_queue(self.chunk_size)
+            source = _Downlink_queue()
             self._downlink[sid] = source
         source.add_to_queue(file)
         if mirror_config is not None:
@@ -348,8 +356,9 @@ class Hub(Node):
             payload = dumps(new_config).encode("utf-8")
             artifact = self.control_root.mint(RF_CONFIG, digital_endpoint.device_id,
                                               self._next_control_counter(), payload)
-        file = AlLoRa_File(name="ctrl.bin", content=bytearray(artifact),
-                           chunk_size=self.get_chunk_size())
+        # No chunk size: the artifact may sit in the queue across the very reconfiguration it
+        # carries, so it is cut when it is delivered, at whatever this Hub can carry then.
+        file = AlLoRa_File(name="ctrl.bin", content=bytearray(artifact))
         self.queue_downlink(digital_endpoint, file, mirror_config=new_config)
         # Queued, and nothing more can honestly be said yet. The Edge's verify gate runs after
         # the transfer has closed and this end has stopped listening, so the verdict is reached
@@ -790,7 +799,7 @@ class Hub(Node):
 
         self.current_role = "source"
         self._delegated_sid = digital_endpoint.session_id
-        self.set_file(file)
+        self._serve_from_boundary(file)
         try:
             delivered = self._serve_until_reclaimed(self.reclaim_timeout)
         finally:

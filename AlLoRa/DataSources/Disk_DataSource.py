@@ -54,8 +54,8 @@ INDEX_NAME = "queue.json"
 
 class Disk_DataSource(DataSource):
 
-    def __init__(self, file_chunk_size, queue_path="Outbox", file_queue_size=25):
-        super().__init__(file_chunk_size, file_queue_size=file_queue_size)
+    def __init__(self, queue_path="Outbox", file_queue_size=25):
+        super().__init__(file_queue_size=file_queue_size)
         self.queue_path = queue_path
         # The send order, by name. The directory says what exists; this says in what
         # order, and is reconciled against the directory rather than believed.
@@ -174,8 +174,10 @@ class Disk_DataSource(DataSource):
                 self._forget(name)
                 continue
             self._head_name = name
-            self._head_file = AlLoRa_File(name=name, content=bytearray(payload),
-                                          chunk_size=self.file_chunk_size)
+            # No chunk size: the folder knows the bytes and not the radio. The node stamps
+            # its clamped value each time it installs this file, so an attempt made after a
+            # retune is cut for the config it will actually go out on.
+            self._head_file = AlLoRa_File(name=name, content=bytearray(payload))
             return self._head_file
         self.close()
         return None

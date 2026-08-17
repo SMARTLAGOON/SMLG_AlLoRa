@@ -5,6 +5,15 @@ source role, exactly as a DataSink drains completed files *out* of the collector
 The polling-thread API (start/read/stop) is the legacy way to drive one; it still works,
 but nothing here requires a thread. The queue can be fed from any loop.
 
+A source decides *what* is sent and never *how it is cut*. It queues files with no chunk
+size, and the node stamps its own when it installs one to serve. There used to be a
+`file_chunk_size` here, given by whoever built the source before the node existed and never
+clamped against the framing, which made two stores for one number: they agreed in the open
+posture by luck and disagreed in the sealed one, where the codec spends 8 more bytes per
+frame, so every file was cut too big for the frame carrying it. The node's value is the only
+one that knows the posture, and it can change under a signed RF_CONFIG, so it is read at the
+moment it is used rather than copied anywhere.
+
 Runtime-agnostic on purpose: time comes from the portable utils and _thread is imported
 only inside start(), so the module loads on CPython (host tooling, CI) and on MicroPython
 builds compiled without _thread alike.
@@ -19,14 +28,13 @@ from AlLoRa.utils.debug_utils import print
 # Do not instanciate this class as pretends to be an abstract one
 class DataSource:
 
-    def __init__(self, file_chunk_size: int, file_queue_size=25, sleep_between_readings=60):
+    def __init__(self, file_queue_size=25, sleep_between_readings=60):
 
         self.STOP_THREAD = True
         self.IS_STARTED = False
 
         self.file_queue = []
         self.file_queue_size = file_queue_size
-        self.file_chunk_size = file_chunk_size
 
         self.SECONDS_BETWEEN_READINGS = sleep_between_readings
 
@@ -35,9 +43,6 @@ class DataSource:
         # The file handed out by peek_file and not yet confirmed. Held so confirm_file
         # drops that file rather than whatever is at the head when it is called.
         self._borrowed = None
-
-    def get_file_chunk_size(self):
-        return self.file_chunk_size
 
     def add_to_queue(self, file: AlLoRa_File):
         if len(self.file_queue) >= self.file_queue_size:
@@ -165,7 +170,7 @@ class DataSource:
             content = None
             with open("./content-backup", "r") as f:
                 content = f.read()
-            rescued_file = AlLoRa_File(name='{}'.format(filename), content=bytearray(content), chunk_size=self.file_chunk_size)
+            rescued_file = AlLoRa_File(name='{}'.format(filename), content=bytearray(content))
             return rescued_file
         except OSError as e:
             print("The backup could not be restored", e)

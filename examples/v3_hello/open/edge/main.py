@@ -37,9 +37,10 @@ payload = bytes((i % 256) for i in range(1000))
 
 while True:
     if not edge.got_file():
+        # No chunk_size: the node cuts the file at whatever its frames can carry in the
+        # posture it is speaking, which is the only place that number is known.
         edge.set_file(AlLoRa_File(name="hello.bin",
-                                  content=bytearray(payload),
-                                  chunk_size=edge.get_chunk_size()))
+                                  content=bytearray(payload)))
         print("file set:", edge.file.get_name())
     # serves the file to whoever asks (handles OK -> metadata -> chunks -> final OK); returns
     # once fully sent, then re-arms.

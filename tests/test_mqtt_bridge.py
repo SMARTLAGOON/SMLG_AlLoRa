@@ -88,7 +88,7 @@ def test_edge_serves_a_broker_message_to_the_hub(tmp_path):
     # prepares its datasource itself (first serve round), so the deployment loop is
     # just Edge(datasource=...).serve().
     edge_client = Fake_client()
-    datasource = MQTT_DataSource(file_chunk_size=243, topics=("sensors/#",),
+    datasource = MQTT_DataSource(topics=("sensors/#",),
                                  client=edge_client)
     hub_sink = Capture_sink()
     edge, hub, endpoint = _make_pair(
@@ -118,7 +118,7 @@ def test_hub_delegates_a_broker_message_down_to_the_edge(tmp_path):
     # so a PUBLISH on the hub-side broker reaches the Edge's sink via the normal
     # GRANT-delegated pull, topic preserved, and control returns to the Hub.
     hub_client = Fake_client()
-    downlink = MQTT_DataSource(file_chunk_size=243, topics=("downlink/greenhouse/#",),
+    downlink = MQTT_DataSource(topics=("downlink/greenhouse/#",),
                                client=hub_client)
     edge_sink = Capture_sink()
     edge, hub, endpoint = _make_pair(
@@ -160,7 +160,7 @@ def test_bidirectional_mqtt_round_trip_with_loop_guards(tmp_path):
     edge, hub, endpoint = _make_pair(
         tmp_path,
         edge_kwargs={
-            "datasource": MQTT_DataSource(file_chunk_size=243, topics=("#",),
+            "datasource": MQTT_DataSource(topics=("#",),
                                           client=edge_client, loop_guard=edge_guard),
             "data_sink": MQTT_DataSink(client=edge_client, loop_guard=edge_guard),
         },
@@ -169,7 +169,7 @@ def test_bidirectional_mqtt_round_trip_with_loop_guards(tmp_path):
             "reclaim_timeout": 3,
         },
     )
-    hub_downlink = MQTT_DataSource(file_chunk_size=243, topics=("#",),
+    hub_downlink = MQTT_DataSource(topics=("#",),
                                    client=hub_client, loop_guard=hub_guard)
     hub.set_downlink_source(endpoint, hub_downlink)
 

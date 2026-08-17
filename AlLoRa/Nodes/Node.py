@@ -778,7 +778,35 @@ class Node:
     def got_file(self):     # Check if I have a file to send
         return self.file is not None
 
+    def _refuse_oversized_chunks(self, file: AlLoRa_File):
+        """Raise if this file states chunks bigger than this node's frames can carry.
+
+        The one number that knows is `self.chunk_size`, clamped by
+        `calculate_max_chunk_size()` against what the codec spends on framing. A file cut
+        above it does not fail at the door: it is encoded, sent, and either truncated or
+        rejected somewhere further down, which is how one 32 KiB secure arm was lost on
+        2026-08-11 to chunks that were 2 bytes too wide for a sealed frame.
+
+        Refusing rather than re-cutting is deliberate. Silently substituting our own number
+        would leave the caller with a value it can neither see nor trust, and a caller that
+        states a size usually states it somewhere else too: the record length it writes, the
+        buffer it sized, the count it expects at the far end.
+        """
+        if file.chunk_size is not None and file.chunk_size > self.chunk_size:
+            raise ValueError(
+                "{} is cut into {}-byte chunks, more than the {} bytes this node can carry "
+                "beside its framing. Leave the chunk size out and the node cuts the file "
+                "itself, or lower it to {} or less.".format(
+                    file.get_name(), file.chunk_size, self.chunk_size, self.chunk_size))
+
     def set_file(self, file: AlLoRa_File):
+        # A file handed in by a caller, on the caller's terms: a chunk size it stated is
+        # kept, one it left out is this node's to supply, and one too wide for the frame is
+        # refused rather than quietly narrowed. Refused *before* anything is written to the
+        # file, because a rejected call must not leave the object it rejected altered.
+        self._refuse_oversized_chunks(file)
+        if file.chunk_size is None:
+            file.change_chunk_size(self.chunk_size)
         # Installing a file to serve starts a fresh delivery, even if this same
         # object was already served once (re-queued downlink, broadcast, or a queued
         # file whose first attempt did not finish).
@@ -787,6 +815,20 @@ class Node:
         # A caller handing in its own file owns it. _pump_datasource sets this back
         # after calling us, so the queue is only credited for what the queue supplied.
         self._file_from_datasource = False
+
+    def _serve_from_boundary(self, file: AlLoRa_File):
+        """Install a file taken off an input boundary, cut to this node's current size.
+
+        A boundary stores bytes under a name and states no chunk size, so cutting the file
+        is this node's job and it is done on every install rather than once when the
+        boundary was attached. That matters twice over: a signed RF_CONFIG can carry a new
+        `cks` and this node re-clamps it, and a file whose delivery did not complete stays
+        queued and comes back later, by which time the radio may have moved. Re-cutting is
+        safe exactly here, between files: a boundary is only ever asked for one while this
+        node holds none, so no collector is mid-way through assembling what is being cut.
+        """
+        file.change_chunk_size(self.chunk_size)
+        self.set_file(file)
 
     def restore_file(self, file: AlLoRa_File):
         """v2 only. Put a file back mid-flight, announced, so a transfer carries on.
@@ -833,7 +875,7 @@ class Node:
         self.datasource.check()
         if self.file is None and self.datasource.has_pending():
             file = self.datasource.peek_file()
-            self.set_file(file)
+            self._serve_from_boundary(file)
             if self.datasource.is_durable():
                 # The queue vouches that this name is still the same bytes, so a transfer
                 # the reboot interrupted can be continued rather than started over: the

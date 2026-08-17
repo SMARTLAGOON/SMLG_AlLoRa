@@ -48,8 +48,8 @@ class _Capturing_downlink(DataSource):
     reaching into the Hub's private queues.
     """
 
-    def __init__(self, chunk_size):
-        super().__init__(chunk_size)
+    def __init__(self):
+        super().__init__()
         self.queued = []
 
     def add_to_queue(self, file):
@@ -63,7 +63,7 @@ def _hub(tmp_path, **kwargs):
                     nodes=[_node("edge", EDGE_MAC, device_id=TARGET_DEVICE_ID.hex())],
                     **kwargs)
     endpoint = hub.digital_endpoints[0]
-    source = _Capturing_downlink(hub.get_chunk_size())
+    source = _Capturing_downlink()
     hub.set_downlink_source(endpoint, source)
     return hub, endpoint, source
 

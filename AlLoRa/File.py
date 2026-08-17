@@ -41,8 +41,18 @@ class AlLoRa_File:
             self.assembly_needed = False
             self.content = content
             self.length = len(content)
+            # How this file is cut is decided by whatever will carry it, and that may not
+            # exist yet: a queue on flash builds the file from bytes it was handed, and a
+            # broker message becomes a file on the network thread that delivered it. Both
+            # happen before any radio is consulted. So None is a legitimate answer here and
+            # means undecided, not zero: the node stamps its own clamped size when it
+            # installs the file to serve, which is the only place that knows the posture the
+            # frame will travel in.
             self.chunk_size = chunk_size
-            self.chunk_counter = ceil(self.length / self.chunk_size)
+            if chunk_size is None:
+                self.chunk_counter = None
+            else:
+                self.chunk_counter = ceil(self.length / chunk_size)
 
             self.retransmission = 0
             self.last_chunk_sent = None
@@ -193,6 +203,13 @@ class AlLoRa_File:
         return self.chunk_counter
 
     def change_chunk_size(self, new_size):
+        # Source-side only. On a reassembly file `length` is a chunk *count* and every chunk
+        # already written sits at an offset derived from the sender's announced size, so
+        # re-cutting one would renumber bytes that are already on the card.
+        if self.assembly_needed:
+            raise ValueError(
+                "cannot re-cut {}: it is being reassembled, and its chunk size is the "
+                "sender's announced one".format(self.name))
         self.chunk_size = new_size
         self.chunk_counter = ceil(self.length / self.chunk_size)
 
