@@ -17,9 +17,15 @@ The AES-CTR primitive is platform-detected and injected, so the same constructio
 CPython (the ``cryptography`` lib) and on the AlLoRa MicroPython firmware (``ucryptolib``
 with the CTR build flag). ``detect_aead()`` returns None when no native AES is present,
 the graceful-degradation signal that secure mode is unavailable on this platform.
+
+The tag comes from ``hmac_sha256``, this package's own RFC 2104 over the native hash, rather
+than from the ``hmac`` module. That is what makes the "only native primitives" claim above
+true on-device: MicroPython has no native HMAC, so importing one gets a pure-Python wrapper
+around the native hash, and the wrapper rather than the hash becomes the cost of a frame.
 """
-import hmac
 import hashlib
+
+from AlLoRa.Security.hmac_sha256 import hmac_sha256
 
 
 def _ct_equal(a, b):
@@ -78,8 +84,7 @@ class Ctr_hmac_aead(AEAD):
     def _tag(self, mac_key, nonce, aad, ciphertext):
         # The tag authenticates nonce || aad || ciphertext, truncated to TAG_LEN. Binding the
         # nonce and the aad (the frame header) means neither can be forged without detection.
-        full = hmac.new(bytes(mac_key), bytes(nonce) + bytes(aad) + bytes(ciphertext),
-                        hashlib.sha256).digest()
+        full = hmac_sha256(mac_key, bytes(nonce) + bytes(aad) + bytes(ciphertext))
         return full[:self.TAG_LEN]
 
 
@@ -179,9 +184,9 @@ def unavailable_reason():
         return "AES-CTR (mode 6) raised: {} (CTR not compiled?)".format(repr(e))
     # Stage 2: the HMAC-SHA256 tag in isolation.
     try:
-        hmac.new(bytes(16), b"probe", hashlib.sha256).digest()
+        hmac_sha256(bytes(16), b"probe")
     except Exception as e:
-        return "HMAC-SHA256 raised: {} (hmac/hashlib backend?)".format(repr(e))
+        return "HMAC-SHA256 raised: {} (hashlib backend?)".format(repr(e))
     # Stage 3: the full seal/open (catches assembly issues like a missing compare_digest).
     if not _self_test(Ctr_hmac_aead(ctr)):
         return "AES-CTR + HMAC both work in isolation but seal/open round-trip failed"

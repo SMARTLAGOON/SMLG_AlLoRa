@@ -6,13 +6,20 @@ key, a distinct HMAC key, and a per-session nonce prefix. Using HKDF-SHA256 (a s
 extract-then-expand KDF) means the three outputs are independent even though they come from
 one secret.
 
-These are *property* tests — deterministic, right lengths, the outputs are distinct, and a
-different secret yields different keys. They deliberately do not pin the exact bytes: the
-concrete construction (labels, prefix length) is provisional until the crypto-review pass,
-and property tests survive that review unchanged.
+These are mostly *property* tests — deterministic, right lengths, the outputs are distinct, and
+a different secret yields different keys. They deliberately do not pin the exact bytes of the
+session keys: the concrete construction (labels, prefix length) is provisional until the
+crypto-review pass, and property tests survive that review unchanged.
+
+``hkdf_sha256`` itself is the exception and *is* byte-pinned, against the RFC 5869 vectors.
+HKDF-SHA256 is a standard rather than a provisional choice, so those bytes cannot move under
+the review, and pinning them is what catches a broken HMAC underneath: every property above
+would still hold if the MAC were replaced with something fast and wrong.
 """
+import hmac
+
 from AlLoRa.Security.kdf import (
-    derive_session_keys, derive_session_material, ENC_KEY_LEN, MAC_KEY_LEN,
+    derive_session_keys, derive_session_material, hkdf_sha256, ENC_KEY_LEN, MAC_KEY_LEN,
 )
 
 SECRET = bytes(range(32))
@@ -57,3 +64,35 @@ def test_directional_material_gives_two_disjoint_prefixes():
 
 def test_directional_material_is_deterministic():
     assert derive_session_material(SECRET) == derive_session_material(SECRET)
+
+
+def test_hkdf_matches_rfc_5869_test_case_1():
+    # The standard's own vector, with a real salt and a real info label.
+    okm = hkdf_sha256(bytes.fromhex("0b" * 22), 42,
+                      salt=bytes.fromhex("000102030405060708090a0b0c"),
+                      info=bytes.fromhex("f0f1f2f3f4f5f6f7f8f9"))
+    assert okm.hex() == ("3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56"
+                         "ecc4c5bf34007208d5b887185865")
+
+
+def test_hkdf_matches_rfc_5869_test_case_3():
+    # Zero-length salt and info, which is the branch this module actually takes: nothing here
+    # passes a salt, so the empty-salt substitution (32 zero bytes) is on the live path and
+    # would otherwise go unpinned.
+    okm = hkdf_sha256(bytes.fromhex("0b" * 22), 42)
+    assert okm.hex() == ("8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f"
+                         "3c738d2d9d201395faa4b61a96c8")
+
+
+def test_the_key_schedule_does_not_call_into_the_hmac_module(monkeypatch):
+    # HKDF is charged one extract plus one hash pass per 32 bytes of output, so a handshake pays
+    # micropython-lib's pure-Python HMAC three times: about 58 ms on the Edge and 144 ms on the
+    # Hub. Less than the per-frame tag was costing, but on the same path and free to remove once
+    # the package had its own HMAC.
+    expected = derive_session_material(SECRET)      # before the module is taken away
+
+    def _unavailable(*args, **kwargs):
+        raise AssertionError("the key schedule must not go through the hmac module")
+
+    monkeypatch.setattr(hmac, "new", _unavailable)
+    assert derive_session_material(SECRET) == expected

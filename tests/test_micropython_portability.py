@@ -18,6 +18,7 @@ _ON_DEVICE_SECURE = [
     "AlLoRa/Security/ec_p256.py",
     "AlLoRa/Security/kdf.py",
     "AlLoRa/Security/AEAD.py",
+    "AlLoRa/Security/hmac_sha256.py",
     "AlLoRa/Security/handshake.py",
     "AlLoRa/Security/identity.py",
     "AlLoRa/Security/Session.py",

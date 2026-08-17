@@ -11,6 +11,7 @@ caught — which survive a later byte-layout review unchanged.
 verifies the tag *before* decrypting, so a forged frame never yields plaintext. Tests run
 against the platform-detected backend (``detect_aead()``), exercising the real path.
 """
+import hashlib
 import hmac
 import sys
 import types
@@ -132,6 +133,56 @@ def test_open_does_not_depend_on_hmac_compare_digest(monkeypatch):
     forged = bytearray(sealed)
     forged[-1] ^= 0x01
     assert aead.open(ENC_KEY, MAC_KEY, NONCE, AAD, bytes(forged)) is None  # forged tag rejected
+
+
+def _identity_aead():
+    """An AEAD whose CTR is the identity, so a test can look at the tag alone."""
+    return Ctr_hmac_aead(lambda key, nonce, data: bytes(data))
+
+
+def test_the_tag_is_rfc2104_hmac_sha256_over_nonce_aad_ciphertext():
+    # The acceptance test for the native-hash tag, carried over from the bench harness that
+    # measured the change before anyone committed to it. A tag function that is merely fast
+    # would sail through a transfer and produce a posture that authenticates nothing, so the
+    # output is pinned to the spec rather than to whatever the implementation happens to
+    # return. The reference is the stdlib's HMAC, which is the construction to implement.
+    #
+    # The key lengths straddle the 64-byte block boundary on purpose: RFC 2104 hashes a key
+    # longer than one block before padding it, and that branch is the one an open-coded HMAC
+    # gets wrong.
+    aead = _identity_aead()
+    for key_len in (16, 32, 64, 65, 100):
+        mac_key = bytes((i * 7 + 1) % 256 for i in range(key_len))
+        for payload_len in (0, 1, 8, 200, 247):
+            ciphertext = bytes(i % 256 for i in range(payload_len))
+            expected = hmac.new(mac_key, NONCE + AAD + ciphertext,
+                                hashlib.sha256).digest()[:aead.TAG_LEN]
+            got = aead._tag(mac_key, NONCE, AAD, ciphertext)
+            assert got == expected, "key_len={} payload_len={}".format(key_len, payload_len)
+
+
+def test_the_tag_does_not_call_into_the_hmac_module(monkeypatch):
+    # MicroPython has no native hmac: the manifest pulls micropython-lib's pure-Python one, and
+    # it costs 19.4 ms on the Edge and 48.1 ms on the Hub against 0.14 ms for the SHA-256 it
+    # wraps. The module's own docstring promises native primitives, and the tag is charged four
+    # times a round, so the sealed posture was paying about 28% instead of about 4%.
+    #
+    # Written against hashlib directly the same two hash passes cost 1.1 ms on both boards. This
+    # asserts the dependency is gone rather than asserting a speed, because a timing test on CI
+    # would measure CPython, where the pure-Python module is not the bottleneck and the
+    # regression would pass unnoticed.
+    aead = _identity_aead()
+    expected = aead._tag(MAC_KEY, NONCE, AAD, PLAINTEXT)     # before the module is taken away
+
+    def _unavailable(*args, **kwargs):
+        raise AssertionError("the per-frame tag must not go through the hmac module")
+
+    monkeypatch.setattr(hmac, "new", _unavailable)
+    assert aead._tag(MAC_KEY, NONCE, AAD, PLAINTEXT) == expected
+
+    # and the whole seal/open path with it, which is what the node actually runs
+    sealed = aead.seal(ENC_KEY, MAC_KEY, NONCE, AAD, PLAINTEXT)
+    assert aead.open(ENC_KEY, MAC_KEY, NONCE, AAD, sealed) == PLAINTEXT
 
 
 def _fake_aes_module(tag):

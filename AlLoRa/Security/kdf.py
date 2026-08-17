@@ -11,8 +11,7 @@ crypto-review pass, so it is not treated as frozen. The nonce prefix pairs with 
 frame counter to form the AEAD nonce; its length is set so the assembled nonce lands at a
 conventional 12 bytes.
 """
-import hmac
-import hashlib
+from AlLoRa.Security.hmac_sha256 import hmac_sha256, DIGEST_SIZE
 
 ENC_KEY_LEN = 16       # AES-128
 MAC_KEY_LEN = 16       # HMAC-SHA256 key
@@ -25,16 +24,16 @@ def hkdf_sha256(ikm, length, salt=b"", info=b""):
     """RFC 5869 HKDF with SHA-256: extract a pseudorandom key from ``ikm`` then expand it to
     ``length`` bytes bound to ``info``."""
     if salt == b"":
-        # HashLen for SHA-256 is 32. Hardcoded because MicroPython's hashlib hash objects don't
-        # expose `.digest_size` (it is a CPython attribute). Reading it degrades the handshake
-        # on-device while CI stays green.
-        salt = b"\x00" * 32
-    prk = hmac.new(bytes(salt), bytes(ikm), hashlib.sha256).digest()   # extract
+        # HashLen for SHA-256 is 32, and the constant is named rather than read off the hash
+        # object: MicroPython's hashlib exposes no `.digest_size` (it is a CPython attribute),
+        # so reading it degrades the handshake on-device while CI stays green.
+        salt = b"\x00" * DIGEST_SIZE
+    prk = hmac_sha256(bytes(salt), bytes(ikm))                        # extract
     out = b""
     block = b""
     counter = 1
     while len(out) < length:                                          # expand
-        block = hmac.new(prk, block + bytes(info) + bytes([counter]), hashlib.sha256).digest()
+        block = hmac_sha256(prk, block + bytes(info) + bytes([counter]))
         out += block
         counter += 1
     return out[:length]
