@@ -18,6 +18,12 @@ class Connector:
         self.debug = False
         self.protocol_version = 2    # config() decides; this is its default until it runs
         self.frame_size = None       # set by the node once it knows its clamped chunk size
+        # A frame the radio received and threw away as damaged is not the same event as a
+        # window in which nothing arrived, and the two deserve different diagnoses. A
+        # connector whose radio can tell the difference raises this during recv; listen()
+        # lowers it before every window, so a connector that never sets it (all but the
+        # SX127x one today) keeps reporting plain timeouts exactly as it always did.
+        self.recv_dropped_corrupt = False
 
     # `adaptive_timeout` / `observed_min_timeout` now live in `Pacing`; these properties keep
     # every existing call site (the send loop, the Edge's pokes, the tunnels) working.
@@ -226,6 +232,7 @@ class Connector:
         # One timed receive window, measured at the radio: the (wire, td) a split-Connector
         # tunnel bridge would run remotely and report back up (td is the round-trip the
         # policy layer feeds to Pacing).
+        self.recv_dropped_corrupt = False    # this window's verdict, not the last one's
         t0 = time()
         wire = self.recv(window)
         td = (time() - t0) / 1000
@@ -313,6 +320,24 @@ class Connector:
             packet_size_received = len(received_data) if received_data else 0
 
             if not received_data:
+                if self.recv_dropped_corrupt:
+                    # The reply did arrive, damaged, and the radio dropped it. Report it as
+                    # the corrupt frame it was: the node counts CorruptedPackets from this
+                    # label, and that count is how a link's corruption is compared between
+                    # runs. Reporting silence instead would hide it in the retransmissions.
+                    # The window is left alone deliberately: the frame arrived inside it, so
+                    # it was wide enough, and growing it would slow every later round for a
+                    # reason that is not true.
+                    error_info = {
+                        "type": "CORRUPTED_PACKET",
+                        "message": "Reply dropped at the radio: the payload CRC failed",
+                        "focus_time": focus_time,
+                        "time_difference": td,
+                        "adaptive_timeout": self.adaptive_timeout,
+                    }
+                    if self.debug:
+                        print(error_info["message"])
+                    return error_info, packet_size_sent, packet_size_received, td
                 error_info = {
                     "type": "TIMEOUT",
                     "message": "No response received",

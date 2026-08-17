@@ -74,6 +74,14 @@ class SX127x_connector(Connector):
             self.lora.settimeout(focus_time)
             data = self.lora.recv(Connector.MAX_LENGTH_MESSAGE)
             td = time.ticks_ms() - t0
+            if data is None:
+                # A frame arrived, the modem said its payload CRC failed, and the driver threw
+                # it away. Say so: from up here a corrupt-frame storm and a dead link both look
+                # like an empty window, and they call for opposite responses. The timeout path
+                # below reaches this same return by raising instead, so the two stay distinct.
+                self.recv_dropped_corrupt = True
+                if self.debug:
+                    print("Dropped a frame with a failed payload CRC")
             return data
         except Exception:
             # Was a bare 'except', which also swallowed KeyboardInterrupt: since the node spends

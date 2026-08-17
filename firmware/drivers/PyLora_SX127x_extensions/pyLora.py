@@ -151,11 +151,35 @@ class pyLora:
     def recv(self, size=230):
         """ Util Method for recv
             It will turn automatically the device on receive mode
+
+            Returns the received frame, or None if the modem reported a payload CRC error,
+            in which case the frame is dropped here rather than handed to the application.
+
+            The modem computes that CRC (rx_crc=True at construction) and raises
+            PayloadCrcError *beside* RxDone rather than instead of it, so a damaged frame
+            wakes this path exactly like an intact one and the flag is the only thing that
+            says which is which. It used to go unread, and a raw sweep at SF12 delivered 17
+            of 18 frames with garbage bodies and correct declared lengths: the explicit
+            header carries its own CRC at a stronger coding rate, so the length field
+            survives a payload that has disintegrated. Framing rejected most of them
+            downstream, which is why this presented as endless retransmission rather than
+            as corruption.
+
+            The flag is still standing when we look, because RegIrqFlags is
+            write-one-to-clear and the receive callback clears RxDone alone. It belongs to
+            the frame we are about to return, because DIO0 stays asserted until RxDone is
+            cleared, so the wait above cannot have returned for an earlier frame. And it is
+            read directly rather than through the library's own rx_is_good(), which also
+            tests ValidHeader and so reports trouble on every healthy reception.
         """
         self.__SX127X_LIB.set_mode(MODE.SLEEP)
         self.__SX127X_LIB.set_dio_mapping([0, 0, 0, 0])
         self.__SX127X_LIB.set_mode(MODE.RXCONT)
         self.__SX127X_LIB.set_dio0_status(timeout_value=self.timeout_socket, socket_blocked=self.blocked_socket)
+        if self.__SX127X_LIB.get_irq_flags()['crc_error']:
+            # Clear it, or the next frame on this radio inherits the verdict.
+            self.__SX127X_LIB.clear_irq_flags(PayloadCrcError=1)
+            return None
         return bytes(self.__SX127X_LIB.payload)
 
     def settimeout(self, value):
