@@ -9,10 +9,11 @@ attack vector).
 """
 import os
 
+from AlLoRa.Security import ec_p256
 from AlLoRa.Security.ec_p256 import (
     generate_private_key, public_key_uncompressed, ecdh_shared_secret,
     is_on_curve, decode_public_key, scalar_mult, point_add, ecdsa_verify,
-    ecdsa_sign, G, N, INF,
+    ecdsa_sign, G, N, P, INF,
 )
 
 # Canonical P-256 / SHA-256 ECDSA vectors from RFC 6979 Appendix A.2.5 (the deterministic-k
@@ -56,21 +57,182 @@ def test_scalar_mult_matches_nist_known_answer_vectors():
         assert scalar_mult(k, G) == expected
 
 
+def _affine_mul(k, pt):
+    """A plain affine double-and-add built from the module's affine point_add. Deliberately
+    the slowest, most obvious implementation available: it shares no code with the Jacobian
+    windowed ladder, so agreement between the two is real evidence rather than a formula
+    agreeing with itself."""
+    r, addend = INF, pt
+    while k:
+        if k & 1:
+            r = point_add(r, addend)
+        addend = point_add(addend, addend)
+        k >>= 1
+    return r
+
+
 def test_scalar_mult_matches_an_independent_affine_ladder():
     # Cross-check scalar_mult against a plain affine double-and-add built from the module's
     # affine point_add — an independent code path must agree for random scalars.
-    def affine_mul(k, pt):
-        r, addend = INF, pt
-        while k:
-            if k & 1:
-                r = point_add(r, addend)
-            addend = point_add(addend, addend)
-            k >>= 1
-        return r
-
     for _ in range(5):
         k = (int.from_bytes(os.urandom(32), "big") % (N - 1)) + 1
-        assert scalar_mult(k, G) == affine_mul(k, G)
+        assert scalar_mult(k, G) == _affine_mul(k, G)
+
+
+def test_scalar_mult_agrees_with_the_affine_ladder_on_awkward_scalars():
+    # A windowed ladder reads the scalar in fixed-width digits, so the scalars that break it
+    # are the ones with structure at a digit boundary: an all-zero digit to skip, an all-ones
+    # digit at the top of the table, the very top and bottom of the range. Random 256-bit
+    # scalars almost never contain any of these, which is exactly why they are listed here.
+    awkward = [
+        1, 2, 3, 15, 16, 17, 255, 256,
+        N - 1,                                   # the top of the group
+        0x0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F,
+        0xF0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0 % N,
+        0xFFFFFFFF0000000000000000000000000000000000000000000000000000FFFF % N,
+        (1 << 255) % N,                          # a single high bit
+        0x1000000000000000000000000000000000000000000000000000000000000001 % N,
+    ]
+    for k in awkward:
+        assert scalar_mult(k, G) == _affine_mul(k, G), "k = {}".format(hex(k))
+
+
+def test_scalar_mult_reduces_the_scalar_modulo_the_group_order():
+    # P-256 has cofactor 1, so every curve point has order N and k*Pt depends only on k mod N.
+    # A ladder that reads a fixed 256 bits of the scalar must therefore reduce first, or a
+    # scalar at or above N walks off the end of what it reads.
+    assert scalar_mult(N, G) is INF
+    assert scalar_mult(2 * N, G) is INF
+    assert scalar_mult(N + 5, G) == scalar_mult(5, G)
+    assert scalar_mult(N + 5, G) == _affine_mul(5, G)
+
+
+def test_scalar_mult_negates_the_point_for_a_negative_scalar():
+    # (-k)*Pt is the reflection of k*Pt in the x-axis. Pinned because it is the one caller
+    # behaviour that is not exercised by the handshake or by verify, so a ladder rewrite could
+    # drop it silently.
+    k = (int.from_bytes(os.urandom(32), "big") % (N - 1)) + 1
+    x, y = scalar_mult(k, G)
+    assert scalar_mult(-k, G) == (x, (-y) % P)
+    assert scalar_mult(-1, G) == (G[0], (-G[1]) % P)
+
+
+def test_scalar_mult_returns_infinity_for_the_identity_point():
+    assert scalar_mult(7, INF) is INF
+    assert scalar_mult(0, G) is INF
+
+
+def test_every_scalar_multiple_lands_back_on_the_curve():
+    # The cheapest possible check on a formula transcription: a wrong Jacobian doubling or
+    # addition almost always produces a point that is not on P-256 at all.
+    for _ in range(3):
+        k = (int.from_bytes(os.urandom(32), "big") % (N - 1)) + 1
+        assert is_on_curve(scalar_mult(k, G))
+
+
+# --- The Jacobian point operations, and how many of them a call is allowed to cost ---------
+#
+# These reach past the public surface on purpose. The curve formulas are specialised for
+# P-256 (a = -3), so a transcription slip in one of them is a security bug that the public
+# ECDH test would still pass, because both sides would agree on the same wrong answer.
+
+
+def _to_jacobian(pt):
+    return (pt[0], pt[1], 1)
+
+
+def test_jacobian_doubling_matches_affine_doubling():
+    # The doubling formula is written for a = -3 rather than for a general a. Checked here
+    # against the module's own affine point_add, which uses the generic lambda and A directly.
+    for k in (1, 2, 3, 7, 12345):
+        pt = scalar_mult(k, G)
+        doubled = ec_p256._jac_to_affine(ec_p256._jac_double(_to_jacobian(pt)))
+        assert doubled == point_add(pt, pt)
+
+
+def test_jacobian_doubling_preserves_the_identity():
+    # Two ways to reach the point at infinity: a Z of zero (the accumulator before the ladder
+    # takes its first bit), and a Y of zero (a point of order two, which P-256 has none of but
+    # the formula must still not mangle). Both must double to something with Z = 0.
+    assert ec_p256._jac_double(ec_p256._JAC_INF)[2] == 0
+    assert ec_p256._jac_double((5, 0, 1))[2] == 0
+
+
+def test_jacobian_addition_matches_affine_addition():
+    a, b = scalar_mult(3, G), scalar_mult(11, G)
+    summed = ec_p256._jac_to_affine(ec_p256._jac_add(_to_jacobian(a), _to_jacobian(b)))
+    assert summed == point_add(a, b)
+
+
+def test_jacobian_addition_handles_the_doubling_and_inverse_cases():
+    # Adding a point to itself has to fall through to the doubling formula (the general
+    # addition divides by zero there), and adding a point to its own reflection is the
+    # identity. Both are reachable from a windowed ladder whose accumulator happens to match a
+    # table entry.
+    a = scalar_mult(9, G)
+    same = ec_p256._jac_to_affine(ec_p256._jac_add(_to_jacobian(a), _to_jacobian(a)))
+    assert same == point_add(a, a)
+
+    negated = (a[0], (-a[1]) % P)
+    assert ec_p256._jac_add(_to_jacobian(a), _to_jacobian(negated))[2] == 0
+
+
+class _PointOpCounter:
+    """Count the Jacobian point operations one call performs.
+
+    Not a speed test. On the ESP32 a single verify allocates about 2 MB of short-lived
+    256-bit integers, so the collector runs on the order of a hundred times inside it and
+    each run walks everything the node is holding alive. The measured cost is therefore
+    proportional to the number of field operations, and those are proportional to the point
+    operations counted here. Bounding the count is the only way to pin that property from
+    CPython, where the collector behaves nothing like the board's.
+    """
+
+    def __enter__(self):
+        self.doubles = 0
+        self.adds = 0
+        self._real_double = ec_p256._jac_double
+        self._real_add = ec_p256._jac_add
+
+        def counting_double(pt):
+            self.doubles += 1
+            return self._real_double(pt)
+
+        def counting_add(p1, p2):
+            self.adds += 1
+            return self._real_add(p1, p2)
+
+        ec_p256._jac_double = counting_double
+        ec_p256._jac_add = counting_add
+        return self
+
+    def __exit__(self, *exc):
+        ec_p256._jac_double = self._real_double
+        ec_p256._jac_add = self._real_add
+        return False
+
+
+def test_a_scalar_multiplication_stays_inside_its_point_operation_budget():
+    # A naive bit-at-a-time ladder needs one addition per set bit, about 128 for a random
+    # 256-bit scalar. Reading the scalar four bits at a time cuts that to at most one per
+    # digit, 64, plus the table it builds once. The doubling count does not change; the
+    # additions are where the churn was.
+    k = (int.from_bytes(os.urandom(32), "big") % (N - 1)) + 1
+    with _PointOpCounter() as count:
+        scalar_mult(k, G)
+    assert count.adds <= 80, "additions per scalar_mult: {}".format(count.adds)
+    assert count.doubles <= 275, "doublings per scalar_mult: {}".format(count.doubles)
+
+
+def test_a_signature_verification_costs_one_ladder_and_not_two():
+    # Verify computes u1*G + u2*Q. Running two separate ladders doubles the work; running one
+    # ladder over both scalars at once shares every doubling between them. This is the single
+    # largest saving available in the module, and the number it moves is published, so it is
+    # pinned rather than left to be re-discovered.
+    with _PointOpCounter() as count:
+        assert ecdsa_verify(_RFC6979_PUBKEY, _SAMPLE_DIGEST, _SAMPLE_SIG) is True
+    assert count.doubles <= 275, "doublings per verify: {}".format(count.doubles)
+    assert count.adds <= 150, "additions per verify: {}".format(count.adds)
 
 
 def test_two_parties_derive_the_same_shared_secret():

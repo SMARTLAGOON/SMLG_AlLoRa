@@ -94,8 +94,10 @@ handshake. Known traps the frozen library must avoid (all fixed, listed so they 
   local constant-time compare instead. (`AlLoRa/Security/AEAD.py`)
 - **`hashlib.sha256().digest_size`** — MicroPython hash objects don't expose it. Hardcode `32`.
   (`AlLoRa/Security/kdf.py`)
-- **`int.bit_length()`** — not available on MicroPython. The P-256 scalar-mult ladder uses the
-  right-to-left `while k: … k >>= 1` form instead. (`AlLoRa/Security/ec_p256.py`)
+- **`int.bit_length()`** — not available on MicroPython. The P-256 scalar-mult ladders reduce the
+  scalar mod N and then read a fixed 32 bytes of it, so they never need to ask how long it is.
+  Reading it as bytes also keeps every digit a small integer rather than allocating a fresh
+  256-bit one per step. (`AlLoRa/Security/ec_p256.py`)
 
 `tests/test_micropython_portability.py` scans the frozen secure path for these names so CI, not
 the ESP32, is what fails when a new one creeps in.

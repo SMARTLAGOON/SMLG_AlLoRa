@@ -1,10 +1,10 @@
 """Minimal pure-Python P-256 (secp256r1) for the ECDH handshake and the control root.
 
 Elliptic-curve math with no native crypto module, so ephemeral-static ECDH runs on the
-AlLoRa firmware. The asymmetric cost is paid once per session (a few hundred ms of scalar
-multiplication on-device), never per frame. Consolidated from the project's SecureAlLoRa
-reference implementation (the two hand-rolled P-256 files merged into one), carrying what
-ECDH needs (keypair generation, SEC1 uncompressed points, on-curve validation, the
+AlLoRa firmware. The asymmetric cost is seconds of scalar multiplication on-device, and it is
+paid once per session at the handshake, never per frame. Consolidated from the project's
+SecureAlLoRa reference implementation (the two hand-rolled P-256 files merged into one),
+carrying what ECDH needs (keypair generation, SEC1 uncompressed points, on-curve validation, the
 shared-secret computation) plus both halves of the control-root signature: verification, run
 by a field node on the rare downlink control artifact (config/OTA/model) and never on the
 per-frame hot path, and signing, run by whoever holds the root private key.
@@ -45,6 +45,8 @@ def is_on_curve(point):
 
 
 def point_add(p1, p2):
+    # The plain affine addition, kept as the readable reference the Jacobian formulas below
+    # are checked against. The hot paths do not call it.
     if p1 is INF:
         return p2
     if p2 is INF:
@@ -72,27 +74,38 @@ def point_add(p1, p2):
 # whole double-and-add ladder run with NO inverses; a single inverse converts the result back to
 # affine at the very end. The curve points are identical, so public keys and shared secrets are
 # byte-for-byte unchanged (pinned by the NIST known-answer test). Only the speed differs.
-# Formulas: EFD "dbl-2007-bl" / "add-2007-bl" (general a; here a = A).
+#
+# The second thing these formulas are written for is allocation. Python integers are immutable,
+# so every modular multiply allocates a fresh object, and one scalar multiplication used to
+# allocate over 1 MB of them. On the ESP32 that is more than the working heap, so the collector
+# runs on the order of a hundred times inside a single call and each run walks everything the
+# node holds alive: the cost of the curve math is proportional to how much memory the node is
+# using elsewhere. Hence the intermediate reductions that are skipped below wherever the operand
+# stays small enough to multiply safely, and the digit-at-a-time ladders that follow.
+#
+# Formulas: EFD "dbl-2001-b" (specialised for a = -3, which is what A is on this curve) and
+# "add-2007-bl".
 
 _JAC_INF = (1, 1, 0)   # the identity has Z = 0
 
 
 def _jac_double(pt):
+    # a = -3 on P-256 (A is defined above as P - 3), so 3*X^2 + a*Z^4 factors as
+    # 3*(X - Z^2)*(X + Z^2). That saves one field multiplication and, more to the point, four
+    # of the temporaries the general formula needs: 27 intermediate integers per call against
+    # 38. A curve with any other a would need the general form back.
     X1, Y1, Z1 = pt
     if Z1 == 0 or Y1 == 0:
         return _JAC_INF
-    XX = (X1 * X1) % P
-    YY = (Y1 * Y1) % P
-    YYYY = (YY * YY) % P
-    ZZ = (Z1 * Z1) % P
-    t = (X1 + YY) % P
-    S = (2 * ((t * t - XX - YYYY) % P)) % P
-    M = (3 * XX + A * ((ZZ * ZZ) % P)) % P
-    T = (M * M - 2 * S) % P
-    u = (Y1 + Z1) % P
-    Z3 = (u * u - YY - ZZ) % P
-    Y3 = (M * ((S - T) % P) - 8 * YYYY) % P
-    return (T, Y3, Z3)
+    delta = (Z1 * Z1) % P
+    gamma = (Y1 * Y1) % P
+    beta = (X1 * gamma) % P
+    alpha = (3 * (X1 - delta) * (X1 + delta)) % P
+    X3 = (alpha * alpha - 8 * beta) % P
+    u = Y1 + Z1
+    Z3 = (u * u - gamma - delta) % P
+    Y3 = (alpha * (4 * beta - X3) - 8 * gamma * gamma) % P
+    return (X3, Y3, Z3)
 
 
 def _jac_add(p1, p2):
@@ -106,21 +119,22 @@ def _jac_add(p1, p2):
     Z2Z2 = (Z2 * Z2) % P
     U1 = (X1 * Z2Z2) % P
     U2 = (X2 * Z1Z1) % P
-    S1 = (Y1 * ((Z2 * Z2Z2) % P)) % P
-    S2 = (Y2 * ((Z1 * Z1Z1) % P)) % P
+    S1 = (Y1 * Z2 * Z2Z2) % P
+    S2 = (Y2 * Z1 * Z1Z1) % P
     if U1 == U2:
         if S1 != S2:
             return _JAC_INF          # p1 + (-p1) = identity
         return _jac_double(p1)       # p1 == p2
-    H = (U2 - U1) % P
-    HH2 = (2 * H) % P
-    I = (HH2 * HH2) % P
+    # H and r are left unreduced: both stay under 2P, so every product they enter is still
+    # small enough that the single reduction at the end of each line is the only one needed.
+    H = U2 - U1
+    I = (4 * H * H) % P
     J = (H * I) % P
-    r = (2 * ((S2 - S1) % P)) % P
+    r = 2 * (S2 - S1)
     V = (U1 * I) % P
     X3 = (r * r - J - 2 * V) % P
-    Y3 = (r * ((V - X3) % P) - 2 * ((S1 * J) % P)) % P
-    zsum = (Z1 + Z2) % P
+    Y3 = (r * (V - X3) - 2 * S1 * J) % P
+    zsum = Z1 + Z2
     Z3 = (((zsum * zsum - Z1Z1 - Z2Z2) % P) * H) % P
     return (X3, Y3, Z3)
 
@@ -135,21 +149,86 @@ def _jac_to_affine(pt):
     return ((X * zi2) % P, (Y * zi3) % P)
 
 
+def _jacobian(point):
+    """An affine curve point as a Jacobian triple with Z = 1."""
+    return (point[0] % P, point[1] % P, 1)
+
+
 def scalar_mult(k, point):
-    if k % N == 0 or point is INF:
+    if point is INF:
         return INF
-    if k < 0:
-        x, y = point
-        return scalar_mult(-k, (x, (-y) % P))
-    # Right-to-left double-and-add (same structure as the original affine loop, which avoids
-    # int.bit_length(), not available on MicroPython, just with the point ops in Jacobian).
+    # P-256 has cofactor 1, so every point on it has order N and k*point depends only on
+    # k mod N. Reducing here is what lets the ladder read a fixed 256 bits of scalar, and it
+    # folds a negative scalar onto the equivalent positive one on the way.
+    k %= N
+    if k == 0:
+        return INF
+
+    # One table of small multiples, built once, so the ladder spends at most one addition per
+    # four bits of scalar rather than one per set bit: about 64 additions instead of 128. Even
+    # multiples come from the cheaper doubling.
+    table = [_JAC_INF, _jacobian(point)]
+    for i in range(2, 16):
+        if i & 1:
+            table.append(_jac_add(table[i - 1], table[1]))
+        else:
+            table.append(_jac_double(table[i >> 1]))
+
+    # Left to right, four bits at a time. Reading the scalar as bytes rather than shifting it
+    # keeps every digit a small integer and avoids int.bit_length(), which MicroPython does
+    # not have: 32 bytes is always enough for a scalar reduced mod N, and the leading zero
+    # digits cost only the identity check at the top of _jac_double.
     R = _JAC_INF
-    addend = (point[0] % P, point[1] % P, 1)     # affine base -> Jacobian (Z = 1)
-    while k:
-        if k & 1:
-            R = _jac_add(R, addend)
-        addend = _jac_double(addend)
-        k >>= 1
+    for byte in k.to_bytes(32, "big"):
+        R = _jac_double(_jac_double(_jac_double(_jac_double(R))))
+        high = byte >> 4
+        if high:
+            R = _jac_add(R, table[high])
+        R = _jac_double(_jac_double(_jac_double(_jac_double(R))))
+        low = byte & 0x0F
+        if low:
+            R = _jac_add(R, table[low])
+    return _jac_to_affine(R)
+
+
+def _joint_scalar_mult(k1, point1, k2, point2):
+    """Return ``k1*point1 + k2*point2`` as an affine point, from a single ladder.
+
+    Two separate scalar multiplications would double their own accumulator 256 times each.
+    Stepping both scalars through one accumulator, two bits at a time, shares every one of
+    those doublings, so the pair costs about what one used to. Both points must be real
+    affine curve points, not the identity; the only caller is ecdsa_verify, where they are
+    the base point and a validated public key.
+    """
+    k1 %= N
+    k2 %= N
+    # table[4*i + j] = i*point1 + j*point2, for i and j in 0..3.
+    m1 = [_JAC_INF, _jacobian(point1)]
+    m2 = [_JAC_INF, _jacobian(point2)]
+    for m in (m1, m2):
+        m.append(_jac_double(m[1]))
+        m.append(_jac_add(m[2], m[1]))
+    table = [_JAC_INF] * 16
+    for i in range(4):
+        for j in range(4):
+            if i and j:
+                table[4 * i + j] = _jac_add(m1[i], m2[j])
+            elif i:
+                table[4 * i + j] = m1[i]
+            elif j:
+                table[4 * i + j] = m2[j]
+
+    R = _JAC_INF
+    b1 = k1.to_bytes(32, "big")
+    b2 = k2.to_bytes(32, "big")
+    for i in range(32):
+        d1 = b1[i]
+        d2 = b2[i]
+        for shift in (6, 4, 2, 0):
+            R = _jac_double(_jac_double(R))
+            d = (((d1 >> shift) & 3) << 2) | ((d2 >> shift) & 3)
+            if d:
+                R = _jac_add(R, table[d])
     return _jac_to_affine(R)
 
 
@@ -228,7 +307,7 @@ def ecdsa_verify(public_key, digest, signature):
     w = inv_mod(s, N)
     u1 = (z * w) % N
     u2 = (r * w) % N
-    point = point_add(scalar_mult(u1, G), scalar_mult(u2, Q))
+    point = _joint_scalar_mult(u1, G, u2, Q)
     if point is INF:
         return False
     return point[0] % N == r
