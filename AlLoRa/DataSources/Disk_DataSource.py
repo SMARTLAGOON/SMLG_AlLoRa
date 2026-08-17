@@ -36,14 +36,20 @@ committed first and the index second, because a crash between the two leaves a f
 the next reconcile adopts. Doing it the other way round would leave the index describing a
 file that was never written.
 
-MicroPython target discipline: the payload is read from flash only when the node is
-actually about to send it, the directory is re-scanned only when the queue has run dry
-rather than on every radio round, both writes go through the same all-or-nothing commit the
-config files use, and nothing here opens more than one file at a time.
+MicroPython target discipline: a payload is never held in RAM at all, only the chunk the
+radio is asking for right now; the directory is re-scanned only when the queue has run dry
+rather than on every radio round; both writes go through the same all-or-nothing commit the
+config files use; and nothing here opens more than one file at a time.
+
+That first point costs one open handle, held for as long as a file is at the head of the
+queue and closed on every path it can leave by. The alternative was reading the whole
+payload and handing it to a file object that kept it too: two resident copies, a ceiling on
+what a node could send that had nothing to do with the protocol, and a stretch of seconds
+where a node loading a file could not hear the radio.
 """
 
 from AlLoRa.DataSources.DataSource import DataSource
-from AlLoRa.File import AlLoRa_File
+from AlLoRa.File import AlLoRa_File, OnDemandFileReader
 from AlLoRa.utils.file_utils import commit_bytes, commit_file
 from AlLoRa.utils.json_utils import json
 from AlLoRa.utils.os_utils import os
@@ -95,10 +101,9 @@ class Disk_DataSource(DataSource):
             self._reconcile()
 
     def close(self):
-        # Only the in-RAM copy of the head. The file itself stays queued on flash, which
-        # is the point: shutting a node down is not delivering its backlog.
-        self._head_name = None
-        self._head_file = None
+        # Only the head's handle. The file itself stays queued on flash, which is the
+        # point: shutting a node down is not delivering its backlog.
+        self._release_head()
 
     # -- the queue -------------------------------------------------------------------------
 
@@ -159,17 +164,30 @@ class Disk_DataSource(DataSource):
         return True
 
     def peek_file(self):
-        """The file at the front as an AlLoRa_File, without removing it. None if empty."""
+        """The file at the front as an AlLoRa_File, without removing it. None if empty.
+
+        The payload is not read here. What comes back is positioned on the file and reads
+        each chunk as the radio asks for it, so a node serving a file holds a handle and a
+        few hundred bytes rather than two copies of the artifact. That is what lifts the
+        ceiling on what a node can send and keeps it listening while it serves.
+        """
         while self._order:
             name = self._order[0]
             if name == self._head_name and self._head_file is not None:
                 return self._head_file
-            payload = self._read(name)
-            if not payload:
+            reader = self._open(name)
+            if reader is None or len(reader) == 0:
                 # Unreadable or empty rather than absent: a card pulled mid-run, a corrupt
                 # entry, a zero-length file dropped in by hand. There is nothing to send,
                 # and left in place it would hold the front of the queue against every file
                 # behind it. It goes, loudly, and the next one is tried.
+                #
+                # The emptiness check is load-bearing beyond the stall it prevents:
+                # AlLoRa_File branches on the truthiness of its content, and an empty
+                # reader is falsy, so an empty file would come back as a *receiving* file
+                # and start laying down Temp folders on the sending side.
+                if reader is not None:
+                    reader.close()
                 print("Disk_DataSource: dropping unusable queued file", name)
                 self._forget(name)
                 continue
@@ -177,7 +195,7 @@ class Disk_DataSource(DataSource):
             # No chunk size: the folder knows the bytes and not the radio. The node stamps
             # its clamped value each time it installs this file, so an attempt made after a
             # retune is cut for the config it will actually go out on.
-            self._head_file = AlLoRa_File(name=name, content=bytearray(payload))
+            self._head_file = AlLoRa_File(name=name, content=reader)
             return self._head_file
         self.close()
         return None
@@ -193,8 +211,9 @@ class Disk_DataSource(DataSource):
         """
         name = self._head_name
         delivered = self._head_file
-        self._head_name = None
-        self._head_file = None
+        # The handle goes before the file does, and what is handed back is a receipt: its
+        # name and its delivery counters. Its bytes are on a file this call erases.
+        self._release_head()
         if name is None:
             # Confirmed without a peek. The base drains its head in that case, so this does
             # too rather than diverging on a shared contract.
@@ -210,12 +229,25 @@ class Disk_DataSource(DataSource):
         It hands the file over and erases it in one step, so a caller taking this path gets
         the old at-most-once behavior and none of the durability. The node's serve loop does
         not use it.
+
+        This is the one place the payload is still read whole. Handing back a file
+        positioned on flash and then deleting that flash would give the caller a reader over
+        bytes that are gone, so the contract this method exists to honour ("take it, it is
+        yours") is kept by materialising it. A v2 subclass calling this gets what it always
+        got, and pays what it always paid.
         """
         file = self.peek_file()
         if file is None:
             return None
+        name = file.get_name()
+        payload = self._read(name)
         self.confirm_file()
-        return file
+        if not payload:
+            # It was there for the peek and gone for the read. Nothing to hand over, and an
+            # empty content would come back as a *receiving* file rather than as no file.
+            print("Disk_DataSource: queued file vanished before it could be taken", name)
+            return None
+        return AlLoRa_File(name=name, content=bytearray(payload))
 
     # -- internals -------------------------------------------------------------------------
 
@@ -238,17 +270,28 @@ class Disk_DataSource(DataSource):
         return
 
     def _forget(self, name, save=True):
-        """Drop a file from both truths, the card first."""
+        """Drop a file from both truths, the card first.
+
+        The handle comes before either, when this is the file being served: an open reader
+        over a file that has just been deleted is defined behaviour on POSIX and not on
+        littlefs or FAT, and the node runs on those.
+        """
+        if name == self._head_name:
+            self._release_head()
         self._remove(name)
         try:
             self._order.remove(name)
         except ValueError:
             pass
-        if name == self._head_name:
-            self._head_name = None
-            self._head_file = None
         if save:
             self._save_index()
+
+    def _release_head(self):
+        """Let go of the head: close its handle and forget it. The queue entry stays."""
+        if self._head_file is not None:
+            self._head_file.release()
+        self._head_name = None
+        self._head_file = None
 
     def _reconcile(self):
         """Make the order agree with the card: forget what is gone, adopt what is new."""
@@ -291,7 +334,15 @@ class Disk_DataSource(DataSource):
         return set(n for n in self._listdir()
                    if n != INDEX_NAME and not n.startswith(".") and not n.endswith(".tmp"))
 
+    def _open(self, name):
+        """A reader positioned on a queued file, or None if it is not there to open."""
+        try:
+            return OnDemandFileReader(self.queue_path + "/" + name)
+        except OSError:
+            return None
+
     def _read(self, name):
+        """The whole payload. Only the legacy destructive pop still wants this."""
         try:
             with open(self.queue_path + "/" + name, "rb") as f:
                 return f.read()

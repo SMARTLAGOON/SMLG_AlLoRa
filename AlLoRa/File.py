@@ -32,6 +32,77 @@ class OnDemandFileWriter:
     def close(self):
         self.file.close()
 
+class OnDemandFileReader:
+    """The send-side mirror of OnDemandFileWriter: a file on flash, read where it is.
+
+    It answers slices the way a bytearray does, which is all `get_chunk` ever asks of the
+    content it holds, so a file can be served without its bytes ever being resident. The
+    alternative was reading the whole payload into RAM and handing it to a file object that
+    kept it too: two copies of the artifact, a ceiling on what a node could send, and a
+    window of seconds where a node loading a file could not hear the radio.
+
+    The trade is 0.85 ms per chunk against a round that is almost entirely radio wait, so
+    it is spent on the order of a tenth of a percent, in exchange for holding a few hundred
+    bytes instead of twice the file.
+
+    The length is read once. A queued file cannot change size underneath this: a name is
+    refused if it is already queued, and a file leaves the queue only when the peer
+    confirms it, at which point the reader is closed rather than reused.
+    """
+
+    def __init__(self, filename):
+        self.filename = filename
+        self.file = open(filename, 'rb')
+        self.closed = False
+        self.pos = 0
+        self.file.seek(0, 2)
+        self.length = self.file.tell()
+        self.file.seek(0)
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        if isinstance(index, int):
+            if index != self.pos:
+                self.file.seek(index)
+                self.pos = index
+            self.pos += 1
+            return self.file.read(1)[0]
+        # A slice, which is what get_chunk asks for. `indices` clamps a stop past the end
+        # of the file to the end, which is what makes the short final chunk come out at
+        # its real length instead of raising or over-reading. Verified on the target
+        # runtime rather than assumed: MicroPython 1.24.1 implements slice.indices().
+        # The step it hands back is dropped: a chunk is a contiguous run of bytes, and a
+        # strided read would be a caller asking for something this cannot answer.
+        start, stop, _ = index.indices(self.length)
+        if start != self.pos:
+            self.file.seek(start)
+            self.pos = start
+        self.pos = stop
+        return self.file.read(stop - start)
+
+    def read_all(self):
+        """The whole payload, for the one caller that asks for bytes rather than chunks.
+
+        Deliberately not cached: keeping the result would put the artifact back in RAM,
+        which is the thing this class exists to avoid.
+        """
+        self.file.seek(0)
+        self.pos = self.length
+        return self.file.read()
+
+    def close(self):
+        # Idempotent: the head can be let go by several paths (confirmed, evicted, the
+        # node shutting down) and they are not mutually exclusive.
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            self.file.close()
+        except Exception as e:
+            print("Error closing file: ", self.filename, ": ", e)
+
 class AlLoRa_File:
 
     def __init__(self, name: str = None, content: bytearray = None, chunk_size: int = None, length: int = None, total_len: int = None, report=False, path="Results"):
@@ -105,6 +176,13 @@ class AlLoRa_File:
             with open(self.temp_file_path, "rb") as f:
                 self.content = f.read()
             return self.content
+        # A file served straight off flash holds a reader, not bytes. This is the one verb
+        # that promises bytes, so it reads them, rather than letting the type of what comes
+        # back change under a caller. Nothing in the send path calls it (the radio asks for
+        # chunks), so the whole-file read is never paid in a deployment.
+        read_all = getattr(self.content, "read_all", None)
+        if read_all is not None:
+            return read_all()
         return self.content
 
     # collector-side methods
@@ -185,6 +263,21 @@ class AlLoRa_File:
             pass
 
     # source-side methods
+    def release(self):
+        """discard()'s counterpart on the send side: let go of whatever backs the content.
+
+        A file served off flash holds an open handle for as long as it is the head of the
+        queue, and a node serves thousands of files between reboots. Called by the boundary
+        that opened it, on every path the file can leave by, and before the file itself is
+        erased: removing a file out from under an open handle is defined on POSIX and not
+        on the filesystems an ESP32 is flashed with.
+        """
+        if self.assembly_needed:
+            return
+        close = getattr(self.content, "close", None)
+        if close is not None:
+            close()
+
     def reset_delivery(self):
         # One file object can be served more than once, re-queued after delivery,
         # or broadcast to several endpoints. Every new serve must start from an
