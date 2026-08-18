@@ -381,3 +381,38 @@ def test_signing_refuses_a_key_or_digest_it_cannot_use():
         ecdsa_sign(N, _SAMPLE_DIGEST)
     with pytest.raises(ValueError):
         ecdsa_sign(_RFC6979_PRIV, _SAMPLE_DIGEST[:31])
+
+
+def test_the_deterministic_nonce_does_not_go_through_the_hmac_module(monkeypatch):
+    # The signing path builds its RFC 6979 nonce from HMAC-SHA256, and it used to get that from
+    # MicroPython's pure-Python `hmac`, which costs 19.4 ms a call on the Edge against 1.1 ms for
+    # the package's own primitive. RFC 6979 makes several calls per signature and every one of
+    # them lands inside the handshake.
+    #
+    # Asserting the dependency is gone is the only check CI can make that would fail if the
+    # wrapper came back: on CPython `hmac` is a C extension and fast, so the published-vector
+    # test above would stay green either way. Same reasoning, and same shape, as the guard in
+    # tests/test_hmac_sha256.py.
+    import hmac
+
+    def _unavailable(*args, **kwargs):
+        raise AssertionError("ecdsa_sign must not build its nonce through the hmac module")
+
+    monkeypatch.setattr(hmac, "new", _unavailable)
+    assert ecdsa_sign(_RFC6979_PRIV, _SAMPLE_DIGEST) == _SAMPLE_SIG
+
+
+def test_the_nonce_hmac_still_agrees_with_the_standard_library():
+    # The vectors above already prove byte-identity end to end, but they exercise one key and two
+    # digests. This pins the primitive itself across the shapes RFC 6979 actually feeds it: a
+    # 32-byte key with 97-byte data on the first pass, and a 32-byte key with 33 on later ones.
+    import hashlib
+    import hmac
+
+    for klen in (1, 32, 64, 65, 100):
+        for dlen in (0, 1, 32, 33, 97, 200):
+            key = bytes((i * 7 + klen) % 256 for i in range(klen))
+            data = bytes((i * 3 + dlen) % 256 for i in range(dlen))
+            assert ec_p256._hmac_sha256(key, data) == \
+                hmac.new(key, data, hashlib.sha256).digest(), \
+                "nonce HMAC disagrees at key={} data={}".format(klen, dlen)

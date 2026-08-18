@@ -9,15 +9,19 @@ shared-secret computation) plus both halves of the control-root signature: verif
 by a field node on the rare downlink control artifact (config/OTA/model) and never on the
 per-frame hot path, and signing, run by whoever holds the root private key.
 
-The curve math is dependency-free; signing additionally needs ``hmac`` + ``hashlib`` for its
+The curve math is dependency-free; signing additionally needs HMAC + ``hashlib`` for its
 deterministic nonce, which the security layer already requires (the KDF and the AEAD are
-built on both, and secure mode refuses to start without them).
+built on both, and secure mode refuses to start without them). The HMAC comes from this
+package's own ``hmac_sha256`` rather than from the ``hmac`` module: MicroPython's is pure
+Python and costs 19.4 ms a call on the Edge against 1.1 ms, and RFC 6979 makes several calls
+per signature, all of them inside the handshake.
 
 Public keys are always validated to be real points on the curve before use. Accepting an
 off-curve point is a classic invalid-key attack that can leak the private scalar.
 """
-import hmac
 import hashlib
+
+from AlLoRa.Security.hmac_sha256 import hmac_sha256
 
 # secp256r1 domain parameters.
 P  = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
@@ -314,7 +318,9 @@ def ecdsa_verify(public_key, digest, signature):
 
 
 def _hmac_sha256(key, data):
-    return hmac.new(bytes(key), bytes(data), hashlib.sha256).digest()
+    # Same bytes as hmac.new(key, data, sha256).digest(), which is what RFC 6979 requires and
+    # what the vectors pin; the difference is only that this one is not the pure-Python module.
+    return hmac_sha256(bytes(key), bytes(data))
 
 
 def ecdsa_sign(priv_d, digest):
