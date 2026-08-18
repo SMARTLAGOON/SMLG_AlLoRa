@@ -122,7 +122,12 @@ class BOARD_ESP32S3(BOARD):
         self.dio0_pin.detach_irq_trigger()
         chanel = None
         timer = value * 1000
-        while timer != 0:
+        # `> 0`, not `!= 0`: the counter is a float, and the quantisation above leaves about 1%
+        # of windows at a value that is not exactly whole. Decrementing by 1 then steps straight
+        # past zero without ever landing on it, and the loop runs forever. The only other way out
+        # is a packet arriving on DIO0, so a busy link hides it completely and a link that has
+        # gone quiet wedges the node until someone power-cycles it.
+        while timer > 0:
             if self.dio0_pin.value() == 1:
                 chanel = 1
                 break
