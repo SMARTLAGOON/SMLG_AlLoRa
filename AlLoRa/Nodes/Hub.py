@@ -260,7 +260,8 @@ class Hub(Node):
                 digital_endpoint.get_name(), digital_endpoint.get_label(),
                 digital_endpoint.listening_time))
         self.listen_to_endpoint(digital_endpoint, digital_endpoint.listening_time,
-                                print_file=print_file_content, save_file=save_files)
+                                print_file=print_file_content, save_file=save_files,
+                                stall_timeout=digital_endpoint.stall_timeout)
         self.update_subscribers(digital_endpoint)
 
         # A locked endpoint caught mid-file gets one extra window now, rather than holding
@@ -275,7 +276,8 @@ class Hub(Node):
                 digital_endpoint.get_name(), digital_endpoint.get_label(),
                 digital_endpoint.max_listen_time_when_locked))
         self.listen_to_endpoint(digital_endpoint, digital_endpoint.max_listen_time_when_locked,
-                                print_file=print_file_content, save_file=save_files)
+                                print_file=print_file_content, save_file=save_files,
+                                stall_timeout=digital_endpoint.stall_timeout)
         self.update_subscribers(digital_endpoint)
 
     def set_downlink_source(self, digital_endpoint, datasource):

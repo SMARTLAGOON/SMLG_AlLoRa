@@ -19,13 +19,25 @@ from AlLoRa.utils.debug_utils import print
 class Edge(Node):
 
     def __init__(self, connector=None, config_file="LoRa.json", data_sink=None,
-                 datasource=None, control_actuator=None, downlink_window=60):
+                 datasource=None, control_actuator=None, downlink_window=None,
+                 downlink_stall_timeout=None):
         super().__init__(connector, config_file, data_sink=data_sink,
                          datasource=datasource, control_actuator=control_actuator,
                          home_role="source")
-        # How long a granted pull may drive before the Edge gives up and comes home (its
-        # own backstop, independent of the Hub's reclaim timer).
-        self.downlink_window = downlink_window
+        # Two limits on a granted pull, and only the second one should ever end a healthy
+        # transfer. Both read from LoRa.json like every other tunable, with the constructor
+        # argument as the override, because a deployment configures a node through its file.
+        #
+        # downlink_window is the ceiling on the whole pull. It exists so a pull always ends,
+        # and it is deliberately generous: sizing it against the artifact is what made a 1 MiB
+        # downlink impossible to complete without knowing its transfer time in advance.
+        #
+        # downlink_stall_timeout is the one that does the work. It ends a pull that has stopped
+        # advancing, so an Edge whose Hub died still comes home and serves its own data again.
+        self.downlink_window = downlink_window if downlink_window is not None \
+            else self.config.get('downlink_window', 7200)
+        self.downlink_stall_timeout = downlink_stall_timeout if downlink_stall_timeout is not None \
+            else self.config.get('downlink_stall_timeout', 60)
         self._grant_pending = None
         self._last_swap_id = None
 
@@ -86,7 +98,8 @@ class Edge(Node):
         delivered = False
         try:
             delivered = self.listen_to_endpoint(endpoint, listening_time=self.downlink_window,
-                                                save_file=True, one_file=True)
+                                                save_file=True, one_file=True,
+                                                stall_timeout=self.downlink_stall_timeout)
             return delivered
         finally:
             self.current_role = "source"

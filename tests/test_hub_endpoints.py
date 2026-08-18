@@ -86,7 +86,7 @@ def clock(monkeypatch):
 def _record_visits(hub, clock, visits, on_visit=None):
     """Stand in for the radio: log the visit, burn the listening window on the fake clock."""
     def listen(digital_endpoint, listening_time=None, print_file=False, save_file=False,
-               one_file=False):
+               one_file=False, stall_timeout=None):
         visits.append((digital_endpoint.get_name(), listening_time))
         clock.advance_ms((listening_time or 0) * 1000)
         if on_visit is not None:

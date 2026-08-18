@@ -67,7 +67,7 @@ class Digital_Endpoint:
     def __init__(self, config=None, name="N", mac_address=NO_ADDRESS, active=True,
                  sleep_mesh=True, asking_frequency=60, listening_time=30,
                  MAX_RETRANSMISSIONS_BEFORE_MESH=10, lock_on_file_receive=False,
-                 max_listen_time_when_locked=300,
+                 max_listen_time_when_locked=300, stall_timeout=60,
                  session_id=None,
                  device_id=None,
                  debug=False):
@@ -100,6 +100,10 @@ class Digital_Endpoint:
             self.MAX_RETRANSMISSIONS_BEFORE_MESH = config.get('MAX_RETRANSMISSIONS_BEFORE_MESH', MAX_RETRANSMISSIONS_BEFORE_MESH)
             self.lock_on_file_receive = config.get('lock_on_file_receive', lock_on_file_receive)
             self.max_listen_time_when_locked = config.get('max_listen_time_when_locked', max_listen_time_when_locked)
+            # How long a collection may go without the chunk index advancing before this node
+            # stops driving. The two above are ceilings on a whole visit; this one is the only
+            # limit that can tell a transfer that stopped from one that is merely long.
+            self.stall_timeout = config.get('stall_timeout', stall_timeout)
             self._read_rf(config)
             explicit_sid = config.get('session_id', session_id)
             raw_device_id = config.get('device_id', device_id)
@@ -113,6 +117,7 @@ class Digital_Endpoint:
             self.MAX_RETRANSMISSIONS_BEFORE_MESH = MAX_RETRANSMISSIONS_BEFORE_MESH
             self.lock_on_file_receive = lock_on_file_receive
             self.max_listen_time_when_locked = max_listen_time_when_locked
+            self.stall_timeout = stall_timeout
             self._read_rf(None)
             explicit_sid = session_id
             raw_device_id = device_id

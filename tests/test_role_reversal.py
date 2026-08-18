@@ -113,14 +113,14 @@ def _write_config(path, result_path, session_id):
         json.dump(config, f)
 
 
-def _make_pair(tmp_path, edge_conn, hub_conn, edge_sink=None, **hub_kwargs):
+def _make_pair(tmp_path, edge_conn, hub_conn, edge_sink=None, edge_kwargs=None, **hub_kwargs):
     edge_config = str(tmp_path / "edge.json")
     hub_config = str(tmp_path / "hub.json")
     _write_config(edge_config, str(tmp_path / "edge_results"), SESSION_ID)
     _write_config(hub_config, str(tmp_path / "hub_results"), HUB_OWN_SID)
 
     sink = edge_sink if edge_sink is not None else Capture_sink()
-    edge = Edge(edge_conn, config_file=edge_config, data_sink=sink)
+    edge = Edge(edge_conn, config_file=edge_config, data_sink=sink, **(edge_kwargs or {}))
     hub = Hub(hub_conn, config_file=hub_config, **hub_kwargs)
     endpoint = Digital_Endpoint(name="edge", mac_address=EDGE_MAC,
                                 active=True, session_id=SESSION_ID)
@@ -689,3 +689,96 @@ def test_uplink_still_normal_after_downlink_reversal(tmp_path):
     assert hub.current_role == "collector"
     assert edge.current_role == "source"
     assert not hub.downlink_pending(endpoint)
+
+
+# --- the pull's two deadlines ------------------------------------------------
+#
+# A granted pull carries a ceiling on the whole drive and a stall timeout that ends it once
+# it stops advancing. Only the second one should ever end a healthy transfer. Sizing the
+# ceiling against the artifact is what made a 1 MiB downlink impossible to finish without
+# knowing its transfer time first: on 2026-08-18 an open pull stopped at chunk 3518 of 4212 on
+# a 2400 s ceiling and a sealed one at 4180 of 4246 on a 3000 s ceiling, each to the second,
+# with every chunk still arriving at full signal.
+
+class Slow_loopback(Loopback_connector):
+    """A loopback that takes its time, so a transfer can outlive a short stall timeout while
+    still advancing the whole way."""
+
+    per_frame_s = 0.02
+
+    def transmit(self, wire):
+        time.sleep(self.per_frame_s)
+        return super().transmit(wire)
+
+
+def test_progress_keeps_a_pull_alive_past_its_stall_timeout(tmp_path):
+    payload = bytes((i * 3) % 256 for i in range(1000))   # 5 chunks at 243
+    a_to_b, b_to_a = queue.Queue(), queue.Queue()
+    edge_conn = Slow_loopback(EDGE_MAC, inbox=b_to_a, outbox=a_to_b)
+    hub_conn = Slow_loopback(HUB_MAC, inbox=a_to_b, outbox=b_to_a)
+    # The stall timeout is far below the whole transfer and comfortably above one chunk. The
+    # pull may only survive by resetting the deadline as the chunk index advances.
+    edge, hub, endpoint, sink = _make_pair(
+        tmp_path, edge_conn, hub_conn,
+        edge_kwargs={"downlink_window": 30, "downlink_stall_timeout": 0.4},
+        reclaim_timeout=8)
+
+    hub.queue_downlink(endpoint, AlLoRa_File(name="model.bin",
+                                             content=bytearray(payload),
+                                             chunk_size=hub.get_chunk_size()))
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 25},
+                              name="edge-serve", daemon=True)
+    server.start()
+    started = time.monotonic()
+    hub.listen_to_endpoint(endpoint, listening_time=20, save_file=True)
+    server.join(timeout=20)
+    elapsed = time.monotonic() - started
+
+    assert [(n, c) for n, c, _ in sink.received] == [("model.bin", payload)]
+    assert elapsed > 0.4, "the transfer was too quick to prove the deadline ever reset"
+    assert edge.current_role == "source"
+
+
+def test_a_stalled_pull_comes_home_on_the_stall_timeout_not_the_ceiling(tmp_path):
+    payload = bytes(i % 256 for i in range(1000))
+    edge_conn, hub_conn = _make_filtered_pair()
+    # The ceiling and the Hub's reclaim are both far away, so whichever ends the pull is
+    # unambiguous: only the stall timeout can end it inside a couple of seconds.
+    edge, hub, endpoint, sink = _make_pair(
+        tmp_path, edge_conn, hub_conn,
+        edge_kwargs={"downlink_window": 30, "downlink_stall_timeout": 1},
+        reclaim_timeout=20)
+
+    pulls = []
+    original_pull = edge._pull_downlink
+
+    def timed_pull():
+        started = time.monotonic()
+        try:
+            return original_pull()
+        finally:
+            pulls.append(time.monotonic() - started)
+
+    edge._pull_downlink = timed_pull
+
+    hub.queue_downlink(endpoint, AlLoRa_File(name="model.bin",
+                                             content=bytearray(payload),
+                                             chunk_size=hub.get_chunk_size()))
+    # Every pull request from the Edge is eaten after METADATA, so the pull starts cleanly and
+    # then stops advancing: the Edge asks for the same chunk forever and the index never moves.
+    # Asking again is not progress, which is the rule the RF trial already applies to a held
+    # configuration.
+    edge_conn.drop_kind(CHUNK_KIND, count=-1)
+
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 30},
+                              name="edge-serve", daemon=True)
+    server.start()
+    hub.listen_to_endpoint(endpoint, listening_time=25, save_file=True)
+    server.join(timeout=35)
+
+    assert pulls, "the Edge never started a pull, so nothing was under test"
+    assert not sink.received
+    # The point of the whole change: it gave up on the stall timeout, nowhere near the ceiling.
+    assert pulls[0] < 10, \
+        "the pull ran {:.1f}s, which is the ceiling or the reclaim, not the stall".format(pulls[0])
+    assert edge.current_role == "source"

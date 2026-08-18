@@ -1628,7 +1628,8 @@ class Node:
         digital_endpoint.state = Digital_Endpoint.REQUEST_DATA_STATE
 
     def listen_to_endpoint(self, digital_endpoint: Digital_Endpoint, listening_time=None,
-                       print_file=False, save_file=False, one_file=False):
+                       print_file=False, save_file=False, one_file=False,
+                       stall_timeout=None):
         stop = False
 
         self._prepare_drive()
@@ -1679,13 +1680,39 @@ class Node:
         else:
             end_time = ticks_add(t0, listening_time * 1000)
 
+        # Two deadlines, measuring different things, because one cannot do both jobs.
+        #
+        # `listening_time` is a ceiling on the whole drive. It is what a caller polling for 60 s
+        # means, and it must keep meaning that: a peer that answers every poll would otherwise
+        # hold an idle poll open forever.
+        #
+        # `stall_timeout` is the one that ends a drive that has stopped getting anywhere. It
+        # resets on PROGRESS, not on traffic: a chunk index later than the last one asked for.
+        # Answering is not progress. The same chunk requested over and over must still end the
+        # drive, which is the rule the RF trial already applies to a held configuration.
+        #
+        # Adding it can only make this method return earlier than before, never later, so no
+        # existing caller can hang longer than it does today.
+        #
+        # Before this existed, `listening_time` was doing both jobs and could do neither well.
+        # A 1 MiB downlink needs about 3000 s, so the ceiling had to be set above the transfer
+        # time by whoever configured it. Set too low it cut a healthy pull mid-flight, with
+        # every chunk still arriving at full signal, and the pull restarted from chunk 0.
+        # Measured on 2026-08-18: open stopped at chunk 3518 of 4212 on a 2400 s ceiling and
+        # secure at 4180 of 4246 on a 3000 s one, each to the second.
+        stall_deadline = None
+        if stall_timeout is not None and stall_timeout != float('inf'):
+            stall_deadline = ticks_add(time(), int(stall_timeout * 1000))
+        last_progress = -1
+
         # RF-config probe bookkeeping for this visit: did we hear the peer at all (locate), and
         # did a full uplink file complete (commit)? Consumed by _probe_visit_end at visit end.
         probe_heard = False
         probe_completed = False
         self._peer_alive_this_visit = False
 
-        while end_time is None or ticks_diff(end_time, time()) > 0:
+        while (end_time is None or ticks_diff(end_time, time()) > 0) and \
+                (stall_deadline is None or ticks_diff(stall_deadline, time()) > 0):
             t0 = time()
             delegated = False
 
@@ -1721,6 +1748,13 @@ class Node:
                 elif digital_endpoint.state == "PROCESS_CHUNK_STATE":
                     next_chunk = digital_endpoint.get_next_chunk()
                     if next_chunk is not None:
+                        # Progress, and the only thing that resets the stall deadline. The index
+                        # the collector wants next only advances once the previous chunk is in
+                        # the reassembly, so this is the collector's own evidence that the
+                        # transfer is moving, not merely that the peer is talking.
+                        if stall_deadline is not None and next_chunk > last_progress:
+                            last_progress = next_chunk
+                            stall_deadline = ticks_add(time(), int(stall_timeout * 1000))
                         if self.debug:
                             print("ASKING CHUNK: {} to {}".format(next_chunk, label))
                         data, hop = self.ask_data(packet_request, next_chunk)
