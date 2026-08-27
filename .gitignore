@@ -17,3 +17,15 @@ examples/**/*.log
 **/control_root.key
 **/identity.key
 **/control.counter
+
+# The wizard's fleet directory (tools/provision.py, default ./allora-fleet). Its backups hold a
+# board's identity scalar under its own name, which the bare `identity.key` pattern above does
+# not match, and a fleet is one operator's deployment state rather than anything this library
+# ships. The whole directory stays out.
+allora-fleet/
+**/*.identity.key
+
+# CI firmware artifacts downloaded for a bench session (`gh run download`). Re-downloadable
+# from the workflow run the session's notes cite, so they are not history, and each is close
+# to two megabytes.
+firmware/_dl_*/
