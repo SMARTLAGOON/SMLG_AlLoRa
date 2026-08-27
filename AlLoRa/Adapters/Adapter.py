@@ -15,8 +15,11 @@ holds a Status so a bridge board can still drive a screen or a logger, which nee
 Two ways in, because a bridge is used two ways:
 
   * `Adapter(radio, link=link)` wires the two halves directly. Nothing is read from disk.
-  * `Serial_adapter(radio)` / `WiFi_adapter(radio)` boot from a config file: they configure
-    the radio from its `connector` block and build their own Link from the `adapter` block.
+  * `Serial_adapter(radio)` / `WiFi_adapter(radio)` / `USB_adapter(radio)` boot from a config
+    file: they configure the radio from its `connector` block and build their own Link from the
+    `adapter` block. `USB_adapter` is the one for a board reached over its own USB socket, and
+    it is also the one that cannot print: its console is the link, so it redirects the library's
+    debug output before it boots.
 """
 import gc
 

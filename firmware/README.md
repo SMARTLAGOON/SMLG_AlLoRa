@@ -208,3 +208,28 @@ allowed to resume, and that is the behaviour the first run must not have broken.
 A collector on an older build re-asks the same chunk index and reads the METADATA as no reply, so
 it stalls until its visit expires instead of saving a spliced file. A wasted visit rather than a
 corrupt one.
+
+**A board can now be a modem over its own USB socket, and a bridge no longer prints onto the
+wire.** Both only reach a device on a rebuild, and the USB tunnel needs the new `.bin` before
+its example will even import.
+
+`AlLoRa/Adapters/USB_adapter.py` is a module a board flashed before this freeze simply does not
+have. It is the Adapter for a board reached over native USB, where there is no `machine.UART`
+behind the socket and the console itself is the link. `Serial_link` gains the port that wraps
+that console, `bridge_usb()`, and the host end is unchanged: a CDC board is an ordinary serial
+device, so `Serial_connector` opens it the same way it opens a GPIO tunnel.
+
+Two fixes ride along in shared code, so they reach the pin rig too. The frame reader now drops
+whatever the medium injected ahead of a frame, because the sentinel says where a frame ends and
+never where it starts, and boot chatter is printable enough to survive the text filter and reach
+the JSON parser. And the library's debug output can be moved off stdout in one call, which is
+what keeps a bridge's own logging, the radio Connector's most of all, from landing inside a
+frame. On a UART both were rare; on a console that is also the wire the first happens on every
+reset.
+
+On a board this is the part worth testing, and the runsheet is the cockpit's. Confirm a transfer
+completes over one USB cable with no jumpers, that `preamble_dropped` stops climbing once the
+session is up rather than growing with every frame, and that resetting the bridge mid-session
+costs one retry rather than the session. Nothing may be attached to the bridge board's console
+while any of that runs: an `mpremote` or a `screen` on that port eats the bytes the host is
+waiting for.
