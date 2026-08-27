@@ -1,0 +1,17 @@
+{
+    "name": "U",
+    "chunk_size": 235,
+    "mesh_mode": false,
+    "debug": false,
+
+    "connector": {
+      "sf": 7,
+      "freq": 868,
+      "min_timeout": 0.5,
+      "max_timeout": 12
+      },
+
+    "adapter": {
+        "log": "off"
+    }
+  }
