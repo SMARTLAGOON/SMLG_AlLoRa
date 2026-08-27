@@ -99,8 +99,17 @@ handshake. Known traps the frozen library must avoid (all fixed, listed so they 
   Reading it as bytes also keeps every digit a small integer rather than allocating a fresh
   256-bit one per step. (`AlLoRa/Security/ec_p256.py`)
 
+- **`del buf[:n]`** — slice deletion exists on CPython and not on MicroPython, which raises
+  `TypeError: 'bytearray' object doesn't support item deletion`. Rebuild the tail instead
+  (`buf = self._buf = bytearray(buf[n:])`). Deleting a dict *key* is fine and is used on-device;
+  only the slice form is missing. This one sat in the tunnel's frame reader rather than the
+  secure path, so the whole list above looked green while the first frame ever to reach a bridge
+  board raised. (`AlLoRa/Links/Serial_link.py`)
+
 `tests/test_micropython_portability.py` scans the frozen secure path for these names so CI, not
-the ESP32, is what fails when a new one creeps in.
+the ESP32, is what fails when a new one creeps in. It also walks the **whole** frozen tree for
+slice deletion, which no curated secure-path list would have covered: a bridge board freezes and
+runs the link and adapter layers too, and those had never run on hardware until the USB rig.
 
 Rule of thumb: after any change to the secure path, don't trust CI alone: flash and confirm the
 Edge boots **without** the `secure mode … running open (degraded): …` line, whose suffix now

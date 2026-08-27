@@ -95,3 +95,63 @@ def test_the_lint_actually_catches_a_violation(tmp_path):
     bad.write_text("n = (5).bit_length()\n")
     assert "bit_length" not in _code_names(str(good))
     assert "bit_length" in _code_names(str(bad))
+
+
+# --- Syntax MicroPython does not accept, as opposed to names it does not provide -------------
+#
+# The scan above is token-based, so it can only see NAMES. `del buf[:n]` is a construct, not a
+# name, and it needs the AST. It is checked across the WHOLE frozen tree rather than a curated
+# list because a bridge board freezes and runs the link and adapter layers too, which the secure
+# list above never covered: the USB tunnel's first frame on real hardware raised
+# `TypeError: 'bytearray' object doesn't support item deletion` from Serial_link._read_frame,
+# having passed every CPython test in the suite.
+#
+# Deleting a KEY (`del entry[field]` on a dict) is fine and is used on the device today. Only
+# slice deletion is absent, so only that is flagged.
+import ast
+
+
+def _slice_deletions(path):
+    """Report `del x[a:b]` sites in a file. Slice deletion works on CPython lists/bytearrays and
+    does not exist on MicroPython."""
+    with open(path, "rb") as f:
+        tree = ast.parse(f.read())
+    hits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Delete):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Slice):
+                hits.append(node.lineno)
+    return hits
+
+
+def _frozen_tree_files():
+    root = os.path.join(_REPO, "AlLoRa")
+    for dirpath, _dirnames, filenames in os.walk(root):
+        if "__pycache__" in dirpath:
+            continue
+        for name in sorted(filenames):
+            if name.endswith(".py"):
+                yield os.path.relpath(os.path.join(dirpath, name), _REPO)
+
+
+def test_frozen_tree_has_no_slice_deletion():
+    offenders = []
+    for rel in _frozen_tree_files():
+        for line in _slice_deletions(os.path.join(_REPO, rel)):
+            offenders.append("{}:{}".format(rel, line))
+    assert not offenders, (
+        "slice deletion is absent on MicroPython (rebuild the tail instead):\n  "
+        + "\n  ".join(offenders))
+
+
+def test_the_slice_deletion_lint_catches_a_violation(tmp_path):
+    # Guard the guard, and pin the dict-key case as explicitly allowed.
+    bad = tmp_path / "bad.py"
+    bad.write_text("def f(buf):\n    del buf[:4]\n")
+    assert _slice_deletions(str(bad)) == [2]
+
+    ok = tmp_path / "ok.py"
+    ok.write_text("def f(entry, field):\n    del entry[field]\n")
+    assert _slice_deletions(str(ok)) == []

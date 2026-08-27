@@ -191,3 +191,30 @@ def test_full_v3_transfer_over_serial_link(tmp_path):
     received = tmp_path / "Results" / SOURCE_MAC / "serial.bin"
     assert received.exists(), "collector never saved the file at {}".format(received)
     assert received.read_bytes() == payload, "tunneled v3 transfer over Serial_link did not reassemble"
+
+
+class _MicroPythonBytearray(bytearray):
+    """A bytearray with slice deletion removed, the way MicroPython ships it.
+
+    CPython's bytearray supports `del buf[:n]`; MicroPython's does not, and raises
+    `TypeError: 'bytearray' object doesn't support item deletion`. Every off-device test
+    passed against the CPython behaviour while the first frame ever to reach a real bridge
+    raised, so the constraint is asserted here rather than left to a board to discover.
+    """
+
+    def __delitem__(self, key):
+        raise TypeError("'bytearray' object doesn't support item deletion")
+
+
+def test_read_frame_consumes_without_slice_deletion():
+    # The buffer is swapped for one that refuses `del`, so any reintroduction of in-place
+    # trimming fails here instead of on hardware.
+    client, bridge = _serial_pair()
+    bridge._buf = _MicroPythonBytearray(bridge._buf)
+    client._port.write(b"AAA" + Serial_link.SENTINEL + b"BBBB" + Serial_link.SENTINEL + b"CC")
+
+    assert bridge.read_request(timeout=1) == b"AAA"
+    assert bridge.read_request(timeout=1) == b"BBBB"
+    # The partial third frame must survive the consume, not be dropped with the buffer.
+    assert bridge.read_request(timeout=0.2) is None
+    assert bytes(bridge._buf) == b"CC"

@@ -188,7 +188,13 @@ class Serial_link(Link):
             idx = buf.find(s)
             if idx >= 0:
                 frame = bytes(buf[:idx])
-                del buf[:idx + len(s)]
+                # Rebuild the tail rather than trimming it in place: MicroPython's bytearray
+                # has no slice deletion, and `del buf[:n]` raises TypeError on a board. CPython
+                # accepts it, which is how every off-device test passed while the first frame
+                # ever to reach a bridge raised. Same reasoning as the `find`-over-`rfind`
+                # choice in _resync below: a call the device cannot make fails on every frame,
+                # so the tunnel does not work at all and only a board would say so.
+                buf = self._buf = bytearray(buf[idx + len(s):])
                 return self._resync(frame)
             if deadline is not None and _now_ms() >= deadline:
                 return None
