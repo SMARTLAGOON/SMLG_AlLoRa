@@ -141,6 +141,81 @@ def test_verify_drives_the_radio_the_boards_were_provisioned_with(tmp_path):
     assert "SX127x_connector" not in staged.read_text()
 
 
+# --- the same boards, provisioned twice ---------------------------------------------------
+
+def test_reflashing_a_board_does_not_leave_the_hub_polling_a_phantom(tmp_path):
+    """`erase_flash` takes `identity.key` with it, so the board comes back holding a fingerprint
+    the registry has never seen. Keyed on identity alone, that appended a second entry for a
+    board that already had one, and the Hub booted holding two endpoints for one Edge: it spent
+    a listening window every cycle on the one that could not answer. On the bench that took the
+    transfer from 1000 bytes to 0, so this is a dead deployment and not an untidy file."""
+    wire = FakeWire()
+    fleet_dir = tmp_path / "fleet"
+    assert _json_run(["edge", "--port", EDGE_PORT], wire, fleet_dir)[0] == 0
+    assert _json_run(["hub", "--port", HUB_PORT], wire, fleet_dir)[0] == 0
+
+    # The flash. Same board, same port, same name, an identity it minted on first boot.
+    reflashed = "beef0001" + "33" * 28
+    wire.identities[EDGE_PORT] = reflashed
+    assert _json_run(["edge", "--port", EDGE_PORT], wire, fleet_dir)[0] == 0
+    assert _json_run(["hub", "--port", HUB_PORT], wire, fleet_dir)[0] == 0
+
+    roster = json.loads(wire.on(HUB_PORT, "Nodes.json"))
+    assert len(roster) == 1, "one board is one endpoint, however many times it was flashed"
+    assert roster[0]["device_id"] == reflashed, \
+        "the Hub has to poll the identity the board actually holds now"
+
+
+def test_a_displaced_fingerprint_is_reported_because_only_a_person_can_read_it(tmp_path):
+    """A second board given the first one's name is indistinguishable from the first one
+    reflashed. The tool takes the reading that keeps a deployment alive and says what it did."""
+    wire = FakeWire()
+    fleet_dir = tmp_path / "fleet"
+    assert _json_run(["edge", "--port", EDGE_PORT], wire, fleet_dir)[0] == 0
+    wire.identities[EDGE_PORT] = "beef0001" + "33" * 28
+    code, doc = _json_run(["edge", "--port", EDGE_PORT], wire, fleet_dir)
+    assert code == 0
+    warning = " ".join(doc["warnings"])
+    assert "d909f4eb" in warning and "beef0001" in warning
+    assert "different names" in warning
+
+
+def test_the_hub_verifies_the_edge_in_front_of_the_operator(tmp_path):
+    """The Hub half used to check `digital_endpoints[0]`, the oldest entry in the roster. On a
+    Hub that legitimately holds several Edges that is a proof step aimed at whichever one was
+    registered first, so it can report a pass for a node nobody asked about."""
+    wire = FakeWire()
+    fleet_dir = tmp_path / "fleet"
+    assert _json_run(["edge", "--port", EDGE_PORT], wire, fleet_dir)[0] == 0
+    assert _json_run(["hub", "--port", HUB_PORT], wire, fleet_dir)[0] == 0
+
+    _run(["verify", "--edge-port", EDGE_PORT, "--hub-port", HUB_PORT], wire, fleet_dir)
+
+    registered = [e for e in json.loads((fleet_dir / "fleet.json").read_text())
+                  if e["role"] == "edge"][0]
+    staged = (fleet_dir / "staging" / "verify" / "verify_hub.py").read_text()
+    assert "wanted_id = {}".format(json.dumps(registered["device_id"])) in staged
+    assert "wanted_name = {}".format(json.dumps(registered["name"])) in staged
+
+
+def test_an_open_edge_is_verified_by_name_because_it_has_no_fingerprint(tmp_path):
+    """The fingerprint is the better key and the reason a roster carrying a rotated identity
+    beside the live one still resolves. An open node has none, so the name has to carry it."""
+    wire = FakeWire()
+    fleet_dir = tmp_path / "fleet"
+    assert _json_run(["edge", "--port", EDGE_PORT, "--posture", "open", "--session-id", "42"],
+                     wire, fleet_dir)[0] == 0
+    assert _json_run(["hub", "--port", HUB_PORT, "--posture", "open", "--session-id", "42"],
+                     wire, fleet_dir)[0] == 0
+
+    _run(["verify", "--edge-port", EDGE_PORT, "--hub-port", HUB_PORT, "--posture", "open"],
+         wire, fleet_dir)
+
+    staged = (fleet_dir / "staging" / "verify" / "verify_hub.py").read_text()
+    assert 'wanted_id = ""' in staged
+    assert "wanted_name = {}".format(json.dumps("S")) in staged
+
+
 def test_an_edge_is_left_with_something_to_send(tmp_path):
     """An Edge serves the files in its outbound folder and waits quietly when there are none, so
     a deployment provisioned with an empty queue is correct and silent, which at the antenna is

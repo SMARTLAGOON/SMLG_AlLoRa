@@ -43,7 +43,8 @@ RADIOS = {
 
 
 def render_template(name, radio="sx127x", window=120,
-                    payload_len=PAYLOAD_LEN, payload_name=PAYLOAD_NAME):
+                    payload_len=PAYLOAD_LEN, payload_name=PAYLOAD_NAME, edge_name="",
+                    edge_device_id=""):
     """A board-side script with its radio and its bounds filled in.
 
     Token substitution rather than `str.format`, because the templates are Python and Python is
@@ -59,7 +60,12 @@ def render_template(name, radio="sx127x", window=120,
                          ("__RADIO_CLASS__", connector),
                          ("__WINDOW__", str(window)),
                          ("__PAYLOAD_LEN__", str(payload_len)),
-                         ("__PAYLOAD_NAME__", payload_name)):
+                         ("__PAYLOAD_NAME__", payload_name),
+                         # A whole literal rather than the text between two quotes: a node is
+                         # named by a free-text `--name`, and one apostrophe in it would
+                         # otherwise push a syntax error onto the board.
+                         ("__EDGE_NAME__", json.dumps(edge_name)),
+                         ("__EDGE_DEVICE_ID__", json.dumps(edge_device_id))):
         text = text.replace(token, value)
     return text
 
@@ -315,7 +321,7 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
     entry = fleet.register(name=config["name"], role="edge",
                            device_id=device_id, posture=posture,
                            session_id=config.get("session_id"),
-                           port=board.port, radio=radio,
+                           port=board.port, radio=radio, on_notice=result.warn,
                            connector={k: config["connector"][k]
                                       for k in ("freq", "sf", "bandwidth", "coding_rate",
                                                 "tx_power")})
@@ -403,7 +409,7 @@ def provision_hub(board, fleet, result, posture="secure", firmware=None, name=No
 
     entry = fleet.register(name=config["name"], role="hub", device_id=device_id,
                            posture=posture, port=board.port, radio=radio,
-                           on_site_root=on_site_root)
+                           on_site_root=on_site_root, on_notice=result.warn)
     result.step("registered", "{} in {}".format(entry["name"], fleet.registry_path))
 
     # Restart into what was just pushed. Without this the board is provisioned on disk and
@@ -455,8 +461,18 @@ def verify_pair(edge_board, hub_board, fleet, result, posture="secure", radio="s
 
     edge_script = _stage(fleet, "verify", "verify_edge.py",
                          render_template("verify_edge.py", radio=edge_radio, window=window))
+    # Which Edge the Hub half checks. Without this it takes `digital_endpoints[0]`, the oldest
+    # entry in the roster, so on a Hub holding more than one Edge the proof step reports on a
+    # node nobody asked about, and on a roster still carrying a stale entry it reported on the
+    # dead one by construction rather than by luck.
+    edge_entry = _registered_edge(fleet, "edge", edge_board)
+    if edge_entry is None:
+        result.warn("this fleet has no registry entry for the Edge on {}, so the Hub will "
+                    "verify against the first node in its roster.".format(edge_board.port))
     hub_script = _stage(fleet, "verify", "verify_hub.py",
-                        render_template("verify_hub.py", radio=hub_radio, window=window))
+                        render_template("verify_hub.py", radio=hub_radio, window=window,
+                                        edge_name=(edge_entry or {}).get("name", ""),
+                                        edge_device_id=(edge_entry or {}).get("device_id", "")))
 
     outputs = {}
 
@@ -506,6 +522,22 @@ def verify_pair(edge_board, hub_board, fleet, result, posture="secure", radio="s
     if failed:
         result.fail("verification failed: " + ", ".join(failed))
     return result
+
+
+def _registered_edge(fleet, role, board):
+    """This fleet's entry for the board on this port, or None if it registered none.
+
+    By port rather than by position, because the point is to find the board physically in front
+    of the operator. A fleet this machine did not provision has no entry, and None says so: the
+    caller falls back to whatever the roster leads with rather than aiming at a node picked by
+    a rule that was never true.
+    """
+    try:
+        entries = [e for e in fleet.entries()
+                   if e.get("role") == role and e.get("port") == board.port]
+    except Exception:
+        return None
+    return entries[-1] if entries else None
 
 
 def _registered_radio(fleet, role, fallback, result):

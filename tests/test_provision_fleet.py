@@ -156,6 +156,146 @@ def test_registering_the_same_device_id_twice_updates_rather_than_duplicates(tmp
     assert entries[0]["posture"] == "control"
 
 
+# --- the same board coming back ----------------------------------------------------------
+#
+# A fingerprint is not durable and this toolkit is what rotates it: `erase_flash` takes
+# `identity.key` with it, and provisioning a node to open posture leaves it with none at all.
+# Keying the registry on identity alone appended a second entry for a board that already had
+# one, and the Hub then polls a node that cannot answer. On the bench that took a transfer from
+# 1000 bytes to 0, so every case below is a deployment failure, not an untidy file.
+
+def test_a_reflashed_board_updates_its_entry_rather_than_leaving_a_phantom(tmp_path):
+    """The flash mints a new device_id. Same role, same name, same board: one node."""
+    fleet = _fleet(tmp_path)
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure", port="/dev/A")
+    fleet.register(name="S", role="edge", device_id=OTHER_DEVICE_ID, posture="secure",
+                   port="/dev/A")
+    entries = fleet.entries()
+    assert len(entries) == 1
+    assert entries[0]["device_id"] == OTHER_DEVICE_ID
+
+
+def test_a_reflashed_board_tells_the_operator_which_fingerprint_it_displaced(tmp_path):
+    """Two boards sharing one name look exactly like one board that was reflashed, and only
+    the person at the bench can tell them apart. So it merges and it says so."""
+    fleet = _fleet(tmp_path)
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure")
+    notices = []
+    fleet.register(name="S", role="edge", device_id=OTHER_DEVICE_ID, posture="secure",
+                   on_notice=notices.append)
+    assert len(notices) == 1
+    # Shortened to the four bytes the endpoint label prints, so the operator can match them
+    # against what the boards report.
+    assert DEVICE_ID[:8] in notices[0] and OTHER_DEVICE_ID[:8] in notices[0]
+
+
+def test_re_registering_an_unchanged_board_says_nothing(tmp_path):
+    """A run that displaces no fingerprint is the ordinary case and must stay quiet, or the
+    warning stops meaning anything."""
+    fleet = _fleet(tmp_path)
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure")
+    notices = []
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure",
+                   on_notice=notices.append)
+    assert notices == []
+
+
+def test_stepping_a_registered_node_down_to_open_replaces_it_and_drops_its_fingerprint(tmp_path):
+    """The bug as first found. An open node has no fingerprint to be keyed by, and inheriting
+    the one it used to hold would put a device_id in Nodes.json that the board cannot prove."""
+    fleet = _fleet(tmp_path)
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure")
+    fleet.register(name="S", role="edge", device_id=None, posture="open", session_id=42)
+    entries = fleet.entries()
+    assert len(entries) == 1
+    assert "device_id" not in entries[0]
+    assert entries[0]["posture"] == "open"
+    assert entries[0]["session_id"] == 42
+
+
+def test_stepping_a_node_back_up_to_secure_drops_the_open_session_id(tmp_path):
+    """`Digital_Endpoint` lets an explicit session_id override the fingerprint-derived sid, so
+    a session_id inherited from an open run would have the Hub polling an address the secure
+    board never answers on."""
+    fleet = _fleet(tmp_path)
+    fleet.register(name="S", role="edge", device_id=None, posture="open", session_id=42)
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure",
+                   session_id=None)
+    entries = fleet.entries()
+    assert len(entries) == 1
+    assert entries[0]["device_id"] == DEVICE_ID
+    assert "session_id" not in entries[0]
+
+
+def test_a_renamed_board_is_found_by_its_fingerprint_not_by_its_new_name(tmp_path):
+    """Identity outranks placement: the board proves what it holds, the name is a label."""
+    fleet = _fleet(tmp_path)
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure")
+    fleet.register(name="north-field", role="edge", device_id=DEVICE_ID, posture="secure")
+    entries = fleet.entries()
+    assert len(entries) == 1
+    assert entries[0]["name"] == "north-field"
+
+
+def test_a_board_renamed_into_another_slot_keeps_its_own_entry(tmp_path):
+    """Both kinds of evidence match different entries here. The fingerprint has to win, or the
+    renamed board takes over the other's record and orphans its own."""
+    fleet = _fleet(tmp_path)
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure")
+    fleet.register(name="T", role="edge", device_id=OTHER_DEVICE_ID, posture="secure")
+    fleet.register(name="S", role="edge", device_id=OTHER_DEVICE_ID, posture="secure")
+    entries = fleet.entries()
+    assert len(entries) == 2
+    assert entries[0]["device_id"] == DEVICE_ID and entries[0]["name"] == "S"
+    assert entries[1]["device_id"] == OTHER_DEVICE_ID and entries[1]["name"] == "S"
+
+
+def test_a_second_board_under_a_second_name_is_a_second_node(tmp_path):
+    """The fix must not collapse a real fleet into one entry per role."""
+    fleet = _fleet(tmp_path)
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure")
+    fleet.register(name="T", role="edge", device_id=OTHER_DEVICE_ID, posture="secure")
+    assert len(fleet.entries()) == 2
+
+
+def test_a_hub_and_an_edge_may_share_a_name(tmp_path):
+    """Placement is role plus name, not name alone: the two are different nodes."""
+    fleet = _fleet(tmp_path)
+    fleet.register(name="bench", role="edge", device_id=DEVICE_ID, posture="secure")
+    fleet.register(name="bench", role="hub", device_id=OTHER_DEVICE_ID, posture="secure")
+    assert len(fleet.entries()) == 2
+
+
+def test_a_re_provision_keeps_what_it_says_nothing_about(tmp_path):
+    """A merge carries the older record forward wherever this run was silent, which is what a
+    `mac_address` an operator added by hand needs.
+
+    The `_ROSTER_DEFAULTS` are restated on every registration, so a hand-tuned polling cadence
+    does not survive one. That is older than this matching rule and is pinned here rather than
+    changed, so the next reader knows it is the tool's behaviour and not an oversight in the
+    merge."""
+    fleet = _fleet(tmp_path)
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure",
+                   mac_address="a1b2c3d4", asking_frequency=900)
+    fleet.register(name="S", role="edge", device_id=OTHER_DEVICE_ID, posture="secure")
+    entries = fleet.entries()
+    assert len(entries) == 1
+    assert entries[0]["mac_address"] == "a1b2c3d4"
+    assert entries[0]["asking_frequency"] == 60
+
+
+def test_the_hub_roster_of_a_reflashed_fleet_holds_one_edge(tmp_path):
+    """The end the bug was measured at: two edges reached the Hub for one board, and it spent a
+    listening window every cycle on the one that could not answer."""
+    fleet = _fleet(tmp_path)
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure")
+    fleet.register(name="R", role="hub", device_id=OTHER_DEVICE_ID, posture="secure")
+    fleet.register(name="S", role="edge", device_id=bytes(range(64, 96)).hex(), posture="secure")
+    roster = json.loads(fleet.render_nodes_json())
+    assert len(roster) == 1
+    assert roster[0]["device_id"] == bytes(range(64, 96)).hex()
+
+
 def test_the_hub_roster_carries_only_the_edges_and_only_the_keys_nodes_json_names(tmp_path):
     fleet = _fleet(tmp_path)
     fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure")

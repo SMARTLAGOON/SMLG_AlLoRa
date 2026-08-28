@@ -65,6 +65,14 @@ _ROSTER_DEFAULTS = {
     "max_listen_time_when_locked": 300,
 }
 
+# What a re-registration clears rather than carries forward. A merge otherwise keeps whatever
+# the older record held and this run did not mention, which is what a `mac_address` an operator
+# added by hand needs. These two cannot work that way, because they are how the Hub addresses
+# the node and this run is the only authority on that: a `session_id` left behind by an open
+# provisioning overrides the fingerprint-derived sid on a board that is now secure, and the Hub
+# then polls an address nobody answers on.
+_ADDRESSING_KEYS = ("device_id", "session_id")
+
 
 def classify_root_half(material):
     """Return "private" or "public" for a control-root file's contents, by length.
@@ -243,15 +251,30 @@ class Fleet:
             return []
         return data if isinstance(data, list) else []
 
-    def register(self, name, role, device_id=None, posture="secure", **fields):
-        """Record a node the operator has provisioned, keyed by its `device_id`.
+    def register(self, name, role, device_id=None, posture="secure", on_notice=None, **fields):
+        """Record a node the operator has provisioned, and update its record rather than add a
+        second one when the same node comes back.
 
-        Keyed by the fingerprint and not by the name, because the fingerprint is the thing the
-        board proves it holds: a board that keeps its identity across a reflash is the same
-        node however it is labelled afterwards, and registering it twice would leave the Hub
-        polling one node under two entries. An open node has no fingerprint to be keyed by --
-        that is the whole difference the posture makes -- so it falls back to its placement and
-        its name.
+        **A node is the same node on two kinds of evidence, and they are not equal.** The
+        strongest is the fingerprint, because it is the thing the board proves it holds: a
+        board that keeps its identity across a reflash is the same node however it is labelled
+        afterwards, so an entry carrying that `device_id` is updated even if the operator has
+        renamed it since.
+
+        Failing that, a node is its placement: its role and its name. That is the fleet's own
+        idea of a slot, and it has to be enough on its own, because **a fingerprint is not
+        durable and the tool is what rotates it**. `erase_flash` takes `identity.key` with it,
+        so a board flashed by this very toolkit comes back holding a fingerprint that matches
+        nothing in the registry; and provisioning a registered node down to open posture leaves
+        it with no fingerprint at all. Keying on identity alone turned both of those into a
+        second entry for a board that already had one, and the Hub then spends a listening
+        window every cycle polling a node that cannot answer. On the bench that took a transfer
+        from 1000 bytes to 0.
+
+        So the older record is never required to be as well identified as the newer one. What
+        it is required to be is the same placement, and where that displaces a fingerprint the
+        operator is told through `on_notice`, because two boards sharing one name look exactly
+        like one board that was reflashed and only the person at the bench can tell them apart.
 
         An absent `device_id` is left out of the entry rather than written as an empty string.
         `Digital_Endpoint` reads a registered fingerprint as hex and then indexes it to derive
@@ -265,22 +288,52 @@ class Fleet:
         entry.update({k: v for k, v in fields.items() if v is not None})
 
         registry = self.entries()
-        for index, existing in enumerate(registry):
-            same = (existing.get("device_id") == device_id if device_id
-                    else (not existing.get("device_id")
-                          and existing.get("role") == role and existing.get("name") == name))
-            if same:
-                merged = dict(existing)
-                merged.update(entry)
-                registry[index] = merged
-                entry = merged
-                break
-        else:
+        index = self._match(registry, name, role, device_id, on_notice)
+        if index is None:
             registry.append(entry)
+        else:
+            merged = dict(registry[index])
+            for key in _ADDRESSING_KEYS:
+                merged.pop(key, None)
+            merged.update(entry)
+            registry[index] = merged
+            entry = merged
 
         self.ensure()
         self._commit(self.registry_path, json.dumps(registry, indent=2) + "\n")
         return entry
+
+    @staticmethod
+    def _match(registry, name, role, device_id, on_notice=None):
+        """The index of the entry this registration updates, or None to append a new one.
+
+        Two passes rather than one test, because the two kinds of evidence are ranked and a
+        single pass would let whichever entry came first in the file decide. A board renamed
+        into a slot another board already holds has to be found by its fingerprint first, or it
+        would take over that slot and orphan its own record.
+        """
+        if device_id:
+            for index, existing in enumerate(registry):
+                if existing.get("device_id") == device_id:
+                    return index
+        for index, existing in enumerate(registry):
+            if existing.get("role") != role or existing.get("name") != name:
+                continue
+            displaced = existing.get("device_id")
+            if displaced and displaced != device_id and on_notice:
+                # Fingerprints shortened to the four bytes `Digital_Endpoint.get_label` prints,
+                # so the two in this sentence can be told apart at a glance and matched against
+                # what the boards report.
+                on_notice(
+                    "{} '{}' was registered holding {}, and this run registers {}. Same role "
+                    "and name, so that entry is updated rather than a second one added. If "
+                    "these are two different boards, give them different names: in a fleet one "
+                    "name is one node.".format(
+                        role, name, displaced[:8],
+                        device_id[:8] if device_id
+                        else "no fingerprint, which is what an open node has"))
+            return index
+        return None
 
     def render_nodes_json(self):
         """The Hub's roster: the Edges in this fleet, in the shape `Nodes.json` names.

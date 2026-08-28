@@ -24,7 +24,37 @@ if not hub.digital_endpoints:
     print("VERIFY:result no-endpoint")
     raise SystemExit
 
+# The Edge this run is verifying. Not `digital_endpoints[0]`: that is the oldest entry in the
+# roster, so a Hub that legitimately holds several Edges gets a proof step that only ever checks
+# one of them, and a roster still carrying a stale entry gets one that checks the dead node
+# every time.
+#
+# By fingerprint where the Edge has one, and only by name where it does not, which is the same
+# ranking the fleet registry matches on. A roster can hold two entries under one name, because a
+# registry written before that rule existed could carry a rotated identity beside the live one,
+# and there the name is exactly what fails to tell them apart. Both empty means the host had no
+# registry entry for this board, and the first endpoint is all there is to go on.
+wanted_id = __EDGE_DEVICE_ID__
+wanted_name = __EDGE_NAME__
+
+
+def _is_wanted(ep):
+    if wanted_id:
+        return ep.device_id is not None and ep.device_id.hex() == wanted_id
+    return ep.name == wanted_name
+
+
 endpoint = hub.digital_endpoints[0]
+if wanted_id or wanted_name:
+    endpoint = None
+    for candidate in hub.digital_endpoints:
+        if _is_wanted(candidate):
+            endpoint = candidate
+            break
+    if endpoint is None:
+        print("VERIFY:wanted", wanted_id or wanted_name)
+        print("VERIFY:result unregistered-edge")
+        raise SystemExit
 print("VERIFY:label", endpoint.get_label())
 print("VERIFY:sid", endpoint.session_id)
 
