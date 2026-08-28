@@ -1,9 +1,14 @@
-# Based on: https://github.com/majoson-chen/micropython-ulogger/tree/main?tab=readme-ov-file#readme
+# A status subscriber that writes the live values to a file.
+#
+# It lives in the library because it names no pin, no bus and no chip: it is handed the same
+# status dict a screen is handed, and it writes text. Everything that knows what a screen or a
+# card slot is stays in a firmware target's board/ directory.
+#
+# The formatter below is based on https://github.com/majoson-chen/micropython-ulogger.
 # Thanks to the authors!
-
-import os
-import ujson
-from utime import time, sleep, sleep_ms
+from AlLoRa.utils.json_utils import json
+from AlLoRa.utils.os_utils import os
+from AlLoRa.utils.time_utils import get_current_timestamp
 
 DEBUG = 10
 INFO = 20
@@ -30,22 +35,21 @@ def level_name(level, color=False):
 
 class BaseClock():
     def __call__(self):
-        return '%d' % time()
+        # A wall-clock stamp on both runtimes. The board sets its RTC at import time and
+        # restores it from datetime.json across a reboot, so a log line from a field node
+        # carries a date rather than milliseconds since power-on.
+        return get_current_timestamp()
 
 class Handler():
     def __init__(self, level=INFO, colorful=True, fmt="%(time)s - %(level)s - %(name)s - %(msg)s", clock=None,
-                 direction=TO_TERM, file_name="logs/log.log", max_file_size=4096, buffer_size=10):
+                 direction=TO_TERM, file_name="logs/log.log", buffer_size=10):
         self._direction = direction
         self.level = level
         self._clock = clock if clock else BaseClock()
         self._color = colorful
         self._file_name = file_name if direction == TO_FILE else ''
-        self._max_size = max_file_size if direction == TO_FILE else 0
         self.buffer_size = buffer_size
         self.buffer = []
-
-        if direction == TO_FILE:
-            self._file = open(file_name, 'a+')
 
         self._map = bytearray()
         idx = 0
@@ -117,15 +121,6 @@ class Handler():
             self._to_file(''.join(self.buffer))
             self.buffer = []
 
-    def _rotate_logs(self):
-        base, ext = os.path.splitext(self._file_name)
-        for i in range(4, 0, -1):
-            src = f"{base}.{i}{ext}"
-            dst = f"{base}.{i+1}{ext}"
-            if os.path.exists(src):
-                os.rename(src, dst)
-        os.rename(self._file_name, f"{base}.1{ext}")
-
 class ULogger():
     def __init__(self, name, handlers=None):
         self.name = name
@@ -154,15 +149,29 @@ class ULogger():
     def critical(self, *args, fn=None):
         self._msg(*args, level=CRITICAL, fn=fn)
 
+
 class Logger:
-    def __init__(self, log_file="/sd/logs/log.log", always_log_topics=None, change_log_topics=None):
+    """Writes the node's live status to a file, one JSON object per line.
+
+    Register it the way a screen is registered, with `node.register_subscriber(logger)`. Two
+    lists decide what gets written: `always_log_topics` is sampled on every notification, and
+    `change_log_topics` is written only when the value moves, so a long transfer does not fill
+    a card with a repeated spreading factor.
+    """
+
+    def __init__(self, log_file="logs/log.log", always_log_topics=None, change_log_topics=None):
         self.log_file = log_file
         self.always_log_topics = always_log_topics or []
         self.change_log_topics = change_log_topics or []
         self.previous_status = {}
 
-        if not self.path_exists("/sd/logs"):
-            os.mkdir("/sd/logs")
+        # The directory comes from the path that was asked for. The old version created
+        # /sd/logs whatever log_file said, so a node logging to flash still needed a card
+        # mounted, and one logging to a second card path wrote into a directory that did
+        # not exist.
+        directory = log_file.rsplit("/", 1)[0] if "/" in log_file else ""
+        if directory and not self.path_exists(directory):
+            os.mkdir(directory)
 
         self.logger = ULogger(
             name="Logger",
@@ -172,7 +181,6 @@ class Logger:
                 clock=None,
                 direction=TO_FILE,
                 file_name=log_file,
-                max_file_size=4096,
                 buffer_size=10
             )]
         )
@@ -201,12 +209,9 @@ class Logger:
         self.previous_status = status.copy()
 
     def write_log(self, log_entry):
-        self.logger.info(ujson.dumps(log_entry))
+        self.logger.info(json.dumps(log_entry))
 
-# Example usage
-if __name__ == "__main__":
-    logger = Logger(log_file="/sd/logs/log.log", always_log_topics=["RSSI", "SNR"], change_log_topics=["File"])
-    status = {"RSSI": -70, "SNR": 10, "File": "test.txt"}
-    for _ in range(10):
-        logger.update(status)
-        sleep(1)
+    def flush(self):
+        """Push whatever is buffered to the file. A node stopping cleanly should call this."""
+        for handler in self.logger.handlers:
+            handler.flush_buffer()

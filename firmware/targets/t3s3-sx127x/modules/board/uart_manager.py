@@ -4,8 +4,7 @@ import binascii
 import gc
 import ujson
 
-from utils.OnDemandWriter import OnDemandFileWriter
-from utils.OnDemandFile import OnDemandFile
+from AlLoRa.File import OnDemandFileWriter
 
 class UART_manager:
 

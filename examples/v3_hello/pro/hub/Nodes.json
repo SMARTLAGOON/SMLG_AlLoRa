@@ -1,0 +1,10 @@
+[
+  {
+    "name": "src",
+    "mac_address": "9eeff0dc",
+    "session_id": 42,
+    "active": true,
+    "asking_frequency": 60,
+    "listening_time": 30
+  }
+]

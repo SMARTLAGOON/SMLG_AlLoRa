@@ -3,7 +3,10 @@
 The primary board. MicroPython board target `ESP32_GENERIC_S3`, overlaid with this target's
 `boards/ESP32_GENERIC_S3/` (4 MB flash, custom partitions, I2C pins for the OLED) and a frozen
 bundle: `AlLoRa/` (from the repo) + the `PyLora_SX127x_extensions` driver + the board helpers
-in `modules/` (`lora32`, `lilygo_oled`, `utils`).
+in `modules/` (`lora32`, `lilygo_oled`, and the `board/` package: the screen, the card and
+the LED). Anything that names a pin, a bus or a chip lives there; anything that does not lives
+in `AlLoRa/`, which is why the status logger sits in the library as `AlLoRa/Subscribers/Logger`
+and ships even to boards with nothing soldered to them.
 
 **Secure mode is enabled in this target:** `mpconfigboard.h` sets `MICROPY_PY_CRYPTOLIB_CTR`
 (native AES-CTR — renamed from `MICROPY_PY_UCRYPTOLIB_CTR` in MicroPython v1.21; we define both)

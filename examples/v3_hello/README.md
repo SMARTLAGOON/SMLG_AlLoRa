@@ -14,6 +14,10 @@ Start at the top and stop when you have what you need.
 | [`secure/`](secure) | A crypto identity per node: ECDH on first contact, every frame AEAD-sealed. | the `device_id` the Edge derives |
 | [`control/`](control) | A fleet control root: the Hub signs configuration commands, the Edge verifies them. | the same `device_id`, plus a shared root |
 
+Beside them, [`pro/`](pro) is not a fourth posture: it is the `open/` pair with the board's
+screen, card and LED switched on through a `device` block, and that block drops into any of the
+three unchanged.
+
 ## One program, six configs
 
 [`main.py`](main.py) here is the program every node runs, whichever posture and whichever

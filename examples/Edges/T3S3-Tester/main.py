@@ -3,8 +3,8 @@ import os
 import _thread
 
 from lora32 import T3S3
-from utils.oled_screen import OLED_Screen
-from utils.led_alive import LED
+from board.oled_screen import OLED_Screen
+from board.led_alive import LED
 
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Connectors.SX127x_connector import SX127x_connector
