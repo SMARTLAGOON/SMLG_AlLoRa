@@ -47,6 +47,10 @@ PORT_GLOBS = ("/dev/cu.usbmodem*", "/dev/ttyACM*", "/dev/ttyUSB*")
 
 _PROBE_TOKEN = "ALLORA_PROBE"
 
+# How long a probe waits for a REPL that may not be there. Generous, because it is the
+# ceiling on a healthy board answering slowly, not a budget for a dead one.
+PROBE_TIMEOUT = 15
+
 # The same value the node itself reports: `Node.MAC` is the last 8 hex characters of the WLAN
 # interface's address, and on these boards that is what tells two identical T3S3s apart before
 # either has an identity. Best-effort, because a board whose connector takes its address from
@@ -137,11 +141,17 @@ class Board:
         return self.runner.run([self.mpremote, "connect", self.port] + list(args),
                                timeout=timeout)
 
-    def alive(self):
-        """Whether a MicroPython REPL answers on this port right now."""
+    def alive(self, timeout=PROBE_TIMEOUT):
+        """Whether a MicroPython REPL answers on this port right now.
+
+        The timeout is the cost of a *negative* answer and nothing else: a board that is there
+        replies in a second or two, while a port that enumerates and answers nothing blocks
+        `mpremote` for the whole of it. That is why the post-flash wait passes a shorter one --
+        it asks this question repeatedly of a port that is silent by definition.
+        """
         try:
             code, out, _ = self._mpremote(["exec", "print('{}')".format(_PROBE_TOKEN)],
-                                          timeout=15)
+                                          timeout=timeout)
         except BoardError:
             return False
         return code == 0 and _PROBE_TOKEN in out
@@ -177,20 +187,50 @@ class Board:
                 return None if value == "unknown" else value
         return None
 
-    def wait_for_repl(self, attempts=10, delay=1.0):
+    def wait_for_repl(self, attempts=10, delay=1.0, probe_timeout=PROBE_TIMEOUT,
+                      on_attempt=None):
         """Poll until the REPL answers, or give up.
 
         Needed after a flash: the write ends in a hard reset, the native-USB port
         re-enumerates, and `mpremote` reports `could not enter raw repl` until the board has
-        come back. On a board that stays silent the fix is a single tap on RESET, which is
-        what the caller tells the operator once this returns False.
+        come back. On a board that stays silent the caller escalates: a reset over the wire
+        first, and only then a finger on RESET.
+
+        `on_attempt(number, attempts)` is called before each probe. A caller that has a person
+        watching passes one, because the cost of this wait is measured in minutes and a
+        terminal that prints nothing for two of them is indistinguishable from a hang.
         """
         for attempt in range(attempts):
-            if self.alive():
+            if on_attempt is not None:
+                on_attempt(attempt + 1, attempts)
+            if self.alive(timeout=probe_timeout):
                 return True
             if attempt < attempts - 1:
                 self._sleep(delay)
         return False
+
+    def wake(self, timeout=60, settle=5):
+        """Hard-reset the board over the wire, for when the flash's own reset did not take.
+
+        `flash()` already ends its write with `--after hard_reset`, and on this hardware the
+        board still comes back silent: enumerated, answering no REPL, sitting below
+        MicroPython. A second, separate `esptool` call issues a reset the board does act on,
+        which is what makes the tap on RESET avoidable rather than routine. Measured on the
+        bench on 2026-08-27: the board never returned by itself, and this recovered it every
+        time it was tried.
+
+        The settle matters as much as the call. The reset lands, the native-USB port
+        re-enumerates, and a probe fired immediately reads as a failure on a board that is
+        about to be fine.
+
+        Only ever called against a port that answers nothing: this puts a board into the ROM
+        loader, so aiming it at a healthy board would take it down rather than bring it back.
+        """
+        returncode, _, _ = self.runner.run(
+            [self.esptool, "--port", self.port, "--after", "hard_reset", "chip_id"],
+            timeout=timeout)
+        self._sleep(settle)
+        return returncode == 0
 
     # --- files --------------------------------------------------------------------------
 
@@ -222,6 +262,17 @@ class Board:
         if returncode != 0:
             raise BoardError("could not write {} to the board at {}: {}".format(
                 name, self.port, (err or out).strip()))
+        return name
+
+    def mkdir_remote(self, name, timeout=60):
+        """Make a directory on the board, treating "it is already there" as success.
+
+        `mpremote fs mkdir` fails on an existing directory, and re-provisioning a board that
+        already has its outbound folder is the ordinary case rather than an error. Nothing else
+        distinguishes the two outcomes, so the caller is told it worked either way and finds out
+        for real when the file it wanted to put there is written.
+        """
+        self._mpremote(["fs", "mkdir", name], timeout=timeout)
         return name
 
     def remove_remote(self, name, timeout=60):

@@ -110,7 +110,7 @@ from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Connectors.SX127x_connector import SX127x_connector
 
-edge = Edge(SX127x_connector(), config_file="LoRa.json")
+edge = Edge(SX127x_connector(), config_file="AlLoRa.json")
 edge.set_file(AlLoRa_File(name="hello.bin", content=payload,
                           chunk_size=edge.get_chunk_size()))
 edge.run()
@@ -123,7 +123,7 @@ from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Connectors.SX127x_connector import SX127x_connector
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 
-hub = Hub(SX127x_connector(), config_file="LoRa.json")
+hub = Hub(SX127x_connector(), config_file="AlLoRa.json")
 hub.set_digital_endpoints([Digital_Endpoint(name="edge-1", mac_address="9eeff0dc",
                                             active=True, session_id=42)])
 hub.run(save_files=True)
@@ -175,9 +175,9 @@ its Hub.
 
 The Hub retunes to an endpoint's RF settings before listening to it, which is how one Hub serves
 several Edges on different configs. An endpoint that states no RF is polled on **the node's own
-`LoRa.json` config**, so the common case, where both ends share a configuration, needs nothing
+`AlLoRa.json` config**, so the common case, where both ends share a configuration, needs nothing
 written down. To place one Edge on different settings, give its `Nodes.json` entry a `connector`
-block copied from that Edge's own `LoRa.json`; anything the block omits still comes from this node.
+block copied from that Edge's own config; anything the block omits still comes from this node.
 See [examples/Hubs/Many-Edges](examples/Hubs/Many-Edges).
 
 </details>
@@ -458,9 +458,11 @@ So an authenticated, encrypted v3 chunk still costs **less header than an unencr
 | v3 open, session-addressed, mesh | 8 B | 247 B |
 | **v3 secure, session-addressed** | **8 B** | **247 B** |
 
-Nodes do not have to be told any of this. `chunk_size` in `LoRa.json` is a request, and the node caps
-it at whatever its own codec reports as the framing cost, so a v3 node is not silently held at v2's
-ceiling and a chunk size that would not fit is corrected at startup rather than on the air.
+Nodes do not have to be told any of this. `chunk_size` in `AlLoRa.json` is a request, and the node
+caps it at whatever its own codec reports as the framing cost, so a v3 node is not silently held at
+v2's ceiling and a chunk size that would not fit is corrected at startup rather than on the air.
+Leave the key out and the node uses that computed ceiling directly, which is the number a config
+file has no way of knowing.
 
 ### v2
 
@@ -551,7 +553,7 @@ possible. Registered by `device_id` means v3 framing, with no MAC on the wire at
 <details>
 <summary>Two postures, and what the secure one actually protects.</summary>
 
-`security_mode` in `LoRa.json` selects the posture:
+`security_mode` in `AlLoRa.json` selects the posture:
 
 - **`open`** (the default): no crypto. The integrity trailer catches corruption, not an attacker.
 - **`secure`**: an ephemeral-static **ECDH handshake on P-256** establishes a session, then every

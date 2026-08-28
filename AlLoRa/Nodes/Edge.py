@@ -18,14 +18,14 @@ from AlLoRa.utils.debug_utils import print
 
 class Edge(Node):
 
-    def __init__(self, connector=None, config_file="LoRa.json", data_sink=None,
+    def __init__(self, connector=None, config_file=None, data_sink=None,
                  datasource=None, control_actuator=None, downlink_window=None,
                  downlink_stall_timeout=None):
         super().__init__(connector, config_file, data_sink=data_sink,
                          datasource=datasource, control_actuator=control_actuator,
                          home_role="source")
         # Two limits on a granted pull, and only the second one should ever end a healthy
-        # transfer. Both read from LoRa.json like every other tunable, with the constructor
+        # transfer. Both read from the config file like every other tunable, with the constructor
         # argument as the override, because a deployment configures a node through its file.
         #
         # downlink_window is the ceiling on the whole pull. It exists so a pull always ends,

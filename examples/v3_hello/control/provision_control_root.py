@@ -14,7 +14,7 @@ work on either kind of node, exactly as `identity.key` already does, and what th
 contains is what decides the node's role. 64 hex characters is the signing half, 130 is the
 verifying half.
 
-Run it once per fleet, then add to BOTH `LoRa.json` files:
+Run it once per fleet, then add to BOTH `AlLoRa.json` files:
 
     "control_root_file": "control_root.key"
 
@@ -70,7 +70,7 @@ def provision(base):
         f.write(root.public_key_hex())
     print("Verifying half written to {} (copy this one to every commanded node).".format(edge_key))
     print("Root fingerprint: {}".format(root.fingerprint().hex()))
-    print("\nAdd to both LoRa.json files:  \"control_root_file\": \"{}\"".format(KEY_NAME))
+    print("\nAdd to both AlLoRa.json files:  \"control_root_file\": \"{}\"".format(KEY_NAME))
 
 
 if __name__ == "__main__":

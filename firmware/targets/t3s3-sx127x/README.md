@@ -11,7 +11,7 @@ and `manifest.py` does `require("hmac")` (the security layer needs `hmac`, which
 built-in). Without a working CTR mode, `detect_aead()` returns None and a secure node silently
 degrades to open — which then can't parse the MAC-addressed handshake at all.
 
-**Runtime:** the device's own `LoRa.json` selects the connector — here `SX127x_connector`,
+**Runtime:** the device's own `AlLoRa.json` selects the connector, through `connector.driver` — here `SX127x_connector`,
 which drives the `PyLora_SX127x_extensions` chip driver frozen above.
 
 **Versions:** pinned in the workflow matrix row for this target. The original hand-build used

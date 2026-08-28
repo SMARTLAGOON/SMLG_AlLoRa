@@ -1,14 +1,14 @@
 {
   "name": "R",
-  "chunk_size": 200,
+  "node": "hub",
   "mesh_mode": false,
   "protocol_version": 3,
   "security_mode": "secure",
   "identity_file": "identity.key",
-  "control_root_file": "control_root.key",
   "debug": true,
   "result_path": "Results",
   "connector": {
+    "driver": "sx127x",
     "sf": 7,
     "freq": 868,
     "bandwidth": 125,

@@ -19,7 +19,7 @@ setup:
   still worked, the signature would be protecting nothing.
 
 Signed control needs `"security_mode": "secure"` on both nodes, because an artifact names the
-node it is for by its `device_id`, and an open node has none. Both `LoRa.json` files here are the
+node it is for by its `device_id`, and an open node has none. Both `AlLoRa.json` files here are the
 secure ones with one line added.
 
 ## Create the fleet's root
@@ -42,7 +42,7 @@ mpremote connect /dev/cu.usbmodemHUB  fs cp hub/control_root.key  :control_root.
 mpremote connect /dev/cu.usbmodemEDGE fs cp edge/control_root.key :control_root.key
 ```
 
-Both `LoRa.json` files here already carry the line that activates it:
+Both `AlLoRa.json` files here already carry the line that activates it:
 
 ```json
   "control_root_file": "control_root.key",
@@ -55,7 +55,7 @@ command being recorded off the air and replayed back later, and it is why a rebo
 does not leave the pair unable to talk. Set `control_counter_file` if you want the file somewhere
 else.
 
-Then register the Edge by its `device_id` in `hub/main.py`, exactly as in
+Then register the Edge by its `device_id` in `hub/Nodes.json`, exactly as in
 [`../secure`](../secure).
 
 ## Three things that will bite otherwise
@@ -70,10 +70,14 @@ Then register the Edge by its `device_id` in `hub/main.py`, exactly as in
 
 ## Running it
 
-Load the two `main.py` + `LoRa.json` pairs as usual, plus the two `control_root.key` halves.
+Load the shared [`../main.py`](../main.py) with each side's `AlLoRa.json` as usual, plus the two
+`control_root.key` halves and the Hub's `Nodes.json`.
 
-`hub/main.py` pulls one file first so the link is known good, commands the retune, and keeps
-polling. Watch the Edge's serial for `Changing RF Config to:` and then, once a whole file has
+Then, on the Hub, run [`hub/retune.py`](hub/retune.py) in place of `main.py`. It is an operation
+you run once rather than a program a board is deployed with: a deployed Hub runs the shared
+`main.py` like every other node, and this file is what you run when you want to command a retune
+and watch what happens. It pulls one file first so the link is known good, commands the retune,
+and keeps polling. Watch the Edge's serial for `Changing RF Config to:` and then, once a whole file has
 crossed on the new settings, `RF trial committed`.
 
 If the new configuration cannot carry a transfer, nobody has to intervene: the Edge holds it only
@@ -106,7 +110,7 @@ and reporting them as one thing sent people to check hardware when the repair wa
 
 A node can hold a control root while its config still says `open`. That is the state of a fleet
 whose nodes already carry the root but whose configs have not been moved to secure yet, and
-`edge/main.py` halts on it with an explanation rather than running.
+the shared `main.py` halts on it with an explanation rather than running.
 
 No verify gate can be built there, and that is a property of the design rather than a gap: a
 signed artifact is addressed to a 32-byte `device_id`, and an open node has no identity to be

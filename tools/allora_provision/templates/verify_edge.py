@@ -10,7 +10,7 @@ from AlLoRa.Connectors.__RADIO_MODULE__ import __RADIO_CLASS__
 
 gc.enable()
 
-edge = Edge(__RADIO_CLASS__(), config_file="LoRa.json")
+edge = Edge(__RADIO_CLASS__())
 print("VERIFY:mode", edge.security_mode)
 print("VERIFY:device_id", edge.device_id.hex() if edge.device_id is not None else "none")
 print("VERIFY:sid", edge.session_id)

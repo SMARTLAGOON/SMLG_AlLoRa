@@ -1,5 +1,10 @@
 # v3 control: the Hub moves the pair onto a new radio configuration, over the air.
 #
+# This is an operation you run once, not a program a board is deployed with. A deployed Hub runs
+# ../../main.py like every other node; this file is what you run in its place when you want to
+# command a retune and watch what happens. It is a recipe, so it registers its Edge inline
+# rather than from Nodes.json: the whole example turns on one device_id you paste in.
+#
 # Same two boards as the hello-world, same Edge. Nothing here selects how the command travels:
 # that follows from what the two nodes were provisioned with, which is the whole of the setup
 # (see the README). This example is the provisioned case, so the command is a signed artifact.
@@ -19,14 +24,15 @@ NEW_CONFIG = {"sf": 9, "trial": 300}
 
 gc.enable()
 
-hub = Hub(SX127x_connector(), config_file="LoRa.json")
+hub = Hub(SX127x_connector(), config_file="AlLoRa.json")
 print("HUB ready | MAC:", hub.MAC)
 
 # This Hub holds the signing half. Without it every command below goes out unsigned, a
 # provisioned Edge refuses all of them, and the run reads as a link problem.
 if hub.control_root is None:
     raise SystemExit("This Hub has no control root, so it cannot sign a command. Add "
-                     "control_root_file to LoRa.json and copy the signing half onto the board.")
+                     "control_root_file to AlLoRa.json and copy the signing half onto the "
+                     "board.")
 
 # Register the Edge by the device_id it prints on boot, as in ../../secure. A signed artifact is
 # addressed to that same identity, so it is the one value this whole example turns on.

@@ -1,12 +1,14 @@
 {
   "name": "S",
-  "chunk_size": 200,
+  "node": "edge",
   "mesh_mode": false,
   "protocol_version": 3,
-  "security_mode": "open",
-  "session_id": 42,
+  "security_mode": "secure",
+  "identity_file": "identity.key",
   "debug": true,
+  "queue_path": "Outbox",
   "connector": {
+    "driver": "sx127x",
     "sf": 7,
     "freq": 868,
     "bandwidth": 125,

@@ -1,4 +1,4 @@
-"""The `LoRa.json` a board is given, built from a placement and a posture.
+"""The `AlLoRa.json` a board is given, built from a placement and a posture.
 
 Two axes and nothing else. **Placement** is Edge or Hub, and it decides one line: only the Hub
 names where received files land. **Posture** is open, secure or control, and it decides how the
@@ -18,7 +18,7 @@ outside: an open node with no `session_id` simply never hears its peer, a secure
 while its config says open can only ever do the refusing half of holding one.
 """
 
-# The radio settings, spelled as `LoRa.json`'s own connector block spells them. `sf`, `freq`,
+# The radio settings, spelled as the connector block itself spells them. `sf`, `freq`,
 # `bandwidth` and `coding_rate` have to agree across the pair or the two boards do not hear
 # each other, which is why one block feeds both configs.
 DEFAULT_RF = {
@@ -35,14 +35,27 @@ DEFAULT_RF = {
 
 RF_FIELDS = tuple(DEFAULT_RF)
 
+# The name a board's config file is written under. `LoRa.json` named the one section of it that
+# is actually about the radio, and the file carries the posture, the identity path, the control
+# root, the result path and what the board is. Nodes still read the old name forever; nothing
+# writes it any more.
+CONFIG_NAME = "AlLoRa.json"
+
 ROLES = ("edge", "hub")
 POSTURES = ("open", "secure", "control")
+
+# Which Connector class a board builds, keyed by the name written into `connector.driver`. The
+# same vocabulary the wizard already offered as a flag, moved into the file so the board reads
+# its own radio instead of inheriting whichever one its program happened to import.
+DRIVERS = ("sx127x", "sx1262", "e5", "lopy4")
+
+# Where an Edge keeps the files it has not delivered yet. Internal flash by default, so a board
+# with no card works untouched and a board with one names its mount point instead.
+DEFAULT_QUEUE_PATH = "Outbox"
 
 IDENTITY_FILE = "identity.key"
 CONTROL_ROOT_FILE = "control_root.key"
 
-# The example pair's numbers, kept because they are what the bench has actually run.
-_DEFAULT_CHUNK_SIZE = 200
 _DEFAULT_NAMES = {"edge": "S", "hub": "R"}
 
 
@@ -63,10 +76,18 @@ def merge_rf(overrides=None):
     return rf
 
 
-def build_lora_json(role, posture, name=None, rf=None, session_id=None,
-                    on_site_root=False, result_path="Results", chunk_size=_DEFAULT_CHUNK_SIZE,
-                    debug=True):
+def build_lora_json(role, posture, driver="sx127x", name=None, rf=None, session_id=None,
+                    on_site_root=False, result_path="Results", chunk_size=None,
+                    queue_path=DEFAULT_QUEUE_PATH, debug=True):
     """The config file for one board.
+
+    `driver` names the radio. It belongs in the file rather than in the program because a board
+    whose radio is named by whichever module its `main.py` imported cannot be told, from the
+    config an operator actually reads, that it is driving the wrong chip.
+
+    `chunk_size` left as None omits the key, which is how a node is asked for the largest chunk
+    its frames can carry. A number is still honoured and still clamped; what it cannot do is be
+    a stale ceiling nobody chose.
 
     `on_site_root` is the named opt-in mode where the machine running Hub logic holds the
     signing half and is the authority, rather than a courier carrying artifacts minted by the
@@ -79,6 +100,12 @@ def build_lora_json(role, posture, name=None, rf=None, session_id=None,
     if posture not in POSTURES:
         raise ValueError(
             "posture must be one of {}, not '{}'".format(", ".join(POSTURES), posture))
+    if driver not in DRIVERS:
+        raise ValueError(
+            "driver must be one of {}, not '{}'. A radio this toolkit has no firmware target "
+            "for is still a supported deployment: write its config by hand from an example, "
+            "pass the Connector instance to the node, and skip the flash step.".format(
+                ", ".join(DRIVERS), driver))
     if on_site_root:
         if posture != "control":
             raise ValueError(
@@ -92,7 +119,11 @@ def build_lora_json(role, posture, name=None, rf=None, session_id=None,
 
     config = {
         "name": name or _DEFAULT_NAMES[role],
-        "chunk_size": chunk_size,
+        # What this board is. Presence of the key is the declaration: a bridge config carries
+        # `adapter` instead, and neither is a value of the other. A config declaring nothing is
+        # refused at boot rather than defaulted, because guessing here puts a node on the air in
+        # a placement nobody chose.
+        "node": role,
         "mesh_mode": False,
         "protocol_version": 3,
         "security_mode": "open" if posture == "open" else "secure",
@@ -122,8 +153,15 @@ def build_lora_json(role, posture, name=None, rf=None, session_id=None,
         if role == "edge" or on_site_root:
             config["control_root_file"] = CONTROL_ROOT_FILE
 
+    if chunk_size is not None:
+        config["chunk_size"] = chunk_size
+
     if role == "hub":
         config["result_path"] = result_path
+    else:
+        config["queue_path"] = queue_path
 
-    config["connector"] = merge_rf(rf)
+    connector = merge_rf(rf)
+    connector["driver"] = driver
+    config["connector"] = connector
     return config

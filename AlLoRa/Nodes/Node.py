@@ -35,7 +35,7 @@ from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, \
     ticks_add, ticks_diff
 from AlLoRa.utils.debug_utils import print
 from AlLoRa.utils.os_utils import os
-from AlLoRa.utils.file_utils import commit_file
+from AlLoRa.utils.file_utils import commit_file, resolve_config_file
 from AlLoRa.utils.json_utils import json
 
 
@@ -69,7 +69,7 @@ class Node:
     # saying that re-asking is pointless.
     RE_ANNOUNCED = "RE_ANNOUNCED"
 
-    def __init__(self, connector: Connector = None, config_file="LoRa.json",
+    def __init__(self, connector: Connector = None, config_file=None,
                  debug_hops=False,
                  max_sleep_time=3,
                  successful_interactions_required=5,
@@ -77,7 +77,10 @@ class Node:
                  datasource=None,
                  control_actuator=None,
                  home_role="source"):
-        self.config_file = config_file
+        # None means "whichever config file this board has": the current name, or the
+        # historical one still sitting on boards in the field. A caller that names a file gets
+        # that file, and every write goes back to whichever name was read.
+        self.config_file = resolve_config_file(config_file)
         self.open_backup()
         self.connector = connector
 
@@ -189,7 +192,12 @@ class Node:
 
         # --- serve-side state (the node as data holder) --------------------------------
         max_chunk_size = self.calculate_max_chunk_size()
-        if self.chunk_size > max_chunk_size:
+        if self.chunk_size is None:
+            # Nothing in the config, so cut at whatever this node's frames actually carry. The
+            # posture and the protocol version both move that number, and the config file
+            # cannot know either.
+            self.chunk_size = max_chunk_size
+        elif self.chunk_size > max_chunk_size:
             self.chunk_size = max_chunk_size
             if self.debug:
                 print("Chunk size too big, setting to max: ", self.chunk_size)
@@ -427,7 +435,15 @@ class Node:
         self.debug = self.config.get('debug', False)
         self.mesh_mode = self.config.get('mesh_mode', False)
         self.short_mac = self.config.get('short_mac', False)
-        self.chunk_size = self.config.get('chunk_size', 235)
+        # Optional, and absent means the ceiling this node computes for itself. The 235 that
+        # stood here was v2's spreading-factor-dependent ceiling, and it was never a default:
+        # __init__ clamps against calculate_max_chunk_size() immediately, so the constant could
+        # only ever cut a file smaller than the link was willing to carry.
+        self.chunk_size = self.config.get('chunk_size', None)
+        # Whether the number was chosen or computed, which is what decides if backup_config
+        # writes it back. Persisting a computed ceiling would pin the node to today's
+        # arithmetic and silently keep it there when the arithmetic improves.
+        self._chunk_size_explicit = self.chunk_size is not None
 
         # v3: protocol version + open-mode session addressing.
         # Defaults keep v2 behavior byte-for-byte (version 2, MAC addressing).
@@ -461,7 +477,7 @@ class Node:
     def _commit_json(self, path, content):
         """Write a config file all at once, or not at all.
 
-        An Edge that loses LoRa.json is off its own network and a Hub that loses Nodes.json
+        An Edge that loses its config file is off its own network and a Hub that loses Nodes.json
         has no fleet left to poll, so neither file is ever written under the name the node
         boots from. See `commit_file`.
         """
@@ -477,7 +493,11 @@ class Node:
         # radio without touching the on-disk values), written under their canonical keys.
         with open(self.config_file, "r") as f:
             conf = loads(f.read())
-        conf["chunk_size"] = self.chunk_size
+        # Only a chunk size somebody chose is persisted. A config that omitted the key is
+        # asking for the computed ceiling every boot, and writing the computed answer back
+        # would turn that request into a constant without a line anywhere saying so.
+        if self._chunk_size_explicit:
+            conf["chunk_size"] = self.chunk_size
         freq, sf, bw, cr, tx_power = self.connector.get_rf_config()
         connector = conf.get("connector", {})
         connector["freq"] = freq
@@ -687,6 +707,9 @@ class Node:
 
         if chunk_size:
             self.chunk_size = chunk_size
+            # Commanded is chosen: a node that took its ceiling from the config's silence and
+            # was then told a number must write that number down, or the reboot undoes it.
+            self._chunk_size_explicit = True
 
         max_chunk_size = self.calculate_max_chunk_size()
         if self.chunk_size > max_chunk_size:

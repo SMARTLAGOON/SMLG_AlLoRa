@@ -59,8 +59,16 @@ class FakeWire:
             return 1, "", "OSError: [Errno 2] ENOENT"
         if "fs" in argv and "cp" in argv:
             local, remote = argv[-2], argv[-1].lstrip(":")
-            with open(local) as f:
-                self.pushed.setdefault(port, {})[remote] = f.read()
+            with open(local, "rb") as f:
+                raw = f.read()
+            # Real `mpremote fs cp` copies bytes and does not care what is in them; a payload
+            # queued for an Edge is not text. Decoded here only so the assertions below can go
+            # on reading pushed files as strings.
+            try:
+                content = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                content = raw
+            self.pushed.setdefault(port, {})[remote] = content
             return 0, "", ""
         if "run" in argv:
             return 0, self.verify_output.get(port, ""), ""
@@ -80,6 +88,70 @@ def _run(argv, wire, fleet_dir):
 def _json_run(argv, wire, fleet_dir):
     code, text = _run(list(argv) + ["--json"], wire, fleet_dir)
     return code, json.loads(text)
+
+
+# --- the radio the operator asked for is the radio the board gets -------------------------
+
+def test_the_radio_asked_for_reaches_both_boards_and_neither_program_names_one(tmp_path):
+    """The bug this closes: an Edge was given the tracked example for its posture, whose first
+    import named SX127x_connector, while the Hub was given a template with the radio
+    substituted in. One path honoured the choice and one ignored it, so an operator who asked
+    for an SX1262 Edge got an SX127x one, and verify passed because both boards were
+    provisioned the same wrong way.
+
+    Both ends now get the same program, and it names no radio at all: the config does.
+    """
+    wire = FakeWire()
+    code, _ = _json_run(["edge", "--port", EDGE_PORT, "--radio", "sx1262"],
+                        wire, tmp_path / "fleet")
+    assert code == 0
+    code, _ = _json_run(["hub", "--port", HUB_PORT, "--radio", "sx1262"],
+                        wire, tmp_path / "fleet")
+    assert code == 0
+
+    for port in (EDGE_PORT, HUB_PORT):
+        assert json.loads(wire.on(port, "AlLoRa.json"))["connector"]["driver"] == "sx1262"
+
+    program = wire.on(EDGE_PORT, "main.py")
+    assert program == wire.on(HUB_PORT, "main.py"), \
+        "both placements run the same program; which one a board is comes from its config"
+    # The program can build any of the four and is committed to none: every class name appears,
+    # each behind the driver name that selects it, so nothing here can prefer one radio. The old
+    # Edge program named exactly one and imported it unconditionally.
+    for driver, connector_class in (("sx127x", "SX127x_connector"), ("sx1262", "SX1262_connector"),
+                                    ("e5", "E5_connector"), ("lopy4", "LoPy4_connector")):
+        assert connector_class in program and '"{}"'.format(driver) in program
+    assert "driver" in program
+
+
+def test_verify_drives_the_radio_the_boards_were_provisioned_with(tmp_path):
+    """`allora verify` defaults its radio flag to sx127x. Taking that at face value would drive
+    the wrong driver on a pair provisioned as sx1262 and report a link failure, which is the same
+    shape of bug as the one the config key closed: a check that passes or fails for a reason
+    nobody can see from the board."""
+    wire = FakeWire()
+    fleet_dir = tmp_path / "fleet"
+    assert _json_run(["edge", "--port", EDGE_PORT, "--radio", "sx1262"], wire, fleet_dir)[0] == 0
+    assert _json_run(["hub", "--port", HUB_PORT, "--radio", "sx1262"], wire, fleet_dir)[0] == 0
+
+    _run(["verify", "--edge-port", EDGE_PORT, "--hub-port", HUB_PORT], wire, fleet_dir)
+
+    staged = fleet_dir / "staging" / "verify" / "verify_edge.py"
+    assert "SX1262_connector" in staged.read_text()
+    assert "SX127x_connector" not in staged.read_text()
+
+
+def test_an_edge_is_left_with_something_to_send(tmp_path):
+    """An Edge serves the files in its outbound folder and waits quietly when there are none, so
+    a deployment provisioned with an empty queue is correct and silent, which at the antenna is
+    indistinguishable from one that is broken."""
+    wire = FakeWire()
+    code, _ = _json_run(["edge", "--port", EDGE_PORT], wire, tmp_path / "fleet")
+    assert code == 0
+    queue_path = json.loads(wire.on(EDGE_PORT, "AlLoRa.json"))["queue_path"]
+    payload = wire.on(EDGE_PORT, queue_path + "/hello.bin")
+    assert payload is not None, "nothing was queued for the Edge to send"
+    assert len(payload) == 1000
 
 
 # --- the gesture the tool is judged on ---------------------------------------------------
@@ -112,8 +184,8 @@ def test_both_boards_get_the_radio_settings_that_have_to_match(tmp_path):
     wire = FakeWire()
     _run(["edge", "--port", EDGE_PORT, "--sf", "10", "--freq", "867"], wire, tmp_path / "f")
     _run(["hub", "--port", HUB_PORT, "--sf", "10", "--freq", "867"], wire, tmp_path / "f")
-    edge = json.loads(wire.on(EDGE_PORT, "LoRa.json"))
-    hub = json.loads(wire.on(HUB_PORT, "LoRa.json"))
+    edge = json.loads(wire.on(EDGE_PORT, "AlLoRa.json"))
+    hub = json.loads(wire.on(HUB_PORT, "AlLoRa.json"))
     for field in ("sf", "freq", "bandwidth", "coding_rate"):
         assert edge["connector"][field] == hub["connector"][field]
     assert edge["connector"]["sf"] == 10
@@ -128,7 +200,7 @@ def test_the_commanded_node_gets_the_verifying_half_and_only_that(tmp_path):
     assert code == 0, edge
     material = wire.on(EDGE_PORT, "control_root.key").strip()
     assert len(material) == PUBLIC_HEX_LEN
-    assert json.loads(wire.on(EDGE_PORT, "LoRa.json"))["control_root_file"] == "control_root.key"
+    assert json.loads(wire.on(EDGE_PORT, "AlLoRa.json"))["control_root_file"] == "control_root.key"
 
 
 def test_the_hub_is_a_courier_by_default_and_holds_no_root(tmp_path):
@@ -140,7 +212,7 @@ def test_the_hub_is_a_courier_by_default_and_holds_no_root(tmp_path):
                           wire, tmp_path / "fleet")
     assert code == 0, hub
     assert wire.on(HUB_PORT, "control_root.key") is None
-    assert "control_root_file" not in json.loads(wire.on(HUB_PORT, "LoRa.json"))
+    assert "control_root_file" not in json.loads(wire.on(HUB_PORT, "AlLoRa.json"))
 
 
 def test_the_on_site_mode_hands_over_the_signing_half_and_says_what_it_costs(tmp_path):
@@ -423,7 +495,7 @@ def test_the_roster_the_wizard_wrote_boots_a_real_hub_in_either_posture(tmp_path
         with open(roster_path, "w") as f:
             f.write(wire.on(HUB_PORT, "Nodes.json"))
         config_path = str(tmp_path / ("LoRa-" + posture + ".json"))
-        config = json.loads(wire.on(HUB_PORT, "LoRa.json"))
+        config = json.loads(wire.on(HUB_PORT, "AlLoRa.json"))
         config["security_mode"] = "open"      # no radio here, so no handshake to run
         config["result_path"] = str(tmp_path / "Results")
         with open(config_path, "w") as f:

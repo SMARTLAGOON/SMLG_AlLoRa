@@ -24,7 +24,7 @@ import threading
 from tools.allora_provision.board import (PORT_GLOBS, Board, BoardError, candidate_ports,
                                           discover_boards)
 from tools.allora_provision.fleet import CONTROL_ROOT_NAME, Fleet
-from tools.allora_provision.node_config import build_lora_json
+from tools.allora_provision.node_config import CONFIG_NAME, build_lora_json
 from tools.allora_provision.result import FAILED, OK, SKIPPED
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
@@ -65,7 +65,10 @@ def render_template(name, radio="sx127x", window=120,
 
 
 def _write(path, text):
-    with open(path, "w") as f:
+    # Bytes go out untouched: the verify payload is a file the Hub compares byte for byte, and
+    # a text-mode write would translate line endings inside it on some hosts.
+    mode = "wb" if isinstance(text, (bytes, bytearray)) else "w"
+    with open(path, mode) as f:
         f.write(text)
     return path
 
@@ -115,8 +118,14 @@ def back_up_identity(board, fleet, result, label, allow_identity_loss=False):
 
 
 def flash(board, fleet, result, firmware, label, allow_identity_loss=False,
-          expected_mac=None):
-    """Erase and write the firmware, having first saved what the erase would destroy."""
+          expected_mac=None, on_stall=None):
+    """Erase and write the firmware, having first saved what the erase would destroy.
+
+    `on_stall(port)` is how a caller with a person at the keyboard offers the tap on RESET
+    without the flash having to know whether there is one. Given none -- which is every
+    non-interactive command, and the website -- the wait ends in the same refusal it always
+    did.
+    """
     if not firmware:
         result.step("flash", "no firmware given, keeping what the board runs", status=SKIPPED)
         return True
@@ -136,21 +145,76 @@ def flash(board, fleet, result, firmware, label, allow_identity_loss=False,
     board.flash(firmware)
     result.step("flash", os.path.basename(firmware))
 
-    # Native USB re-enumerates on a hard reset, and the write ends in one, so neither "the
-    # REPL answers here" nor "somebody answers somewhere" is by itself evidence that the board
-    # in front of us is the board we flashed. Both are checked against the MAC.
-    if not (board.wait_for_repl() and _is_expected(board, expected_mac)):
-        adopted = adopt_port(board.port, runner=board.runner, expected_mac=expected_mac)
-        if adopted is None or adopted == board.port:
-            raise BoardError(
-                "the board did not come back on {} after the flash. On native USB the port "
-                "re-enumerates, and the REPL is often unreachable until somebody taps RESET "
-                "once. Tap it and re-run.".format(board.port))
+    wait_for_board(board, result, expected_mac, on_stall=on_stall)
+    result.step("reboot", "the REPL answers on " + board.port)
+    return True
+
+
+# The post-flash wait, in rounds. Short ones, because on this hardware the board coming back
+# by itself is the exception rather than the rule: the measured cost of a round is roughly its
+# probe count times `POST_FLASH_PROBE`, and every second of it is a second the operator spends
+# looking at a terminal that has stopped saying anything.
+POST_FLASH_PROBE = 8
+_SETTLE_PROBES = 3
+_TAP_PROBES = 6
+
+
+def wait_for_board(board, result, expected_mac, on_stall=None):
+    """Get the flashed board back, escalating only as far as it has to.
+
+    Three rounds, cheapest first. It may simply return; a reset issued over the wire brings it
+    back when the write's own reset did not take, which on this hardware is every time; and a
+    tap on RESET is the last resort, asked for only when somebody is there to be asked.
+
+    Native USB re-enumerates on a hard reset, so neither "the REPL answers here" nor "somebody
+    answers somewhere" is by itself evidence that the board in front of us is the board we
+    flashed. Every round is checked against the MAC, and the port is re-derived from it at the
+    end rather than assumed.
+    """
+    def waiting(what):
+        def on_attempt(number, total):
+            result.note("      {} ({} of {}, up to {}s each)".format(
+                what, number, total, POST_FLASH_PROBE))
+        return on_attempt
+
+    def answered(probes, what):
+        return board.wait_for_repl(attempts=probes, delay=1.0,
+                                   probe_timeout=POST_FLASH_PROBE,
+                                   on_attempt=waiting(what))
+
+    alive = answered(_SETTLE_PROBES, "waiting for the board to come back")
+
+    if not alive:
+        # The write already ended with `--after hard_reset` and the board is silent anyway.
+        # A second esptool call issues a reset it does act on, and costs seconds rather than
+        # a trip to the bench. Only ever aimed at a port that answered nothing: it puts a
+        # board into the ROM loader, which would take a healthy one down.
+        result.step("wake", "the board is silent; resetting it over the wire")
+        board.wake()
+        alive = answered(_SETTLE_PROBES, "waiting after the reset")
+
+    if not alive and on_stall is not None:
+        # The one human moment in a flash, and it happens inside the run rather than after it.
+        # Nothing else can hold the port while the wizard is waiting on it, so a reset from a
+        # second process is not an option: the operator's finger is.
+        on_stall(board.port)
+        alive = answered(_TAP_PROBES, "waiting after the tap")
+
+    if alive and _is_expected(board, expected_mac):
+        return board.port
+
+    adopted = adopt_port(board.port, runner=board.runner, expected_mac=expected_mac)
+    if adopted is None:
+        raise BoardError(
+            "the board did not come back on {} after the flash, and a reset over the wire did "
+            "not bring it back either. Tap RESET once on the board and re-run: the flash "
+            "itself completed, so it is the wait that failed and not the write.".format(
+                board.port))
+    if adopted != board.port:
         result.warn("the board came back on {} instead of {}: native USB re-enumerates on a "
                     "hard reset".format(adopted, board.port))
         board.port = adopted
-    result.step("reboot", "the REPL answers on " + board.port)
-    return True
+    return board.port
 
 
 def _is_expected(board, expected_mac):
@@ -179,7 +243,8 @@ def _clear_stale_root(board, result):
 
 
 def provision_edge(board, fleet, result, posture="secure", firmware=None, name=None,
-                   rf=None, session_id=None, radio="sx127x", allow_identity_loss=False):
+                   rf=None, session_id=None, radio="sx127x", allow_identity_loss=False,
+                   on_stall=None):
     """Phase 1. Leaves the board provisioned and its `device_id` registered in the fleet."""
     fleet.ensure()
     if not board.alive():
@@ -192,13 +257,13 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
 
     label = "edge"
     flash(board, fleet, result, firmware, label, allow_identity_loss=allow_identity_loss,
-          expected_mac=mac)
+          expected_mac=mac, on_stall=on_stall)
 
-    config = build_lora_json(role="edge", posture=posture, name=name, rf=rf,
+    config = build_lora_json(role="edge", posture=posture, driver=radio, name=name, rf=rf,
                              session_id=session_id)
-    config_path = _stage(fleet, "edge", "LoRa.json", json.dumps(config, indent=2) + "\n")
-    board.write_remote(config_path, "LoRa.json")
-    result.step("LoRa.json", "{} posture".format(posture))
+    config_path = _stage(fleet, "edge", CONFIG_NAME, json.dumps(config, indent=2) + "\n")
+    board.write_remote(config_path, CONFIG_NAME)
+    result.step(CONFIG_NAME, "{} posture, {} radio".format(posture, radio))
 
     if posture == "control":
         # The verifying half, and only ever the verifying half. The private scalar on a node
@@ -222,17 +287,27 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
         device_id = board.ensure_identity()
         result.step("device_id", device_id)
 
-    # The Edge's deployed program is the example for its posture, unchanged. The wizard has no
-    # reason to invent a second one: the examples are what the bench has run, they guard their
-    # own posture, and a second Edge program would be a second thing to keep true.
-    example = _example_main("edge", posture)
-    if example is None:
-        raise BoardError(
-            "no Edge example for the {} posture under examples/v3_hello. The wizard pushes the "
-            "tracked example rather than a program of its own.".format(posture))
-    main_path = _stage(fleet, "edge", "main.py", example)
+    # The deployed program, the same file for every node in every posture on every radio. The
+    # wizard invents nothing: this is the tracked example, and it is a node's program because
+    # the config beside it says so.
+    #
+    # It is also what closes the radio bug. The Edge used to get a per-posture example whose
+    # first import named SX127x_connector, so an operator who asked for an SX1262 Edge got an
+    # SX127x one, and verify passed because both boards were provisioned the same wrong way.
+    # There is no longer a program to hardcode a radio in.
+    main_path = _stage(fleet, "edge", "main.py", _generic_main())
     board.write_remote(main_path, "main.py")
-    result.step("main.py", "the {} example's Edge".format(posture))
+    result.step("main.py", "the generic program, radio from {}".format(CONFIG_NAME))
+
+    # Something for the node to send. An Edge serves the files in its outbound folder and waits
+    # quietly when there are none, so a deployment provisioned with an empty queue is correct
+    # and silent, which is indistinguishable at the antenna from one that is broken.
+    queue_path = config["queue_path"]
+    board.mkdir_remote(queue_path)
+    payload_path = _stage(fleet, "edge", PAYLOAD_NAME,
+                          bytes((i % 256) for i in range(PAYLOAD_LEN)))
+    board.write_remote(payload_path, queue_path + "/" + PAYLOAD_NAME)
+    result.step(PAYLOAD_NAME, "{} bytes queued in {}".format(PAYLOAD_LEN, queue_path))
 
     # An open node is addressed by the session id its config carries, a secure one by the
     # fingerprint the board proved it holds. Registering an open node with an empty device_id
@@ -261,7 +336,7 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
 
 def provision_hub(board, fleet, result, posture="secure", firmware=None, name=None,
                   rf=None, session_id=None, radio="sx127x", on_site_root=False,
-                  allow_identity_loss=False):
+                  allow_identity_loss=False, on_stall=None):
     """Phase 2. Same discovery, same backup, same flash, plus the roster the Hub polls."""
     fleet.ensure()
     if not board.alive():
@@ -281,13 +356,13 @@ def provision_hub(board, fleet, result, posture="secure", firmware=None, name=No
             "Edge first.".format(fleet.registry_path))
 
     flash(board, fleet, result, firmware, "hub", allow_identity_loss=allow_identity_loss,
-          expected_mac=mac)
+          expected_mac=mac, on_stall=on_stall)
 
-    config = build_lora_json(role="hub", posture=posture, name=name, rf=rf,
+    config = build_lora_json(role="hub", posture=posture, driver=radio, name=name, rf=rf,
                             session_id=session_id, on_site_root=on_site_root)
-    config_path = _stage(fleet, "hub", "LoRa.json", json.dumps(config, indent=2) + "\n")
-    board.write_remote(config_path, "LoRa.json")
-    result.step("LoRa.json", "{} posture".format(posture))
+    config_path = _stage(fleet, "hub", CONFIG_NAME, json.dumps(config, indent=2) + "\n")
+    board.write_remote(config_path, CONFIG_NAME)
+    result.step(CONFIG_NAME, "{} posture, {} radio".format(posture, radio))
 
     roster_path = _stage(fleet, "hub", "Nodes.json", fleet.render_nodes_json())
     board.write_remote(roster_path, "Nodes.json")
@@ -320,9 +395,11 @@ def provision_hub(board, fleet, result, posture="secure", firmware=None, name=No
         device_id = board.ensure_identity()
         result.step("device_id", device_id)
 
-    main_path = _stage(fleet, "hub", "main.py", render_template("hub_main.py", radio=radio))
+    # The same generic program the Edge got. Which of the two this board becomes is decided by
+    # the "node" key in its config, not by which file was pushed.
+    main_path = _stage(fleet, "hub", "main.py", _generic_main())
     board.write_remote(main_path, "main.py")
-    result.step("main.py", "registration read from Nodes.json")
+    result.step("main.py", "the generic program, registration read from Nodes.json")
 
     entry = fleet.register(name=config["name"], role="hub", device_id=device_id,
                            posture=posture, port=board.port, radio=radio,
@@ -368,10 +445,18 @@ def verify_pair(edge_board, hub_board, fleet, result, posture="secure", radio="s
     listening while the other talks, and the Edge starts first so the Hub's first poll finds
     somebody there.
     """
+    # The radio each board was actually provisioned with, not the one this command was told.
+    # `allora verify` defaults its flag to sx127x, so verifying a pair provisioned as sx1262
+    # would drive the wrong driver on both boards and report a link failure. The registry is the
+    # record of what was written, so it answers instead, and the flag is the fallback for a pair
+    # this machine did not provision.
+    edge_radio = _registered_radio(fleet, "edge", radio, result)
+    hub_radio = _registered_radio(fleet, "hub", radio, result)
+
     edge_script = _stage(fleet, "verify", "verify_edge.py",
-                         render_template("verify_edge.py", radio=radio, window=window))
+                         render_template("verify_edge.py", radio=edge_radio, window=window))
     hub_script = _stage(fleet, "verify", "verify_hub.py",
-                        render_template("verify_hub.py", radio=radio, window=window))
+                        render_template("verify_hub.py", radio=hub_radio, window=window))
 
     outputs = {}
 
@@ -423,12 +508,42 @@ def verify_pair(edge_board, hub_board, fleet, result, posture="secure", radio="s
     return result
 
 
-def _example_main(role, posture):
-    """The tracked v3_hello program for this placement and posture, if there is one."""
+def _registered_radio(fleet, role, fallback, result):
+    """The radio this role was provisioned with, per the fleet registry.
+
+    Falls back to what the caller asked for when the registry has no entry, which is the case
+    for a pair provisioned somewhere else. A disagreement is reported rather than resolved
+    silently: it means the boards in front of the operator are not the ones this fleet
+    describes, and that is worth knowing before a failed transfer is blamed on the antenna.
+    """
+    try:
+        entries = [e for e in fleet.entries() if e.get("role") == role and e.get("radio")]
+    except Exception:
+        return fallback
+    if not entries:
+        return fallback
+    registered = entries[-1]["radio"]
+    if registered != fallback:
+        result.warn(
+            "the {} is registered as {} and this run was told {}. Verifying on {}, which is "
+            "what it was provisioned with.".format(role, registered, fallback, registered))
+    return registered
+
+
+def _generic_main():
+    """The tracked v3_hello program every provisioned node runs.
+
+    One file for both placements and all three postures, because what a board is now comes from
+    its config rather than from which program was copied onto it. Pushing the tracked file
+    rather than a template of the wizard's own keeps one program to keep true, and keeps the
+    deployment a reader can reproduce by hand identical to the one the wizard produces.
+    """
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(_TEMPLATE_DIR)))
-    path = os.path.join(repo_root, "examples", "v3_hello", posture, role, "main.py")
+    path = os.path.join(repo_root, "examples", "v3_hello", "main.py")
     if not os.path.exists(path):
-        return None
+        raise BoardError(
+            "examples/v3_hello/main.py is missing. The wizard pushes the tracked program "
+            "rather than one of its own, so there is nothing to provision a node with.")
     with open(path, "r") as f:
         return f.read()
 

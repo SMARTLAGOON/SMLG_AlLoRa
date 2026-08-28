@@ -57,7 +57,7 @@ class Hub(Node):
     # verifying half, which it could do nothing with, is refused as a misprovisioning.
     _MINTS_CONTROL = True
 
-    def __init__(self, connector=None, config_file="LoRa.json",
+    def __init__(self, connector=None, config_file=None,
                  debug_hops=False,
                  max_sleep_time=3,
                  successful_interactions_required=5,
@@ -576,7 +576,7 @@ class Hub(Node):
     def _persist_endpoint_rf(self, digital_endpoint):
         """Write an endpoint's settled RF back to the roster file this Hub registered it from.
 
-        A node writes back the config file it read: the Edge its own LoRa.json, this node the
+        A node writes back the config file it read: the Edge its own config file, this node the
         Nodes.json it was given. Without this half, a Hub that commanded a retune, saw it
         accepted and was then restarted came back polling the old config while its Edge sat on
         the new one, and neither side could return.

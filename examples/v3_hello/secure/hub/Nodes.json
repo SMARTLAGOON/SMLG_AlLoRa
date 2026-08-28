@@ -1,0 +1,9 @@
+[
+  {
+    "name": "src",
+    "device_id": "<paste the device_id the Edge prints on boot>",
+    "active": false,
+    "asking_frequency": 60,
+    "listening_time": 30
+  }
+]

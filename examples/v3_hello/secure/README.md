@@ -13,11 +13,23 @@ Load and run it as described in [the parent README](../README.md), copying from 
 EDGE device_id (register this on the Hub): <hex>
 ```
 
-Paste that value into `secure/hub/main.py`:
+Paste that value into `secure/hub/Nodes.json`, and set `"active": true`:
 
-```python
-endpoint = Digital_Endpoint(name="src", device_id="<the printed device_id>", active=True)
+```json
+[
+  {
+    "name": "src",
+    "device_id": "<the printed device_id>",
+    "active": true,
+    "asking_frequency": 60,
+    "listening_time": 30
+  }
+]
 ```
+
+The roster goes in a file rather than a constant in a program because that is the file the Hub
+already reads, the file it writes settled radio settings back into, and a file a backend can
+edit where it could not edit a Python constant.
 
 That is the whole of the pairing. First contact is addressed by `device_id[:4]` (no MAC on the
 wire), and the session id derives from the same identity on both ends, so unlike
@@ -26,7 +38,7 @@ instead of two. That `device_id[:4]` is also what names the Hub's save folder.
 
 ## Why `identity_file` matters
 
-Both `LoRa.json` files here carry `"identity_file": "identity.key"`. A node generates that key on
+Both `AlLoRa.json` files here carry `"identity_file": "identity.key"`. A node generates that key on
 first boot if it is missing, so the `device_id` you paste into the Hub stays valid across reboots
 only as long as that file survives.
 
@@ -42,8 +54,8 @@ frames, and then the sealed transfer runs exactly like the open one.
 
 ## Control commands in secure mode
 
-`secure/edge/main.py` attaches a `Node_Control_Actuator`, so `hub.ask_change_rf(...)` works here
-too. The sealed link means a command that arrives came from the node that completed the
+The shared [`../main.py`](../main.py) attaches a `Node_Control_Actuator`, so
+`hub.ask_change_rf(...)` works here too. The sealed link means a command that arrives came from the node that completed the
 handshake, which is a real improvement on open mode.
 
 It is still not a signed artifact: it is not checked against a fleet authority, and it does not

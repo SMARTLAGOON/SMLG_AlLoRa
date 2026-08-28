@@ -3,6 +3,21 @@
 Host-side code. CPython only, never frozen into firmware: the manifest freezes `AlLoRa/`, so
 nothing here reaches a board.
 
+Start here, with both boards plugged in:
+
+```bash
+python3 tools/provision.py setup
+```
+
+`setup` is the guided path and the only interactive command. It checks the machine, finds the
+boards and shows you their MACs, asks what this deployment is (posture, which board is the
+Edge, firmware, radio), prints the plan, and runs it once you say yes. It ends by driving one
+real 1000-byte transfer, because "provisioned" otherwise means only that files were copied.
+
+Underneath it is a toolkit, and every phase is also its own non-interactive command. That is
+what the control website drives, and what to reach for when a run needs a flag `setup` does
+not ask about:
+
 ```bash
 python3 tools/provision.py fleet-init
 python3 tools/provision.py edge --firmware AlLoRa-t3s3-sx127x-firmware.bin
@@ -10,6 +25,8 @@ python3 tools/provision.py hub  --firmware AlLoRa-t3s3-sx127x-firmware.bin
 python3 tools/provision.py verify --edge-port /dev/cu.usbmodemAAAA \
                                   --hub-port  /dev/cu.usbmodemBBBB
 ```
+
+`setup` drives exactly those phases. It is a front end, not a second implementation.
 
 Python 3.8 or newer, and nothing installed: the wizard is stdlib plus AlLoRa's own pure-Python
 crypto.
@@ -112,6 +129,15 @@ hard reset, `ampy` hangs on this REPL, `esptool`'s auto-reset does not work. So 
 the board stays in the loader between them, polls for the REPL afterwards instead of assuming
 it is back, and runs the verify scripts with `mpremote run`, which soft-resets and so does not
 drop the port.
+
+**Coming back from a flash is its own step.** The write ends with `--after hard_reset` and on
+this hardware the board still comes back silent: enumerated, present in `/dev`, answering no
+REPL. So the wait escalates rather than giving up. It probes, then issues a reset over the wire
+with a second `esptool` call, which is what actually brings the board back, and only then asks
+for a tap on RESET. Under `setup` that tap is a prompt inside the run; under the plain commands,
+where there may be nobody at the keyboard, it is the same refusal it has always been. Measured
+on the bench on 2026-08-27: five flashes, the board never returned by itself, the wire reset
+recovered it every time it was tried.
 
 ## `--json`
 

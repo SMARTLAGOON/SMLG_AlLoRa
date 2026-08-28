@@ -119,7 +119,7 @@ library-only change needs a firmware rebuild to reach the device.
 **Registering a secure node (device_id, not MAC).** A secure node's first contact is addressed by
 its device_id, the fingerprint of its long-term identity key (`SHA256(pubkey)`), not by its wifi
 MAC. On first boot the Edge generates that key, persists it to the `identity_file` named in
-`LoRa.json` (so the device_id is stable across reboots), and prints it as `EDGE device_id
+`AlLoRa.json` (so the device_id is stable across reboots), and prints it as `EDGE device_id
 (register this on the Hub): <hex>`. Bring-up is therefore two passes: boot the Edge once to
 read its device_id, then register that value on the Hub (`Digital_Endpoint(device_id="<hex>",
 active=True)`) before starting the pull. The session id derives from the same identity, so no
@@ -192,8 +192,8 @@ that only reach a device on a rebuild:
   where that file goes from the same config line. A board flashed from an older `.bin` still forgets
   the mark on every reboot: reflash both ends before trusting any replay test.
 - **`short_mac` is gone from the v3 configs.** It selected a long-MAC option v3 never had, and no v3
-  path read it. Copy the current `LoRa.json` onto the device rather than keeping an older one; the
-  key was inert either way, so nothing changes on the air.
+  path read it. Copy the current `AlLoRa.json` onto the device rather than keeping an older one;
+  the key was inert either way, so nothing changes on the air.
 
 The wire is untouched by all three, so a new build and an old one still interoperate.
 

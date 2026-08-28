@@ -14,6 +14,7 @@ import argparse
 import sys
 
 from tools.allora_provision import doctor as doctor_module
+from tools.allora_provision import setup as setup_module
 from tools.allora_provision.board import Board, BoardError, Runner, discover_boards
 from tools.allora_provision.fleet import Fleet
 from tools.allora_provision.node_config import DEFAULT_RF, POSTURES
@@ -76,6 +77,13 @@ def build_parser():
         description="Flash, provision and verify an AlLoRa deployment.")
     subparsers = parser.add_subparsers(dest="command")
 
+    setup = subparsers.add_parser(
+        "setup", help="the guided path: asks what you want, shows the plan, runs it")
+    setup.add_argument("--fleet", default=DEFAULT_FLEET, help=_FLEET_HELP)
+    # No `--json` on this one. The others emit a document for the website to parse; this one
+    # holds a conversation, and a machine has nothing to say to it.
+    setup.set_defaults(json_mode=False)
+
     ports = subparsers.add_parser(
         "ports", help="list the serial ports that answer a MicroPython REPL")
     _add_common(ports)
@@ -137,7 +145,7 @@ def _resolve_port(given, result, runner=None):
             len(answering), ", ".join(answering)))
 
 
-def cmd_ports(args, result, runner=None, sleep=None):
+def cmd_ports(args, result, runner=None, sleep=None, **_):
     answering = discover_boards(runner=runner)
     boards = []
     for port in answering:
@@ -192,7 +200,7 @@ def cmd_fleet_show(args, result, **_):
     return result
 
 
-def cmd_edge(args, result, runner=None, sleep=None):
+def cmd_edge(args, result, runner=None, sleep=None, **_):
     fleet = Fleet(args.fleet)
     preflight(args, result, runner=runner)
     port = _resolve_port(args.port, result, runner=runner)
@@ -220,7 +228,7 @@ def cmd_edge(args, result, runner=None, sleep=None):
     return result
 
 
-def cmd_hub(args, result, runner=None, sleep=None):
+def cmd_hub(args, result, runner=None, sleep=None, **_):
     fleet = Fleet(args.fleet)
     preflight(args, result, runner=runner)
     port = _resolve_port(args.port, result, runner=runner)
@@ -232,7 +240,7 @@ def cmd_hub(args, result, runner=None, sleep=None):
     return result
 
 
-def cmd_verify(args, result, runner=None, sleep=None):
+def cmd_verify(args, result, runner=None, sleep=None, **_):
     fleet = Fleet(args.fleet)
     preflight(args, result, runner=runner)
     verify_pair(Board(args.edge_port, runner=runner, sleep=sleep),
@@ -257,7 +265,7 @@ def _describe_plan(plan, result):
                         plan["package"], plan["scripts_dir"], plan["scripts_dir"]))
 
 
-def cmd_doctor(args, result, runner=None, sleep=None):
+def cmd_doctor(args, result, runner=None, sleep=None, **_):
     runner = runner or Runner()
     result.step("python", "{} at {}".format(
         ".".join(str(n) for n in sys.version_info[:3]), sys.executable))
@@ -333,7 +341,12 @@ def preflight(args, result, runner=None):
         "above.".format(", ".join(entry["tool"] for entry in absent)))
 
 
+def cmd_setup(args, result, runner=None, sleep=None, ask=None, **_):
+    return setup_module.run(args, result, runner=runner, sleep=sleep, ask=ask)
+
+
 COMMANDS = {
+    "setup": cmd_setup,
     "ports": cmd_ports,
     "doctor": cmd_doctor,
     "fleet-init": cmd_fleet_init,
@@ -344,7 +357,7 @@ COMMANDS = {
 }
 
 
-def main(argv=None, runner=None, out=None, sleep=None):
+def main(argv=None, runner=None, out=None, sleep=None, ask=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command:
@@ -353,7 +366,7 @@ def main(argv=None, runner=None, out=None, sleep=None):
 
     result = Result(args.command, json_mode=args.json_mode)
     try:
-        COMMANDS[args.command](args, result, runner=runner, sleep=sleep)
+        COMMANDS[args.command](args, result, runner=runner, sleep=sleep, ask=ask)
     except (BoardError, ValueError) as e:
         result.fail(str(e))
     return result.emit(out=out)

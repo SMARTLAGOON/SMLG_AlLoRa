@@ -86,7 +86,7 @@ class Digital_Endpoint:
         - lock_on_file_receive: If True, the gateway locks on this node until a complete file is received or a timeout occurs.
 
         RF settings are optional. State them in a `connector` block inside `config`, spelled as
-        in LoRa.json (`freq`, `sf`, `bandwidth`, `coding_rate`, `tx_power`), so the peer's own
+        in the config (`freq`, `sf`, `bandwidth`, `coding_rate`, `tx_power`), so the peer's own
         block can be pasted across; anything left unstated is polled on the config of the node
         holding this endpoint. See `_read_rf`.
         """
@@ -159,7 +159,7 @@ class Digital_Endpoint:
     # LOCAL node reaches its own radio, so it has no meaning here. The timeouts in particular
     # are already derived: change_rf_config recomputes them from the SF and BW it just set.
     _RF_FIELDS = ("freq", "sf", "bw", "cr", "tx_power")
-    # Canonical spelling inside a `connector` block, which is LoRa.json's own: an endpoint
+    # Canonical spelling inside a `connector` block, which is the config file's own: an endpoint
     # block is meant to be that file's connector block, pasted across unedited.
     _RF_FROM_CONNECTOR = {"freq": "freq", "sf": "sf", "bw": "bandwidth",
                           "cr": "coding_rate", "tx_power": "tx_power"}
@@ -174,7 +174,7 @@ class Digital_Endpoint:
         with nothing logged.
 
         Two accepted shapes. A `connector` block is the documented one, spelled exactly as in
-        LoRa.json so it can be pasted from the peer's own config; the flat `sf`/`bw`/`cr` keys
+        AlLoRa.json so it can be pasted from the peer's own config; the flat `sf`/`bw`/`cr` keys
         are the legacy shape and still read. A block wins outright if both are present.
         """
         self.rf_skipped = ()

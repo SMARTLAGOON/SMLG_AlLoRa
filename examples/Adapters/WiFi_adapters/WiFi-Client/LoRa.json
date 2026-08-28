@@ -12,13 +12,13 @@
     },
 
   "adapter": {
-    "ssid": "smartlagoon_land_requester",
-    "psw": "smartlagoonX98ASasd00de2l",
+    "ssid": "AlLoRa_Network",
+    "psw": "AlLoRa_Network",
     "host": "192.168.4.1",
     "port": 80,
-    "ip" : "192.168.0.16",
+    "ip" : "192.168.4.16",
     "subnet_mask" : "255.255.255.0",
-    "gateway" : "192.168.1.10",
+    "gateway" : "192.168.4.1",
     "DNS_server" : "8.8.8.8"
     }
 }

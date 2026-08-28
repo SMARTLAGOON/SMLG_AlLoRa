@@ -5,8 +5,8 @@ The smallest end-to-end v3 test: one **Edge** serves a 1000-byte file, one **Hub
 like the loopback acceptance tests.
 
 It comes in three postures. They are the same transfer with more provisioning underneath it, and
-each one is a folder you copy onto two boards as it stands. Start at the top and stop when you
-have what you need.
+each one is a folder of config files you copy onto two boards beside the one shared program.
+Start at the top and stop when you have what you need.
 
 | Folder | What it adds | The Hub registers the Edge by |
 |---|---|---|
@@ -14,10 +14,21 @@ have what you need.
 | [`secure/`](secure) | A crypto identity per node: ECDH on first contact, every frame AEAD-sealed. | the `device_id` the Edge derives |
 | [`control/`](control) | A fleet control root: the Hub signs configuration commands, the Edge verifies them. | the same `device_id`, plus a shared root |
 
-These used to be one `main.py` per side that branched at boot on whichever config and key files
-it found. That is what let one combination, an open node holding a control root, go unrun until
-it raised on a bench. Each posture is now its own folder and states what it needs at boot rather
-than adapting to what it happens to find.
+## One program, six configs
+
+[`main.py`](main.py) here is the program every node runs, whichever posture and whichever
+placement. It reads `AlLoRa.json`, builds what that file names, and runs it, so an Edge and a Hub
+differ by one line of JSON rather than by two Python files. It is also the program the wizard
+pushes, so a deployment you set up by hand and one `allora setup` produces are the same
+deployment.
+
+There was previously one `main.py` per side per posture, six near-copies, each naming its radio
+in its first import. That is what made an operator's radio choice unreachable: asking for an
+SX1262 Edge produced an SX127x one, because the program said so and nobody reads the program.
+
+[`secure/edge/main_literal.py`](secure/edge/main_literal.py) is the same deployment written out
+longhand, every class named. Read it if you would rather see the classes than follow a dispatch,
+and start from it if you have a radio this repository has never supported.
 
 ## Flash and load
 
@@ -26,17 +37,32 @@ its boards, picking the folder from the table above:
 
 ```bash
 # Edge device
-mpremote connect /dev/cu.usbmodemXXXX fs cp open/edge/main.py :main.py
-mpremote connect /dev/cu.usbmodemXXXX fs cp open/edge/LoRa.json :LoRa.json
+mpremote connect /dev/cu.usbmodemXXXX fs cp main.py :main.py
+mpremote connect /dev/cu.usbmodemXXXX fs cp open/edge/AlLoRa.json :AlLoRa.json
+# something to send: an Edge serves the files in its outbound folder and waits when it has none
+mpremote connect /dev/cu.usbmodemXXXX fs mkdir Outbox
+mpremote connect /dev/cu.usbmodemXXXX fs cp some-file.bin :Outbox/some-file.bin
 
 # Hub device
-mpremote connect /dev/cu.usbmodemYYYY fs cp open/hub/main.py :main.py
-mpremote connect /dev/cu.usbmodemYYYY fs cp open/hub/LoRa.json :LoRa.json
+mpremote connect /dev/cu.usbmodemYYYY fs cp main.py :main.py
+mpremote connect /dev/cu.usbmodemYYYY fs cp open/hub/AlLoRa.json :AlLoRa.json
+mpremote connect /dev/cu.usbmodemYYYY fs cp open/hub/Nodes.json :Nodes.json
 ```
 
-Both files land on the board under their plain names, `main.py` and `LoRa.json`, whichever
-folder they came from. Nothing on the board records which posture you loaded, so if a run
-behaves like a different posture than you expected, check what you copied.
+The same `main.py` goes on both boards. Which one becomes the Edge and which the Hub is decided
+by the `"node"` line in the `AlLoRa.json` beside it, and which radio each drives is decided by
+`connector.driver` in the same file.
+
+The Hub polls the Edges listed in `Nodes.json`, which is the file it also writes settled radio
+settings back into. In `open/` that roster is ready to run; in `secure/` and `control/` you paste
+in the `device_id` the Edge prints on boot and set `"active": true`.
+
+Nothing on the board records which posture you loaded, so if a run behaves like a different
+posture than you expected, check what you copied.
+
+**A board that has never been updated keeps working.** A node reads `AlLoRa.json` if it is there
+and `LoRa.json` if it is not, and writes back to whichever one it read. The old name is read
+forever, not for a migration window.
 
 Use `mpremote`, not `ampy`: on a board with native USB (the T3S3 and anything else ESP32-S3)
 `ampy` hangs on the REPL rather than copying.
@@ -47,10 +73,14 @@ prints or saves it under `Results/<label>/`.
 
 ## The one thing every posture needs
 
-**RF config must match** on both `LoRa.json` files: `sf` / `freq` / `bandwidth` / `coding_rate`.
-They are identical in all three folders here (SF7 / 868 / 125 / 4-5). Changing those two files is
-enough: the Hub's endpoint states no radio of its own, so it is polled on whatever the Hub's
-`LoRa.json` says.
+**RF config must match** on both `AlLoRa.json` files: `sf` / `freq` / `bandwidth` /
+`coding_rate`. They are identical in all three folders here (SF7 / 868 / 125 / 4-5). Changing
+those two files is enough: the Hub's endpoint states no radio of its own, so it is polled on
+whatever the Hub's own config says.
+
+**`chunk_size` is absent on purpose.** Left out, a node cuts its files at the largest chunk its
+frames can carry, which depends on the posture and the protocol version and so is only knowable
+on the node. Set it to pin a number; it is still clamped to what actually fits.
 
 Each posture then has its own second thing to line up, which is what its README is about.
 

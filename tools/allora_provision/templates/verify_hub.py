@@ -13,7 +13,7 @@ from AlLoRa.Connectors.__RADIO_MODULE__ import __RADIO_CLASS__
 
 gc.enable()
 
-hub = Hub(__RADIO_CLASS__(), config_file="LoRa.json", nodes_file="Nodes.json")
+hub = Hub(__RADIO_CLASS__(), nodes_file="Nodes.json")
 print("VERIFY:mode", hub.security_mode)
 # A configured-secure node halts rather than running plaintext, so reaching here with a backend
 # is what says the frames are actually sealed and not merely meant to be.
