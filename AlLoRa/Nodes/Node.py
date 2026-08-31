@@ -339,6 +339,20 @@ class Node:
         path = self.config.get('control_root_file', None)
         if not path:
             return None
+        if self.protocol_version < 3:
+            # The signed control route exists only from version 3 on. A version 2 node handles
+            # a radio-config change carried on an OK packet without ever consulting a root, so
+            # this one would come up holding a key it can never reach and obeying whatever
+            # unauthenticated command arrived. Guarding that branch instead would leave the
+            # contradiction sitting in the config, to be discovered once, in the field, by a
+            # node quietly doing as it was told. A registered node must never silently fall
+            # back to plaintext, so the contradiction is refused where it is written down.
+            raise ValueError(
+                "control_root_file '{}' is provisioned on a node running protocol_version "
+                "{}: the signed control route needs version 3 or later, and a version 2 node "
+                "acts on an unauthenticated radio-config change without ever reading its "
+                "root. Raise protocol_version to 3, or remove control_root_file.".format(
+                    path, self.protocol_version))
         try:
             with open(path, "r") as f:
                 material = f.read().strip()

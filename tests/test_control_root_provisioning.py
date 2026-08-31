@@ -347,6 +347,31 @@ def test_a_key_of_the_right_length_that_is_not_a_curve_point_halts(tmp_path):
         _edge(tmp_path, control_root_file=_key_file(tmp_path, off_curve))
 
 
+def test_a_control_root_on_a_v2_node_halts(tmp_path):
+    # A node configured `protocol_version: 2` never reaches the branch that consults its
+    # control root: the v2 radio-config path acts on an unauthenticated change_rf and no code
+    # on it asks whether a root was provisioned. So the node comes up looking commanded-only
+    # and obeys anyone in radio range. The combination has no legitimate use, and the choice
+    # is between refusing it here or guarding a branch that would then fail quietly at request
+    # time, once, in the field. Refuse at construction, for the same reason `strict` is.
+    with pytest.raises(ValueError) as excinfo:
+        _edge(tmp_path, protocol_version=2,
+              control_root_file=_key_file(tmp_path, ROOT_PUB_HEX))
+
+    message = str(excinfo.value)
+    assert "protocol_version" in message and "control_root_file" in message, \
+        "the operator has to be told which two keys contradict each other"
+
+
+def test_a_control_root_on_a_v2_hub_halts_too(tmp_path):
+    # The guard belongs to the base class, not to the commanded half: a v2 Hub provisioned to
+    # mint cannot send a signed artifact either, and would fall back to unsigned commands
+    # while its config claims a signed deployment.
+    with pytest.raises(ValueError):
+        _hub(tmp_path, protocol_version=2,
+             control_root_file=_key_file(tmp_path, ROOT_PRIV_HEX))
+
+
 # --- the tool that writes the files, and the nodes that read them ----------------------------
 
 def test_the_provisioning_tool_writes_what_the_nodes_load(tmp_path):
