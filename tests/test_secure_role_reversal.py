@@ -289,10 +289,65 @@ def test_secure_reclaim_on_lost_first_pull_then_recovery(tmp_path):
 
     assert edge_conn.dropped >= 4, "the pull drops never happened - filter inert"
     assert (hub._swap_id - first_swap_id) & 0xFF >= 2, "the reclaim timer never fired"
-    assert [(n, c) for n, c, _ in sink.received] == [("relay.bin", payload)]
+    # At-least-once, not exactly-once, and the difference is the protocol's rather than this
+    # test's. The confirmation that retires the Hub's copy is a fire-and-forget final OK that
+    # nothing acknowledges, so losing it leaves the Hub still holding the file to serve again
+    # at the next delegation, and the Edge has no file identity to recognise a second copy by.
+    # This case engineers four consecutive drops against a 1.0 s reclaim timer, which is the
+    # shape that loses one, and on a loaded machine it does. Asserting a single delivery here
+    # made the suite fail on the protocol working as designed. What must hold is that every
+    # copy that arrives is the file: the next test pins the duplicate deterministically.
+    assert sink.received, "the file never arrived at all"
+    assert all((n, c) == ("relay.bin", payload) for n, c, _ in sink.received), \
+        "a delivered copy was not the file that was queued"
     assert hub.current_role == "collector"
     assert edge.current_role == "source"
     assert not hub.downlink_pending(endpoint)
+
+
+def test_a_lost_final_ok_costs_a_second_delivery(tmp_path):
+    """Why the case above cannot assert exactly-once.
+
+    The Edge confirms a completed downlink with an OK sent after the tail chunk, and that
+    frame is fire-and-forget: the serving side answers nothing, so nobody retransmits it and
+    nobody learns it was lost. The Hub therefore still has the file marked unsent, reclaims
+    on its timer, delegates again and serves it from the start; the Edge reassembles a second
+    complete copy and hands it to its sink, having no file identity to recognise it by.
+
+    Deduplicating would need that identity, which is the per-file digest work and a wire
+    decision, not a fix here. Until then this is what the delegation promises, and it is
+    pinned rather than left for a loaded machine to rediscover as a flake.
+    """
+    payload = bytes((i * 7) % 256 for i in range(500))
+    edge_conn, hub_conn = _make_filtered_pair()
+
+    class _Arming_sink(Capture_sink):
+        # Arm on the first delivery, so the frame lost is the final OK and nothing before it.
+        def consume(self, file, reception=None):
+            Capture_sink.consume(self, file, reception)
+            if len(self.received) == 1:
+                edge_conn.drop_kind(OK_KIND, count=1)
+
+    sink = _Arming_sink()
+    edge, hub, endpoint, _ = _make_pair(tmp_path, edge_conn, hub_conn,
+                                        edge_sink=sink, reclaim_timeout=1.0)
+
+    hub.queue_downlink(endpoint, AlLoRa_File(name="relay.bin", content=bytearray(payload),
+                                             chunk_size=hub.get_chunk_size()))
+
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 12},
+                              name="edge-serve", daemon=True)
+    server.start()
+    hub.listen_to_endpoint(endpoint, listening_time=8, save_file=True)
+    server.join(timeout=14)
+    assert not server.is_alive()
+
+    assert edge_conn.dropped == 1, "the final OK was not the frame that went missing"
+    assert len(sink.received) == 2, \
+        "a lost confirmation has to cost a second delivery, or the reading of the flake is wrong"
+    assert all((n, c) == ("relay.bin", payload) for n, c, _ in sink.received), \
+        "the duplicate must be a whole correct copy, not a damaged one"
+    assert not hub.downlink_pending(endpoint), "the Hub never stopped holding the file"
 
 
 # --- fielded firmware: the legacy set_file + send_file loop ------------------
