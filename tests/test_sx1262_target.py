@@ -45,6 +45,7 @@ class FakeSX1262:
         self.irq = self._Pin()
         self.armed = False
         self.arms = 0
+        self.resumes = 0
         self._pending = None
         self.begun = None
         self.frequency = None
@@ -99,9 +100,19 @@ class FakeSX1262:
         self.arms += 1
         return 0
 
+    def resumeReceive(self, timeout=None):
+        # The cheap path: same outcome, and the driver decides on its own when it cannot
+        # take it. What the connector must not do is call the expensive one after a send.
+        self.armed = True
+        self.resumes += 1
+        return 0
+
     def send(self, data=None):
         self.sent.append(data)
-        self.armed = False              # the real transmit ends in standby
+        # The real transmit no longer ends in standby: it lands in FS with the synthesizer
+        # running and leaves the caller to say what happens next. Either way it is not
+        # listening until something arms it.
+        self.armed = False
         return len(data), 0
 
     def arrive(self, frame, state=0):
@@ -338,7 +349,35 @@ def test_a_transmit_puts_the_receiver_back_on_air():
     connector, radio = _connector()
 
     assert connector.transmit(b"a request")
-    assert radio.armed, "the driver's transmit ends in standby; the connector has to undo that"
+    assert radio.armed, "a transmit does not leave the radio listening; the connector has to"
+
+
+def test_a_transmit_re_arms_by_the_cheap_path_and_not_by_a_full_rebuild():
+    """The whole point of the split, and it is worth a test because both paths work.
+
+    A full rebuild after every transmission is what left this radio deaf for 20 ms while a
+    peer was already replying. It still passes every test above, which is exactly why the
+    regression would be invisible: the receiver does come back on air, just too late.
+    """
+    connector, radio = _connector()
+    arms_after_config = radio.arms
+
+    assert connector.transmit(b"a request")
+
+    assert radio.resumes == 1, "a transmission should re-arm by the path meant for it"
+    assert radio.arms == arms_after_config, "and should not rebuild the receive configuration"
+
+
+def test_a_config_change_still_rebuilds_rather_than_resuming():
+    """A retune is the case the cheap path is not for: the configuration really did change."""
+    connector, radio = _connector()
+    before = radio.arms
+
+    connector.set_sf(9)
+    connector.set_frequency(867.5)
+
+    assert radio.arms == before + 2, "an RF change has to rebuild the receive configuration"
+    assert radio.resumes == 0
 
 
 def test_a_failed_transmit_still_leaves_the_receiver_listening():

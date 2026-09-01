@@ -2,6 +2,16 @@ from _sx126x import *
 
 from sys import implementation
 
+# How long to spin on the BUSY pin before falling back to a millisecond sleep. About 120
+# reads of the pin, which is a few hundred microseconds on an ESP32: long enough to cover an
+# ordinary command, short enough that a crystal start-up still goes to sleep rather than
+# holding the CPU for the whole of it.
+_BUSY_SPIN = 120
+
+# Room for the longest command the driver issues: a 255 byte buffer write behind a two byte
+# opcode, and on the read side one status byte in front of the data.
+_SPI_BUF_LEN = 264
+
 if implementation.name == 'micropython':
     from machine import SPI, Pin
     from utime import sleep_ms, sleep_us, ticks_ms, ticks_us, ticks_diff
@@ -90,6 +100,15 @@ class SX126X:
         self._syncWordLength = 0
         self._whitening = 0
         self._packetType = 0
+        self._modem = 0
+        # One SPI transfer per command instead of one per byte needs somewhere to build it.
+        # The buffers are allocated once, here, because the ESP32 heap fragments and this is
+        # on the path every command takes. The longest command in the driver is a 255 byte
+        # buffer write behind a two byte opcode, plus one status byte on the read side.
+        self._spiOut = bytearray(_SPI_BUF_LEN)
+        self._spiIn = bytearray(_SPI_BUF_LEN)
+        self._spiOutMv = memoryview(self._spiOut)
+        self._spiInMv = memoryview(self._spiIn)
         self._dataRate = 0
         self._packetLength = 0
         self._preambleDetectorLength = 0
@@ -280,8 +299,11 @@ class SX126X:
         state = self.clearIrqStatus()
         ASSERT(state)
 
-        state = self.standby()
-
+        # No standby here. The fallback mode set in config() has already left the chip in FS
+        # with its synthesizer running, and a standby would put it straight back to sleep:
+        # setting the fallback while still standing by measures slower than doing neither.
+        # A caller that transmits is expected to say what happens next, and the ones in this
+        # tree arm the receiver immediately.
         return state
 
     def receive(self, data, len_, timeout_en, timeout_ms):
@@ -481,7 +503,37 @@ class SX126X:
         state = self.setRx(timeout)
         
         return state
-            
+
+    def resumeReceive(self, timeout=SX126X_RX_TIMEOUT_INF):
+        """Put the receiver back on air after a transmission, without rebuilding it.
+
+        startReceive() re-sends the entire receive configuration: it reads the packet type
+        back over SPI twice and writes the packet parameters twice. After a transmission
+        almost none of that has changed. Three things have: startTransmit points the DIO1
+        mask at TX_DONE, the transmission leaves its own interrupt flags set, and the chip is
+        no longer in receive. Restoring only those takes the gap between the end of a
+        transmission and a live receiver from 13.6 ms to 5.4 ms, measured on a T3-S3.
+
+        This is only true with an explicit header. The one receive parameter a transmission
+        does overwrite is the payload length, which startTransmit sets to the outgoing
+        frame's, and an explicit-header receiver ignores it and takes the length from the
+        header instead. An implicit-header receiver reads that register, so it gets the full
+        rebuild, and so does anything that is not the LoRa modem.
+        """
+        if self._modem != SX126X_PACKET_TYPE_LORA or \
+                self._headerType != SX126X_LORA_HEADER_EXPLICIT:
+            return self.startReceive(timeout)
+
+        state = self.setDioIrqParams(SX126X_IRQ_RX_DONE | SX126X_IRQ_TIMEOUT |
+                                     SX126X_IRQ_CRC_ERR | SX126X_IRQ_HEADER_ERR,
+                                     SX126X_IRQ_RX_DONE)
+        ASSERT(state)
+
+        state = self.clearIrqStatus()
+        ASSERT(state)
+
+        return self.setRx(timeout)
+
     def startReceiveDutyCycle(self, rxPeriod, sleepPeriod):
         transitionTime = int(self._tcxoDelay + 1000)
         sleepPeriod -= transitionTime
@@ -1232,8 +1284,16 @@ class SX126X:
         data[0] = modem
         state = self.SPIwriteCommand([SX126X_CMD_SET_PACKET_TYPE], 1, data, 1)
         ASSERT(state)
+        self._modem = modem
 
-        data[0] = SX126X_RX_TX_FALLBACK_MODE_STDBY_RC
+        # Land in FS after a transmission, not in STDBY_RC. STDBY_RC stops the crystal, and
+        # a board with a TCXO programmes a start-up allowance below (5 ms by default), so
+        # every return to receive after a transmit waited for the oscillator to come back:
+        # one SetRx costs 8.0 ms from STDBY_RC against 1.9 ms from FS, measured on a T3-S3.
+        # That is longer than a peer takes to begin its reply, so a node was deaf to answers
+        # it had asked for. FS keeps the synthesizer running, and the chip is only in it
+        # between the end of a transmission and the arm that follows.
+        data[0] = SX126X_RX_TX_FALLBACK_MODE_FS
         state = self.SPIwriteCommand([SX126X_CMD_SET_RX_TX_FALLBACK_MODE], 1, data, 1)
         ASSERT(state)
 
@@ -1267,6 +1327,39 @@ class SX126X:
 
         return ERR_NONE
 
+    def _waitBusy(self, timeout=5000):
+        """Wait for BUSY to fall, spinning briefly before handing the millisecond back.
+
+        Every command here ends in this wait, and yield_() sleeps for a whole millisecond.
+        An ordinary command holds BUSY for tens of microseconds, so the sleep was costing
+        more than the command it was waiting on: a three command arm spent about one
+        millisecond of its time asleep with nothing to wait for. A short spin catches those
+        and the genuinely long waits still fall through to the sleep, so a crystal start-up
+        does not become a busy loop that starves everything else on the board.
+
+        Returns True if BUSY fell, False if it did not within the timeout.
+        """
+        if implementation.name == 'micropython':
+            for _ in range(_BUSY_SPIN):
+                if not self.gpio.value():
+                    return True
+            start = ticks_ms()
+            while self.gpio.value():
+                yield_()
+                if abs(ticks_diff(start, ticks_ms())) >= timeout:
+                    return False
+            return True
+
+        for _ in range(_BUSY_SPIN):
+            if not self.gpio.value:
+                return True
+        start = ticks_ms()
+        while self.gpio.value:
+            yield_()
+            if abs(ticks_diff(start, ticks_ms())) >= timeout:
+                return False
+        return True
+
     def SPIwriteCommand(self, cmd, cmdLen, data, numBytes, waitForBusy=True):
         return self.SPItransfer(cmd, cmdLen, True, data, [], numBytes, waitForBusy)
 
@@ -1274,50 +1367,100 @@ class SX126X:
         return self.SPItransfer(cmd, cmdLen, False, [], data, numBytes, waitForBusy)
 
     def SPItransfer(self, cmd, cmdLen, write, dataOut, dataIn, numBytes, waitForBusy, timeout=5000):
+        """One SPI transfer per command, not one per byte.
+
+        This used to issue a separate spi.write() or spi.read() for every byte of every
+        command, each one allocating a fresh bytes object, so a command's cost was set by how
+        many bytes it carried rather than by the bus. Putting the receiver back on air spent
+        about four milliseconds here. The bytes on the wire are unchanged, and so is the
+        status decoding: the chip returns a status byte for every byte of the data phase,
+        which is exactly what the loops below used to read one at a time.
+        """
         if implementation.name == 'micropython':
           self.cs.value(0)
 
-          start = ticks_ms()
-          while self.gpio.value():
-              yield_()
-              if abs(ticks_diff(start, ticks_ms())) >= timeout:
-                  self.cs.value(1)
-                  return ERR_SPI_CMD_TIMEOUT
+          if not self._waitBusy(timeout):
+              self.cs.value(1)
+              return ERR_SPI_CMD_TIMEOUT
 
+          # The command opcode, then either the bytes being written or a NOP for every byte
+          # being read back, plus one leading NOP whose reply is the status byte.
+          total = cmdLen + numBytes if write else cmdLen + 1 + numBytes
+          out = self._spiOutMv[:total]
+          in_ = self._spiInMv[:total]
           for i in range(cmdLen):
-              self.spi.write(bytes([cmd[i]]))
+              out[i] = cmd[i]
+          if write:
+              for i in range(numBytes):
+                  out[cmdLen + i] = dataOut[i]
+          else:
+              for i in range(cmdLen, total):
+                  out[i] = SX126X_CMD_NOP
 
-        if implementation.name == 'circuitpython':
-          while not self.spi.try_lock():
-              pass
-          self.cs.value = False
+          self.spi.write_readinto(out, in_)
+          self.cs.value(1)
 
-          start = ticks_ms()
-          while self.gpio.value:
-              yield_()
-              if abs(ticks_diff(start, ticks_ms())) >= timeout:
-                  self.cs.value = True
-                  self.spi.unlock()
-                  return ERR_SPI_CMD_TIMEOUT
+          status = 0
+          if write:
+              for i in range(cmdLen, total):
+                  b = in_[i]
+                  if (b & 0b00001110) == SX126X_STATUS_CMD_TIMEOUT or\
+                     (b & 0b00001110) == SX126X_STATUS_CMD_INVALID or\
+                     (b & 0b00001110) == SX126X_STATUS_CMD_FAILED:
+                      status = b & 0b00001110
+                      break
+                  elif (b == 0x00) or (b == 0xFF):
+                      status = SX126X_STATUS_SPI_FAILED
+                      break
+          else:
+              b = in_[cmdLen]
+              if (b & 0b00001110) == SX126X_STATUS_CMD_TIMEOUT or\
+                 (b & 0b00001110) == SX126X_STATUS_CMD_INVALID or\
+                 (b & 0b00001110) == SX126X_STATUS_CMD_FAILED:
+                  status = b & 0b00001110
+              elif (b == 0x00) or (b == 0xFF):
+                  status = SX126X_STATUS_SPI_FAILED
+              else:
+                  for i in range(numBytes):
+                      dataIn[i] = in_[cmdLen + 1 + i]
 
-          for i in range(cmdLen):
-              self.spi.write(bytes([cmd[i]]))
+          if waitForBusy:
+              sleep_us(1)
+              if not self._waitBusy(timeout):
+                  status = SX126X_STATUS_CMD_TIMEOUT
 
-          in_ = bytearray(1)
+          switch = {SX126X_STATUS_CMD_TIMEOUT: ERR_SPI_CMD_TIMEOUT,
+                    SX126X_STATUS_CMD_INVALID: ERR_SPI_CMD_INVALID,
+                    SX126X_STATUS_CMD_FAILED: ERR_SPI_CMD_FAILED,
+                    SX126X_STATUS_SPI_FAILED: ERR_CHIP_NOT_FOUND}
+          try:
+              return switch[status]
+          except:
+              return ERR_NONE
 
+        # CircuitPython keeps the byte-at-a-time path: it is not a target here and it has no
+        # board to be re-measured on.
+        while not self.spi.try_lock():
+            pass
+        self.cs.value = False
+
+        start = ticks_ms()
+        while self.gpio.value:
+            yield_()
+            if abs(ticks_diff(start, ticks_ms())) >= timeout:
+                self.cs.value = True
+                self.spi.unlock()
+                return ERR_SPI_CMD_TIMEOUT
+
+        for i in range(cmdLen):
+            self.spi.write(bytes([cmd[i]]))
+
+        in_ = bytearray(1)
         status = 0
 
         if write:
             for i in range(numBytes):
-                if implementation.name == 'micropython':
-                    try:
-                        in_ = self.spi.read(1, dataOut[i])
-                    except:
-                        in_ = self.spi.read(1, write=dataOut[i])
-
-                if implementation.name == 'circuitpython':
-                  self.spi.write_readinto(bytes([dataOut[i]]), in_)
-
+                self.spi.write_readinto(bytes([dataOut[i]]), in_)
                 if (in_[0] & 0b00001110) == SX126X_STATUS_CMD_TIMEOUT or\
                    (in_[0] & 0b00001110) == SX126X_STATUS_CMD_INVALID or\
                    (in_[0] & 0b00001110) == SX126X_STATUS_CMD_FAILED:
@@ -1327,14 +1470,7 @@ class SX126X:
                     status = SX126X_STATUS_SPI_FAILED
                     break
         else:
-            if implementation.name == 'micropython':
-                try:
-                    in_ = self.spi.read(1, SX126X_CMD_NOP)
-                except:
-                    in_ = self.spi.read(1, write=SX126X_CMD_NOP)
-
-            if implementation.name == 'circuitpython':
-              self.spi.readinto(in_)
+            self.spi.readinto(in_)
 
             if (in_[0] & 0b00001110) == SX126X_STATUS_CMD_TIMEOUT or\
                (in_[0] & 0b00001110) == SX126X_STATUS_CMD_INVALID or\
@@ -1343,41 +1479,17 @@ class SX126X:
             elif (in_[0] == 0x00) or (in_[0] == 0xFF):
                 status = SX126X_STATUS_SPI_FAILED
             else:
-                if implementation.name == 'micropython':
-                    for i in range(numBytes):
-                        try:
-                            dataIn[i] = self.spi.read(1, SX126X_CMD_NOP)[0]
-                        except:
-                            dataIn[i] = self.spi.read(1, write=SX126X_CMD_NOP)[0]
+                for i in range(numBytes):
+                    self.spi.readinto(in_)
+                    dataIn[i] = in_[0]
 
-                if implementation.name == 'circuitpython':
-                  for i in range(numBytes):
-                      self.spi.readinto(in_)
-                      dataIn[i] = in_[0]
-
-        if implementation.name == 'micropython':
-          self.cs.value(1)
-
-        if implementation.name == 'circuitpython':
-          self.cs.value = True
-          self.spi.unlock()
+        self.cs.value = True
+        self.spi.unlock()
 
         if waitForBusy:
             sleep_us(1)
-            start = ticks_ms()
-            if implementation.name == 'micropython':
-              while self.gpio.value():
-                  yield_()
-                  if abs(ticks_diff(start, ticks_ms())) >= timeout:
-                      status =  SX126X_STATUS_CMD_TIMEOUT
-                      break
-
-            if implementation.name == 'circuitpython':
-              while self.gpio.value:
-                  yield_()
-                  if abs(ticks_diff(start, ticks_ms())) >= timeout:
-                      status =  SX126X_STATUS_CMD_TIMEOUT
-                      break
+            if not self._waitBusy(timeout):
+                status = SX126X_STATUS_CMD_TIMEOUT
 
         switch = {SX126X_STATUS_CMD_TIMEOUT: ERR_SPI_CMD_TIMEOUT,
                   SX126X_STATUS_CMD_INVALID: ERR_SPI_CMD_INVALID,
@@ -1387,3 +1499,4 @@ class SX126X:
             return switch[status]
         except:
             return ERR_NONE
+

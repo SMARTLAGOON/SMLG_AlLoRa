@@ -68,20 +68,36 @@ class SX1262_connector(Connector):
         self._arm()
 
     def _arm(self):
-        """Leave the receiver listening. Safe to call when it already is.
+        """Build the receive configuration and leave the receiver listening.
 
-        Building a receive configuration on this chip costs about 19 ms, so it has to have
-        happened already by the time anyone asks for a packet rather than when they ask.
-        Doing it inside recv() instead left a node deaf for 44 ms after every transmission,
-        measured, and a reply starts arriving within a few ms of a request ending, so a Hub
-        on this radio never completed a single poll.
+        Building one on this chip is expensive, so it has to have happened already by the
+        time anyone asks for a packet rather than when they ask. Doing it inside recv()
+        instead left a node deaf for 44 ms after every transmission, measured, and a reply
+        starts arriving within a few ms of a request ending, so a Hub on this radio never
+        completed a single poll.
 
-        Arming here is necessary and, on its own, not sufficient: 19 ms is still longer than
-        a reply takes to start. Closing the rest of the gap means the driver below batching
-        its SPI transfers, which is why an SX1262 still cannot be a Hub.
+        This is the full build, for a radio whose configuration has just changed or has none
+        yet. After a transmission use _rearm(), which is the same thing minus the parts a
+        transmission does not disturb.
         """
         try:
             self.lora.startReceive()
+        except Exception as e:
+            if self.debug:
+                print("Arm Error: ", e)
+
+    def _rearm(self):
+        """Put the receiver back on air after a transmission.
+
+        A transmission changes three things and leaves the rest of the receive configuration
+        standing, so rebuilding all of it was most of what kept this radio deaf. Together
+        with the driver landing in FS instead of stopping its crystal, this takes the gap
+        between the end of a transmission and a live receiver from about 20 ms to under
+        5 ms, which is inside the time a peer takes to begin replying. The driver falls back
+        to the full build on its own if the radio is configured in a way that needs it.
+        """
+        try:
+            self.lora.resumeReceive()
         except Exception as e:
             if self.debug:
                 print("Arm Error: ", e)
@@ -162,10 +178,11 @@ class SX1262_connector(Connector):
                     print("Send Error: ", e)
                 return False
             finally:
-                # The driver's transmit ends in standby, so the receiver goes back on air here
-                # and not one call later. On the failure path too: a node that could not send is
-                # still expected to hear whatever arrives next.
-                self._arm()
+                # The receiver goes back on air here and not one call later, on the failure
+                # path too: a node that could not send is still expected to hear whatever
+                # arrives next. The cheap re-arm, because a transmission is exactly the case
+                # it exists for.
+                self._rearm()
         else:
             if self.debug:
                 print("Error: Packet too big")
