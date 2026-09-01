@@ -30,8 +30,22 @@ _DRIVERS = os.path.join(_ROOT, "firmware", "drivers")
 class FakeSX1262:
     """The driver's surface, at the level the connector talks to it."""
 
+    class _Pin:
+        def __init__(self):
+            self._v = False
+
+        def set(self, v):
+            self._v = v
+
+        def value(self):
+            return self._v
+
     def __init__(self, **pins):
         self.pins = pins
+        self.irq = self._Pin()
+        self.armed = False
+        self.arms = 0
+        self._pending = None
         self.begun = None
         self.frequency = None
         self.power = None
@@ -42,6 +56,7 @@ class FakeSX1262:
 
     def begin(self, **kwargs):
         self.begun = kwargs
+        self.armed = False
         self.frequency = kwargs.get("freq")
         self.bw = kwargs.get("bw")
         self.sf = kwargs.get("sf")
@@ -73,6 +88,34 @@ class FakeSX1262:
     def getSNR(self):
         return 9.5
 
+    # -- the receive path -------------------------------------------------------------
+    #
+    # The connector keeps the receiver on air and reads through the driver's non-blocking
+    # half, so the fake models the two things it actually looks at: the DIO1 line, and
+    # _readData returning (frame, state) and re-arming.
+
+    def startReceive(self, timeout=None):
+        self.armed = True
+        self.arms += 1
+        return 0
+
+    def send(self, data=None):
+        self.sent.append(data)
+        self.armed = False              # the real transmit ends in standby
+        return len(data), 0
+
+    def arrive(self, frame, state=0):
+        """A frame lands: DIO1 goes up and stays up until it is read."""
+        self._pending = (frame, state)
+        self.irq.set(True)
+
+    def _readData(self, len_=0):
+        frame, state = self._pending
+        self._pending = None
+        self.irq.set(False)
+        self.startReceive()             # the real _readData re-arms after reading
+        return frame, state
+
 
 _built = []
 
@@ -88,6 +131,13 @@ def _install_driver_stub():
 
     module.SX1262 = factory
     sys.modules.setdefault("sx1262", module)
+
+    # The connector names the driver's error codes rather than comparing against a bare 0,
+    # so the module that defines them has to exist here too. Same values as the driver.
+    codes = types.ModuleType("_sx126x")
+    codes.ERR_NONE = 0
+    codes.ERR_CRC_MISMATCH = -7
+    sys.modules.setdefault("_sx126x", codes)
     if "ubinascii" not in sys.modules:
         import binascii
         sys.modules["ubinascii"] = binascii
@@ -116,7 +166,7 @@ from AlLoRa.Connectors.SX1262_connector import SX1262_connector  # noqa: E402
 # Take the stubs back out. The connector module holds its own references to what it imported,
 # so it keeps working, and no other test in the session inherits a `network` or a `ubinascii`
 # that only exists on a board.
-for _stub in ("sx1262", "network", "ubinascii"):
+for _stub in ("sx1262", "_sx126x", "network", "ubinascii"):
     sys.modules.pop(_stub, None)
 
 
@@ -265,3 +315,125 @@ def test_the_two_targets_describe_the_same_board_identically(relative):
     sx127x = open(os.path.join(_TARGETS, "t3s3-sx127x", relative), "rb").read()
     sx1262 = open(os.path.join(_TARGETS, "t3s3-sx1262", relative), "rb").read()
     assert sx127x == sx1262, relative
+
+
+# -- the receiver stays on air -------------------------------------------------------------
+#
+# A node on this radio could not be a Hub: it was deaf for 44.4 ms after every transmission,
+# measured on the bench, while the reply to a request arrives at 43 to 57 ms. The cause was
+# the connector itself. `transmit` ended by arming continuous receive and `recv` began by
+# putting the chip back in standby to rebuild the whole receive configuration from scratch,
+# so the receiver was live for 2.7 ms, torn down, and only listening again 44 ms later.
+# The same measurement on the SX127x reads 3.1 ms, which is why this never showed there.
+
+
+def test_config_leaves_the_receiver_listening():
+    # Nothing else arms it, so a node that only ever waits would never hear anything.
+    _, radio = _connector()
+
+    assert radio.armed
+
+
+def test_a_transmit_puts_the_receiver_back_on_air():
+    connector, radio = _connector()
+
+    assert connector.transmit(b"a request")
+    assert radio.armed, "the driver's transmit ends in standby; the connector has to undo that"
+
+
+def test_a_failed_transmit_still_leaves_the_receiver_listening():
+    connector, radio = _connector()
+
+    def boom(data=None):
+        raise OSError("the bus went away")
+
+    radio.send = boom
+
+    assert connector.transmit(b"a request") is False
+    assert radio.armed, "a node that could not send still has to hear what arrives next"
+
+
+def test_a_frame_already_waiting_is_read_without_a_new_window():
+    # The reply that arrives while the node is between calls is the one this bug lost.
+    connector, radio = _connector()
+    radio.arrive(b"the reply")
+
+    assert connector.recv(12) == b"the reply"
+
+
+def test_an_empty_window_returns_none_and_does_not_disarm():
+    connector, radio = _connector()
+    arms_before = radio.arms
+
+    assert connector.recv(0) is None
+    assert radio.armed
+    assert radio.arms == arms_before, "an empty window must not rebuild the receiver"
+
+
+def test_a_receive_does_not_tear_the_receiver_down():
+    connector, radio = _connector()
+    radio.arrive(b"the reply")
+
+    connector.recv(12)
+
+    assert radio.armed, "reading a frame re-arms; it never leaves the chip in standby"
+
+
+# -- parity with the SX127x on corrupt frames ----------------------------------------------
+#
+# `Connector.exchange` reads `recv_dropped_corrupt` to report a damaged frame as a corrupt
+# frame rather than as an empty window, and `Node` counts CorruptedPackets from that label.
+# The SX127x connector sets it; this one dropped the frame but never said so, which filed
+# every damaged frame on this radio as a retransmission and made the count structurally zero.
+
+
+def test_a_corrupt_frame_is_dropped():
+    connector, radio = _connector()
+    radio.arrive(b"a damaged body", state=-7)
+
+    assert connector.recv(12) is None
+
+
+def test_a_corrupt_frame_is_reported_as_corrupt_and_not_as_silence():
+    connector, radio = _connector()
+    radio.arrive(b"a damaged body", state=-7)
+    connector.recv(12)
+
+    assert connector.recv_dropped_corrupt is True
+
+
+def test_an_intact_frame_is_not_reported_as_corrupt():
+    connector, radio = _connector()
+    radio.arrive(b"an intact body")
+    connector.recv(12)
+
+    assert connector.recv_dropped_corrupt is False
+
+
+def test_an_empty_window_is_not_reported_as_corrupt():
+    # Silence and corruption call for opposite responses, so the two must stay distinct.
+    connector, _ = _connector()
+    connector.recv(0)
+
+    assert connector.recv_dropped_corrupt is False
+
+
+# -- an RF change must not leave the node deaf ---------------------------------------------
+
+
+def test_a_retune_leaves_the_receiver_listening():
+    connector, radio = _connector()
+    radio.armed = False
+
+    connector.set_frequency(915)
+
+    assert radio.armed
+
+
+def test_a_spreading_factor_change_leaves_the_receiver_listening():
+    connector, radio = _connector()
+    radio.armed = False
+
+    connector.set_sf(9)
+
+    assert radio.armed
