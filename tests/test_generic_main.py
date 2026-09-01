@@ -18,6 +18,7 @@ has drifted is worse than no literal file: it is the one people read.
 import importlib.util
 import json
 import os
+import time
 
 import pytest
 
@@ -198,6 +199,63 @@ def test_a_rooted_node_with_no_identity_halts_instead_of_looking_provisioned(
     assert "identity" in str(excinfo.value)
 
 
+# --- a refusal reaches the operator, and the board stays stopped ------------------------------
+
+class _Woke(Exception):
+    """Stands in for the next tick of a halt that would otherwise never return."""
+
+
+def _sleep_once_then_wake(recorded):
+    def _sleep(seconds):
+        recorded.append(seconds)
+        if len(recorded) == 3:
+            raise _Woke()
+    return _sleep
+
+
+def test_a_stopped_node_keeps_saying_why_instead_of_going_quiet(monkeypatch, capsys):
+    """Every refusal in this program carries a sentence written for whoever fixes the config.
+    MicroPython prints nothing for SystemExit, so the sentence has to be printed here or it
+    reaches nobody, and it is repeated because the cable is usually attached after the fact."""
+    slept = []
+    monkeypatch.setattr(generic.time, "sleep", _sleep_once_then_wake(slept))
+
+    with pytest.raises(_Woke):
+        generic.halt("the card would not mount", interval=7)
+
+    assert capsys.readouterr().out.count("the card would not mount") == 3
+    assert slept == [7, 7, 7]
+
+
+def test_a_refused_config_halts_instead_of_handing_a_reboot_back_to_the_runtime(monkeypatch):
+    """An uncaught SystemExit out of main.py is a soft reset on the ESP32 port, so the board
+    re-reads the same bad config and refuses again, forever. The entry catches it instead."""
+    def _refuse():
+        raise SystemExit("Nodes.json registered no active endpoint")
+
+    stopped = []
+    monkeypatch.setattr(generic, "main", _refuse)
+    monkeypatch.setattr(generic, "halt", lambda reason, **kw: stopped.append(reason))
+
+    generic.run()
+
+    assert stopped == ["Nodes.json registered no active endpoint"]
+
+
+def test_a_refusal_with_nothing_to_say_still_stops_rather_than_rebooting(monkeypatch):
+    """SystemExit() with no argument is still a stop, and still must not become a reboot."""
+    def _refuse():
+        raise SystemExit()
+
+    stopped = []
+    monkeypatch.setattr(generic, "main", _refuse)
+    monkeypatch.setattr(generic, "halt", lambda reason, **kw: stopped.append(reason))
+
+    generic.run()
+
+    assert stopped == ["stopped, and gave no reason"]
+
+
 # --- the longhand copy has not drifted -------------------------------------------------------
 
 def test_the_literal_example_builds_the_same_node_as_the_dispatch(tmp_path, monkeypatch):
@@ -236,6 +294,30 @@ def test_the_literal_example_builds_the_same_node_as_the_dispatch(tmp_path, monk
     assert literal.security_mode == dispatched.security_mode
     assert type(literal.control_actuator) is type(dispatched.control_actuator)
     assert type(literal.data_sink) is type(dispatched.data_sink)
+
+
+def test_the_longhand_copy_also_stays_stopped_rather_than_rebooting(tmp_path, monkeypatch, capsys):
+    """The literal file is the one people copy when their deployment is not one the config can
+    describe, so its two stops need the same treatment as the dispatch's ten. Given an open
+    config it has no identity to run with, and it must say so rather than raise into a reboot."""
+    import sys
+    import types
+
+    _write(tmp_path, _config("edge"))
+    monkeypatch.chdir(tmp_path)
+
+    stub = types.ModuleType("AlLoRa.Connectors.SX127x_connector")
+    stub.SX127x_connector = lambda: Loopback_connector(EDGE_MAC)
+    monkeypatch.setitem(sys.modules, "AlLoRa.Connectors.SX127x_connector", stub)
+
+    slept = []
+    monkeypatch.setattr(time, "sleep", _sleep_once_then_wake(slept))
+
+    source = open(os.path.join(_EXAMPLES, "secure", "edge", "main_literal.py")).read()
+    with pytest.raises(_Woke):
+        exec(compile(source, "main_literal.py", "exec"), {"__name__": "__main__"})
+
+    assert capsys.readouterr().out.count("This node has no identity") == 3
 
 
 # --- a file actually crosses, served the way the config says ---------------------------------

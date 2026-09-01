@@ -11,6 +11,7 @@
 # named. That file is the one to read if you want to see what happens here without following a
 # dispatch, and it is the starting point for a deployment this repo does not cover.
 import gc
+import time
 
 from AlLoRa.utils.file_utils import resolve_config_file
 from AlLoRa.utils.json_utils import json
@@ -329,8 +330,34 @@ def main():
     node.run(save_files=True)
 
 
+def halt(reason, interval=10):
+    """Stop where somebody can read why, which on this port is not what stopping normally does.
+
+    Every refusal above raises SystemExit carrying a sentence written for whoever has to fix the
+    config. CPython would print it. MicroPython prints nothing for SystemExit, and turns an
+    uncaught one out of main.py into a forced exit, which the ESP32 port makes a soft reset: the
+    board reboots, re-reads the same config, refuses again, and repeats. A board cycling with one
+    line of output looks like a hardware fault rather than a config with a typo in it.
+
+    So say the reason, and keep saying it, without ever handing control back to the runtime.
+    Somebody attaching a cable ten minutes from now still learns why. Only SystemExit is caught,
+    so Ctrl-C still reaches the REPL from here.
+    """
+    while True:
+        print("STOPPED:", reason)
+        time.sleep(interval)
+
+
+def run():
+    """What a board runs: the program, and a refusal it can be read off the serial port."""
+    try:
+        main()
+    except SystemExit as stop:
+        halt(stop.args[0] if stop.args else "stopped, and gave no reason")
+
+
 # A board runs main.py as __main__, so this guard costs a deployment nothing and lets the file
 # be imported and checked by tests/test_generic_main.py, which is what keeps the dispatch above
 # honest about what it builds.
 if __name__ == "__main__":
-    main()
+    run()
