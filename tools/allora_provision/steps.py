@@ -21,10 +21,11 @@ import json
 import os
 import threading
 
+from AlLoRa.Digital_Endpoint import label_for_config
 from tools.allora_provision.board import (PORT_GLOBS, Board, BoardError, candidate_ports,
                                           discover_boards)
 from tools.allora_provision.fleet import CONTROL_ROOT_NAME, Fleet
-from tools.allora_provision.node_config import CONFIG_NAME, build_lora_json
+from tools.allora_provision.node_config import (CONFIG_NAME, DEFAULT_BOARD, build_lora_json)
 from tools.allora_provision.result import FAILED, OK, SKIPPED
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
@@ -250,7 +251,7 @@ def _clear_stale_root(board, result):
 
 def provision_edge(board, fleet, result, posture="secure", firmware=None, name=None,
                    rf=None, session_id=None, radio="sx127x", allow_identity_loss=False,
-                   on_stall=None):
+                   on_stall=None, board_model=DEFAULT_BOARD):
     """Phase 1. Leaves the board provisioned and its `device_id` registered in the fleet."""
     fleet.ensure()
     if not board.alive():
@@ -266,10 +267,11 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
           expected_mac=mac, on_stall=on_stall)
 
     config = build_lora_json(role="edge", posture=posture, driver=radio, name=name, rf=rf,
-                             session_id=session_id)
+                             session_id=session_id, board=board_model)
     config_path = _stage(fleet, "edge", CONFIG_NAME, json.dumps(config, indent=2) + "\n")
     board.write_remote(config_path, CONFIG_NAME)
-    result.step(CONFIG_NAME, "{} posture, {} radio".format(posture, radio))
+    result.step(CONFIG_NAME, "{} posture, {} radio on a {}".format(posture, radio,
+                                                                   board_model))
 
     if posture == "control":
         # The verifying half, and only ever the verifying half. The private scalar on a node
@@ -321,7 +323,7 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
     entry = fleet.register(name=config["name"], role="edge",
                            device_id=device_id, posture=posture,
                            session_id=config.get("session_id"),
-                           port=board.port, radio=radio, on_notice=result.warn,
+                           port=board.port, mac=mac, radio=radio, on_notice=result.warn,
                            connector={k: config["connector"][k]
                                       for k in ("freq", "sf", "bandwidth", "coding_rate",
                                                 "tx_power")})
@@ -342,7 +344,7 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
 
 def provision_hub(board, fleet, result, posture="secure", firmware=None, name=None,
                   rf=None, session_id=None, radio="sx127x", on_site_root=False,
-                  allow_identity_loss=False, on_stall=None):
+                  allow_identity_loss=False, on_stall=None, board_model=DEFAULT_BOARD):
     """Phase 2. Same discovery, same backup, same flash, plus the roster the Hub polls."""
     fleet.ensure()
     if not board.alive():
@@ -365,10 +367,12 @@ def provision_hub(board, fleet, result, posture="secure", firmware=None, name=No
           expected_mac=mac, on_stall=on_stall)
 
     config = build_lora_json(role="hub", posture=posture, driver=radio, name=name, rf=rf,
-                            session_id=session_id, on_site_root=on_site_root)
+                            session_id=session_id, on_site_root=on_site_root,
+                            board=board_model)
     config_path = _stage(fleet, "hub", CONFIG_NAME, json.dumps(config, indent=2) + "\n")
     board.write_remote(config_path, CONFIG_NAME)
-    result.step(CONFIG_NAME, "{} posture, {} radio".format(posture, radio))
+    result.step(CONFIG_NAME, "{} posture, {} radio on a {}".format(posture, radio,
+                                                                   board_model))
 
     roster_path = _stage(fleet, "hub", "Nodes.json", fleet.render_nodes_json())
     board.write_remote(roster_path, "Nodes.json")
@@ -407,8 +411,11 @@ def provision_hub(board, fleet, result, posture="secure", firmware=None, name=No
     board.write_remote(main_path, "main.py")
     result.step("main.py", "the generic program, registration read from Nodes.json")
 
+    # The MAC is recorded alongside the port because it is the half that survives: a later run
+    # extending this deployment has to know which board on the desk is this fleet's Hub, and
+    # the port it answered on today says nothing about that tomorrow.
     entry = fleet.register(name=config["name"], role="hub", device_id=device_id,
-                           posture=posture, port=board.port, radio=radio,
+                           posture=posture, port=board.port, mac=mac, radio=radio,
                            on_site_root=on_site_root, on_notice=result.warn)
     result.step("registered", "{} in {}".format(entry["name"], fleet.registry_path))
 
@@ -422,6 +429,117 @@ def provision_hub(board, fleet, result, posture="secure", firmware=None, name=No
                     "already on it, so nothing needs re-running.")
     result.set(role="hub", port=board.port, posture=posture, device_id=device_id,
                on_site_root=on_site_root, edges=len(edges), fleet=fleet.path, config=config)
+    return result
+
+
+def _rf_summary(entry):
+    """The radio settings a roster entry states, in the words the wizard asks for them."""
+    block = entry.get("connector") or {}
+    stated = ["{} {}".format(key, block[key]) for key in ("sf", "freq", "bandwidth")
+              if block.get(key) is not None]
+    return ", ".join(stated) if stated else "no radio settings of its own"
+
+
+def update_hub_roster(board, fleet, result, names):
+    """Add or replace the rows for the Edges this run provisioned, and touch nothing else.
+
+    This is the phase that extends a deployment already in the field. Adding an Edge changes
+    one row in one file, and the full Hub phase rewrites four and restarts the board to do it,
+    which on a live deployment costs more than the change is worth.
+
+    **What it exists to protect is the rows it does not write.** `Nodes.json` is a read/write
+    state file: when a retune is accepted, `Hub._persist_endpoint_rf` writes that endpoint's
+    settled radio settings back into it. So the Hub's copy, not the operator's record, is the
+    truth about what an Edge in the field is listening on. Rebuilding the roster from the fleet
+    registry would put the Hub back on the settings that Edge was provisioned with a year ago
+    and has since left, and nothing on either side would say so: the Hub simply polls an
+    address nobody answers on.
+
+    Rows are matched the way the Hub matches its own, by `label_for_config`, so an entry found
+    here is the entry the Hub would have found. `names` are the fleet's names for the Edges
+    this run provisioned; every other row is carried across exactly as it was read.
+    """
+    existing = board.read_remote("Nodes.json")
+    if existing is None:
+        raise BoardError(
+            "the Hub on {} holds no Nodes.json, so there is no roster to extend. That is a Hub "
+            "this toolkit has not provisioned: run the full Hub phase once to give it one, and "
+            "extend it after that.".format(board.port))
+    try:
+        roster = json.loads(existing)
+    except ValueError as e:
+        raise BoardError(
+            "the Nodes.json on the Hub at {} is not valid JSON ({}). Rewriting it from the "
+            "fleet registry would drop whatever the Hub has settled on since it was "
+            "provisioned, so this stops instead: look at the file, or run the full Hub "
+            "phase to replace it deliberately.".format(board.port, e))
+    if not isinstance(roster, list):
+        raise BoardError(
+            "the Nodes.json on the Hub at {} is not a list of entries. Run the full Hub phase "
+            "to replace it deliberately.".format(board.port))
+
+    incoming = [entry for entry in json.loads(fleet.render_nodes_json())
+                if entry.get("name") in names]
+    if not incoming:
+        raise BoardError(
+            "none of the Edges this run provisioned ({}) is registered in {}. The roster is "
+            "built from that record, so there is nothing to write.".format(
+                ", ".join(sorted(names)) or "none", fleet.registry_path))
+
+    by_label = {label_for_config(entry): index for index, entry in enumerate(roster)}
+    added, replaced = [], []
+    for entry in incoming:
+        label = label_for_config(entry)
+        index = by_label.get(label)
+        if index is None:
+            # A fingerprint this Hub has never seen. Either a genuinely new node, or one whose
+            # identity this toolkit rotated by flashing it, and the second leaves the old row
+            # behind: the Hub would spend a listening window every cycle polling a node that
+            # cannot answer. Same name means same slot, so the stale row goes.
+            stale = [i for i, old in enumerate(roster) if old.get("name") == entry["name"]]
+            for i in reversed(stale):
+                dropped = roster.pop(i)
+                result.warn(
+                    "'{}' was in this Hub's roster as {} and now holds {}. Its old entry is "
+                    "removed rather than left beside the new one: a Hub polling a fingerprint "
+                    "nobody holds spends a listening window on it every cycle.".format(
+                        entry["name"], label_for_config(dropped)[:8], label[:8]))
+            roster.append(entry)
+            added.append(entry["name"])
+        else:
+            roster[index] = entry
+            replaced.append(entry["name"])
+        by_label = {label_for_config(e): i for i, e in enumerate(roster)}
+
+    written = set(entry["name"] for entry in incoming)
+    kept = [entry for entry in roster if entry.get("name") not in written]
+    for entry in kept:
+        result.step("kept", "{} on {}, as this Hub has it".format(
+            entry.get("name", "?"), _rf_summary(entry)), status=SKIPPED)
+
+    roster_path = _stage(fleet, "hub", "Nodes.json", json.dumps(roster, indent=2) + "\n")
+    board.write_remote(roster_path, "Nodes.json")
+    result.step("Nodes.json", "{} row(s) written, {} left as the Hub has them".format(
+        len(incoming), len(kept)))
+    if kept:
+        result.note(
+            "The rows above were not rewritten. This Hub edits its own roster when a node "
+            "accepts a retune, so its copy is what those Edges are actually listening on, and "
+            "the fleet registry is only what they were issued.")
+    # A Hub registers its endpoints once, from the file it reads at boot, so a roster written
+    # under a running Hub changes nothing until it restarts. The restart is also what closes
+    # the read-modify-write window: `mpremote` interrupts the running program to reach the
+    # filesystem, so the Hub is stopped from the read through to the write and cannot settle a
+    # trial into the copy being replaced.
+    if board.soft_reset():
+        result.step("restart", "polling the roster it was just given")
+    else:
+        result.warn("the Hub did not answer after the restart. The roster is already written, "
+                    "so tap RESET once and it will register from it; until then the Hub is "
+                    "still polling the roster it booted with.")
+    result.set(role="hub", port=board.port, fleet=fleet.path,
+               added=added, replaced=replaced,
+               kept=[entry.get("name") for entry in kept], roster=roster)
     return result
 
 

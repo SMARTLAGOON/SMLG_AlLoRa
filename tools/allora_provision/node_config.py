@@ -49,6 +49,34 @@ POSTURES = ("open", "secure", "control")
 # its own radio instead of inheriting whichever one its program happened to import.
 DRIVERS = ("sx127x", "sx1262", "e5", "lopy4")
 
+# Where each radio is wired, per board. **A pin is a board fact, not a radio fact**: the same
+# SX1262 sits on clk 5 on a T3-S3 and on clk 9 on a Heltec LoRa32 V3, so a pin map keyed by the
+# radio alone is right about one board by luck and quietly wrong about every other.
+#
+# This table exists because leaving it out does not fail loudly. `SX1262_connector` reads these
+# out of the connector block and falls back to the Heltec map when they are absent, so a config
+# that names no pins provisions a board that cannot find its own chip while every step of the
+# run reports success.
+#
+# Only a radio whose connector actually reads a pin appears here. `sx127x` takes its pins from
+# its own driver's board file, so writing them here as well would put numbers in front of an
+# operator that nothing reads, which is the same defect from the other end.
+BOARD_PINS = {
+    # Read from LilyGo's `utilities.h` and confirmed on the bench: the radio comes up on these
+    # seven pins and needs no others. The E-Paper variant of this board wires its radio
+    # identically and differs only in its screen, which is not a radio fact.
+    "t3s3": {
+        "sx1262": {"clk": 5, "mosi": 6, "miso": 3, "cs": 7, "rst": 8, "irq": 33, "gpio": 34},
+    },
+}
+
+BOARDS = tuple(BOARD_PINS)
+
+# The board every T3S3 firmware target in this repository is built for. A default is right here
+# and wrong in `BOARD_PINS` itself: one board is what this toolkit can flash, and a second one
+# arrives as a table entry rather than as a guess.
+DEFAULT_BOARD = "t3s3"
+
 # Where an Edge keeps the files it has not delivered yet. Internal flash by default, so a board
 # with no card works untouched and a board with one names its mount point instead.
 DEFAULT_QUEUE_PATH = "Outbox"
@@ -78,12 +106,21 @@ def merge_rf(overrides=None):
 
 def build_lora_json(role, posture, driver="sx127x", name=None, rf=None, session_id=None,
                     on_site_root=False, result_path="Results", chunk_size=None,
-                    queue_path=DEFAULT_QUEUE_PATH, debug=True):
+                    queue_path=DEFAULT_QUEUE_PATH, debug=True, board=DEFAULT_BOARD):
     """The config file for one board.
 
     `driver` names the radio. It belongs in the file rather than in the program because a board
     whose radio is named by whichever module its `main.py` imported cannot be told, from the
     config an operator actually reads, that it is driving the wrong chip.
+
+    `board` names what the radio is soldered to, which is the only thing that knows where it is
+    wired. Naming a radio is not enough on its own: two boards carrying the same chip put it on
+    different pins, and the connector cannot tell that it was handed the wrong map.
+
+    **No `device` section is written.** That key makes the node build a board object at boot,
+    and a board file that does not match the hardware raises inside a peripheral driver before
+    any radio code runs. Peripherals are something an operator turns on deliberately; what this
+    writes is the radio and nothing else.
 
     `chunk_size` left as None omits the key, which is how a node is asked for the largest chunk
     its frames can carry. A number is still honoured and still clamped; what it cannot do is be
@@ -106,6 +143,13 @@ def build_lora_json(role, posture, driver="sx127x", name=None, rf=None, session_
             "for is still a supported deployment: write its config by hand from an example, "
             "pass the Connector instance to the node, and skip the flash step.".format(
                 ", ".join(DRIVERS), driver))
+    if board not in BOARD_PINS:
+        raise ValueError(
+            "board must be one of {}, not '{}'. The board is what decides where the radio is "
+            "wired, and one this toolkit has no pin map for cannot be provisioned by "
+            "guessing: a guessed map writes a config that reports provisioned and cannot find "
+            "its chip. Write that board's config by hand from an example, naming the pins in "
+            "the connector block.".format(", ".join(BOARDS), board))
     if on_site_root:
         if posture != "control":
             raise ValueError(
@@ -163,5 +207,8 @@ def build_lora_json(role, posture, driver="sx127x", name=None, rf=None, session_
 
     connector = merge_rf(rf)
     connector["driver"] = driver
+    # Where this radio is wired on this board, for the radios that read it from here. Left out,
+    # the connector silently uses another board's map and the chip is never found.
+    connector.update(BOARD_PINS[board].get(driver, {}))
     config["connector"] = connector
     return config

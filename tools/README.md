@@ -14,6 +14,15 @@ boards and shows you their MACs, asks what this deployment is (posture, which bo
 Edge, firmware, radio), prints the plan, and runs it once you say yes. It ends by driving one
 real 1000-byte transfer, because "provisioned" otherwise means only that files were copied.
 
+`setup` writes down what it was told to do before it does any of it, as a **plan file**, and
+then applies it. That is the same file `provision apply` runs, so a run stops being a
+conversation nobody can repeat:
+
+```bash
+python3 tools/provision.py setup                       # asks, writes allora-fleet/plan.json, runs it
+python3 tools/provision.py apply allora-fleet/plan.json --json   # runs it again, asking nothing
+```
+
 Underneath it is a toolkit, and every phase is also its own non-interactive command. That is
 what the control website drives, and what to reach for when a run needs a flag `setup` does
 not ask about:
@@ -79,6 +88,7 @@ allora-fleet/
   control_root.key    the signing half. This deployment's authority.
   control.counter     the highest number minted under it, keyed by its fingerprint.
   fleet.json          the nodes issued so far: the operator's record.
+  plan.json           what the last run set out to do: its intent.
   backups/            every identity.key saved before a flash erased it.
   staging/            exactly what was pushed to each board, kept so it can be looked at later.
 ```
@@ -139,6 +149,24 @@ where there may be nobody at the keyboard, it is the same refusal it has always 
 on the bench on 2026-08-27: five flashes, the board never returned by itself, the wire reset
 recovered it every time it was tried.
 
+## The board decides where the radio is wired
+
+`--board` (default `t3s3`) names what the radio is soldered to. It is a separate question from
+`--radio`, and it has to be, because **a pin is a board fact rather than a radio fact**: the
+same SX1262 sits on clk 5 on a T3S3 and on clk 9 on a Heltec LoRa32 V3.
+
+The wizard writes the board's pin map into the connector block for the radios whose connector
+reads pins from there, which today is `sx1262` alone. `sx127x` takes its pins from its own
+driver's board file, so none are written for it: a number in a config that nothing reads is the
+same defect seen from the other end.
+
+**Why this is a flag and not a default buried in a driver.** `SX1262_connector` answers a
+missing pin with the Heltec map. So a config that names no pins does not fail loudly, it
+provisions a board that cannot find its own chip and reports every step as ok. On the bench
+this looked like a fully successful `provision edge` followed by a node asserting
+`ERR_CHIP_NOT_FOUND` at boot. A board with no pin map here is refused rather than guessed at,
+for the same reason.
+
 ## `--json`
 
 Every command takes it. Under `--json`, stdout carries exactly one document and progress goes
@@ -150,3 +178,89 @@ the control website, which is TypeScript and shells out.
  "steps": [{"step": "device_id", "status": "ok", "detail": "d909f4eb…"}],
  "warnings": [], "data": {"device_id": "d909f4eb…", "posture": "secure"}}
 ```
+
+## The plan file
+
+The plan is the unit of provisioning, and there are two front doors onto one engine. `setup`
+writes a plan as it asks its questions and then applies it; `apply` runs a plan somebody else
+wrote, a website included. Same file, same engine, and the interactive path gains an artefact
+the operator can keep, diff, re-run and hand to somebody else.
+
+```json
+{
+  "version": 1,
+  "mode": "extend",
+  "fleet": "allora-fleet",
+  "posture": "secure",
+  "session_id": null,
+  "radio": "sx127x",
+  "rf": {"sf": 7, "freq": 868, "bandwidth": 125},
+  "firmware": null,
+  "edges": [{"mac": "9eeff0f4", "name": "S2"}],
+  "hub": {"mac": "9eeff0e0", "name": null}
+}
+```
+
+**A plan names boards by MAC, never by port.** The port is not an identity: on native USB it
+re-enumerates on every hard reset, so a plan recording ports would aim Monday's intent at
+whichever board happened to land on that path on Tuesday. `provision ports` prints the MAC of
+every board answering. A plan naming a board nobody plugged in fails at the desk, before the
+first board is touched, rather than after one end is provisioned and the other is not.
+
+**`mode` is the first field, and the first question `setup` asks.** It is only asked when the
+fleet already holds nodes, because on an empty one there is nothing to extend.
+
+| mode | what it does | what it costs |
+|---|---|---|
+| `scratch` | provisions both ends and builds the Hub from nothing | the deployment is new; a fleet directory is never written over, so starting a second one asks for its own |
+| `extend` | provisions the new nodes and **updates the Hub's roster only** | the Hub is not reflashed, not reconfigured, and keeps its identity: adding a node changes one row in one file |
+
+Extend is adding an Edge, replacing a broken node, or swapping a Hub into a deployment that is
+already running. It is what a `setup` run into a non-empty fleet used to do by accident, which
+orphaned a record and appended a phantom the Hub then spent a listening window polling every
+cycle.
+
+**An Edge's `name` is what says which of those this is.** A name the fleet does not hold is a
+new node; a name it already holds is a replacement, and the board answering under it takes that
+slot. That is the whole difference between the two cases, because a name *is* a slot: the
+registry keys a node by its role and its name, so registering under the old one updates that
+record rather than adding beside it, and the roster row keyed to the dead fingerprint is
+replaced by the row keyed to the new one. `setup` asks; a plan written elsewhere says it by
+choosing the name.
+
+**A posture change warns and guides; it does not refuse.** Moving a deployment between open,
+secure and control means reflashing every node, because the posture is what a node was
+provisioned with. A tool that refused would send the operator to do exactly that by hand, one
+board at a time, which is the outcome the refusal was trying to prevent. So `setup` says which
+nodes stay on the old posture and stop being part of the working deployment, and then does what
+it was asked.
+
+## Why extend does not rebuild `Nodes.json`
+
+**`Nodes.json` is a read/write state file, and the Hub is the other writer.** When a node
+accepts a retune, `Hub._persist_endpoint_rf` writes that endpoint's settled radio settings back
+into the roster. So the Hub's copy, not the operator's registry, is the truth about what an
+Edge in the field is listening on.
+
+Rebuilding that file from `fleet.json` would put the Hub back on the settings an Edge was
+issued a year ago and has since left. Nothing on either side would say so: the Hub simply polls
+an address nobody answers on. So an extend run reads the roster off the Hub, writes only the
+rows for the Edges it just provisioned, carries every other row across untouched, and prints
+what it kept:
+
+```
+[2/3] Hub roster on /dev/cu.usbmodem101
+      kept        S on sf 9, freq 869, bandwidth 125, as this Hub has it
+      Nodes.json  1 row(s) written, 1 left as the Hub has them
+      restart     polling the roster it was just given
+```
+
+The restart is what makes the new row take effect: a Hub registers its endpoints once, from the
+file it read at boot. It also closes the read-modify-write window, because `mpremote` interrupts
+the running program to reach the filesystem, so the Hub is stopped from the read through to the
+write and cannot settle a trial into the copy being replaced.
+
+**Three files, three lifetimes, and no conflict between them:** the plan (your machine,
+*intent*), `fleet.json` (your machine, *record*), `Nodes.json` (on the Hub board, *live*, and
+mutated by the Hub itself). Each is allowed to disagree with the one before it, because each
+answers a different question.

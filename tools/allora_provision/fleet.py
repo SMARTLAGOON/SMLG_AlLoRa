@@ -45,6 +45,12 @@ PUBLIC_HEX_LEN = 130
 
 _COUNTER_NAME = "control.counter"
 _REGISTRY_NAME = "fleet.json"
+
+# What the last run intended, kept beside the record of what it produced. The two answer
+# different questions and are allowed to disagree: a run that half finished leaves a plan
+# describing four nodes and a registry holding two, and that difference is the thing worth
+# seeing. `provision apply` re-runs the plan; `provision fleet-show` reads the registry.
+_PLAN_NAME = "plan.json"
 _BACKUPS_DIR = "backups"
 _STAGING_DIR = "staging"
 
@@ -111,6 +117,10 @@ class Fleet:
     @property
     def registry_path(self):
         return os.path.join(self.path, _REGISTRY_NAME)
+
+    @property
+    def plan_path(self):
+        return os.path.join(self.path, _PLAN_NAME)
 
     @property
     def backups_path(self):

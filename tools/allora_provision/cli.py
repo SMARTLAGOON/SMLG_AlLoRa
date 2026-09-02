@@ -14,10 +14,11 @@ import argparse
 import sys
 
 from tools.allora_provision import doctor as doctor_module
+from tools.allora_provision import plan as plan_module
 from tools.allora_provision import setup as setup_module
 from tools.allora_provision.board import Board, BoardError, Runner, discover_boards
 from tools.allora_provision.fleet import Fleet
-from tools.allora_provision.node_config import DEFAULT_RF, POSTURES
+from tools.allora_provision.node_config import BOARDS, DEFAULT_BOARD, DEFAULT_RF, POSTURES
 from tools.allora_provision.result import FAILED, OK, Result, SKIPPED
 from tools.allora_provision.steps import (
     RADIOS, provision_edge, provision_hub, verify_pair)
@@ -60,6 +61,10 @@ def _add_node(parser):
     _add_radio(parser)
     parser.add_argument("--port", help="the serial port the board answers on; discovered if "
                                        "exactly one board is present")
+    parser.add_argument("--board", default=DEFAULT_BOARD, choices=sorted(BOARDS),
+                        dest="board_model",
+                        help="what the radio is soldered to, which is what says where it is "
+                             "wired (default: {})".format(DEFAULT_BOARD))
     parser.add_argument("--posture", default="secure", choices=list(POSTURES),
                         help="open, secure, or control (default: secure)")
     parser.add_argument("--firmware", help="a firmware .bin to flash first; omitted, the board "
@@ -83,6 +88,18 @@ def build_parser():
     # No `--json` on this one. The others emit a document for the website to parse; this one
     # holds a conversation, and a machine has nothing to say to it.
     setup.set_defaults(json_mode=False)
+
+    apply = subparsers.add_parser(
+        "apply", help="run a plan `setup` wrote, or a website did: same engine, no questions")
+    apply.add_argument("plan", help="the plan file to run")
+    # `--fleet` is a genuine override here rather than a default, because the plan already
+    # carries the deployment it belongs to. Whether it was given is the thing that matters, so
+    # the default is None and the plan's own value stands when nobody said otherwise.
+    apply.add_argument("--fleet", default=None,
+                       help="run this plan against a different deployment than the one it "
+                            "names (default: the plan's own)")
+    apply.add_argument("--json", action="store_true", dest="json_mode",
+                       help="emit one JSON document on stdout; progress goes to stderr")
 
     ports = subparsers.add_parser(
         "ports", help="list the serial ports that answer a MicroPython REPL")
@@ -207,7 +224,8 @@ def cmd_edge(args, result, runner=None, sleep=None, **_):
     board = Board(port, runner=runner, sleep=sleep)
     provision_edge(board, fleet, result, posture=args.posture, firmware=args.firmware,
                    name=args.name, rf=_rf_from(args), session_id=args.session_id,
-                   radio=args.radio, allow_identity_loss=args.allow_identity_loss)
+                   radio=args.radio, allow_identity_loss=args.allow_identity_loss,
+                   board_model=args.board_model)
     if result.data.get("device_id"):
         result.note("\nThe Hub needs this one value and nothing else:\n  {}\nIt is already in "
                     "{}, so `provision hub` will pick it up without you copying "
@@ -236,7 +254,8 @@ def cmd_hub(args, result, runner=None, sleep=None, **_):
     provision_hub(board, fleet, result, posture=args.posture, firmware=args.firmware,
                   name=args.name, rf=_rf_from(args), session_id=args.session_id,
                   radio=args.radio, on_site_root=args.on_site_root,
-                  allow_identity_loss=args.allow_identity_loss)
+                  allow_identity_loss=args.allow_identity_loss,
+                  board_model=args.board_model)
     return result
 
 
@@ -345,8 +364,21 @@ def cmd_setup(args, result, runner=None, sleep=None, ask=None, **_):
     return setup_module.run(args, result, runner=runner, sleep=sleep, ask=ask)
 
 
+def cmd_apply(args, result, runner=None, sleep=None, **_):
+    # Read before the preflight, because whether this machine needs `esptool` is something only
+    # the plan knows: it is checked for when a plan names a firmware and not otherwise, and a
+    # phase that dies halfway through for a missing tool leaves a half-configured board.
+    doc = plan_module.read(args.plan)
+    if args.fleet is not None:
+        doc["fleet"] = args.fleet
+    args.firmware = doc.get("firmware")
+    preflight(args, result, runner=runner)
+    return setup_module.apply(doc, result, runner=runner, sleep=sleep)
+
+
 COMMANDS = {
     "setup": cmd_setup,
+    "apply": cmd_apply,
     "ports": cmd_ports,
     "doctor": cmd_doctor,
     "fleet-init": cmd_fleet_init,

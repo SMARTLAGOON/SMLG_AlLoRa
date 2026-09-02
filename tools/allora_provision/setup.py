@@ -6,19 +6,26 @@ never ask a question. That shape is right for the control website, which shells 
 the order, know which posture they want, and hand-type port paths for two boards that are told
 apart by MAC rather than by path.
 
-`setup` is the layer on top and nothing else. It **drives** `provision_edge`, `provision_hub`
-and `verify_pair`; it does not reimplement them. Everything it decides is decided before any
-board is touched, and then it runs the plan the operator approved.
+`setup` is the layer on top and nothing else. It **drives** `provision_edge`, `provision_hub`,
+`update_hub_roster` and `verify_pair`; it does not reimplement them. Everything it decides is
+decided before any board is touched, and then it runs the plan the operator approved.
 
-Three things make it more than a shell loop over the other commands:
+Four things make it more than a shell loop over the other commands:
 
 **It discovers the boards and lets you pick which is which.** The MAC is the identity; the port
 is not, and on native USB the port changes under you on every hard reset.
 
-**It holds a plan you approve once**, and then runs unattended.
+**It writes the plan down and then applies it.** The document it writes is the one `apply`
+runs, so the two front doors reach one engine (`run_plan`) and the interactive path leaves
+behind something that can be kept, diffed, re-run and handed to somebody else.
+
+**It asks scratch or extend first**, whenever there is something to extend. Extend adds nodes
+to a deployment that stays running: the Hub gets its roster updated rather than rebuilt, and
+the rows this run did not provision are carried across exactly as the Hub has them.
 
 **It owns the human-in-the-loop moment.** When a freshly flashed board stays silent, the tap on
 RESET is a prompt *inside* the run rather than a failure, a message and a re-run from the top.
+That prompt is what `apply` does without, and the only thing it does without.
 
 Every question goes through `Prompt`, whose reader is injected, so the whole flow is testable
 with a scripted list of answers and no keyboard.
@@ -27,12 +34,13 @@ import os
 import sys
 
 from tools.allora_provision import doctor as doctor_module
+from tools.allora_provision import plan as plan_module
 from tools.allora_provision.board import Board, BoardError, discover_boards
 from tools.allora_provision.fleet import Fleet
 from tools.allora_provision.node_config import DEFAULT_RF, POSTURES
 from tools.allora_provision.result import OK, SKIPPED
 from tools.allora_provision.steps import (PAYLOAD_LEN, RADIOS, provision_edge, provision_hub,
-                                           verify_pair)
+                                           update_hub_roster, verify_pair)
 
 # Where a build lands. Searched rather than named so the operator picks a firmware off a list
 # instead of remembering a path that changes with every CI run.
@@ -191,17 +199,146 @@ def _label(board):
     return "{}  on {}".format(board["mac"] or "MAC unknown", board["port"])
 
 
-def ask_plan(prompt, boards, images, fleet_path):
+def _find(boards, mac):
+    """The board answering under this MAC, or a placeholder that says it is not here."""
+    for board in boards:
+        if board.get("mac") == mac:
+            return board
+    return {"mac": mac, "port": "not plugged in"}
+
+
+def deployment_defaults(entries):
+    """What this fleet already is, so extending it does not start from the built-in defaults.
+
+    An operator extending a deployment is not choosing a posture and a radio, they are naming
+    the one their nodes are already on. Offering the built-in defaults instead makes taking
+    every default the way to break the deployment, which is the wrong shape for a wizard whose
+    every question can be answered with Enter.
+    """
+    defaults = {"posture": "secure", "radio": "sx127x", "rf": {}, "session_ids": []}
+    for entry in entries:
+        if entry.get("posture"):
+            defaults["posture"] = entry["posture"]
+        if entry.get("radio"):
+            defaults["radio"] = entry["radio"]
+        if entry.get("session_id") is not None:
+            defaults["session_ids"].append(entry["session_id"])
+        if entry.get("role") != "edge":
+            continue
+        block = entry.get("connector") or {}
+        stated = {key: block[key] for key in plan_module.RF_KEYS
+                  if block.get(key) is not None}
+        if stated:
+            defaults["rf"] = stated
+    return defaults
+
+
+def free_edge_names(entries, count):
+    """`count` Edge names this fleet does not already hold.
+
+    A name is a slot: the registry keys a node by its role and its name, so a second Edge
+    taking the first one's default name updates that record instead of adding its own, and the
+    Hub is then handed a roster naming one node where the operator provisioned two.
+    """
+    taken = set(e.get("name") for e in entries if e.get("role") == "edge")
+    names, index = [], 1
+    while len(names) < count:
+        index += 1
+        candidate = "S{}".format(index)
+        if candidate not in taken:
+            names.append(candidate)
+            taken.add(candidate)
+    return names
+
+
+def ask_edge_names(prompt, chosen, entries):
+    """Whether each board being provisioned is a new node or replaces one already registered.
+
+    The question that separates two of the three things extend covers. A replacement board is
+    not a new node: it holds a fingerprint nothing has heard of, and taking a new name would
+    leave the fleet and the Hub's roster both carrying the record of a board that is dead. The
+    Hub then spends a listening window every cycle polling a node nobody holds.
+
+    A name is the answer because a name is the slot. Registering under the old one updates that
+    record rather than adding beside it, and the roster row keyed to the old fingerprint is
+    replaced by the row keyed to the new one.
+    """
+    registered = [e for e in entries if e.get("role") == "edge" and e.get("name")]
+    fresh = free_edge_names(entries, len(chosen))
+    if not registered:
+        return fresh
+
+    names = []
+    for index, board in enumerate(chosen):
+        options = [(fresh[index], "a new node, registered as {}".format(fresh[index]))]
+        options += [(entry["name"],
+                     "replacing {}, whose board is gone: it keeps the name and the "
+                     "slot".format(entry["name"]))
+                    for entry in registered]
+        names.append(prompt.choose(
+            "Is {} a new node, or a replacement?".format(_label(board)), options, default=0))
+    return names
+
+
+def ask_mode(prompt, entries):
+    """Scratch or extend, asked only when there is something to extend.
+
+    The question that stops a run walking into a deployment it did not know was there: flashing
+    into a non-empty fleet orphans a record, appends a phantom, and leaves the Hub polling a
+    node nobody holds. On an empty fleet there is nothing to extend, so asking would be noise.
+    """
+    if not entries:
+        return "scratch"
+    prompt.say("")
+    prompt.say("  This fleet already holds {} node(s):".format(len(entries)))
+    for entry in entries:
+        prompt.bullet("{:<6} {:<5} {:<8} {}".format(
+            entry.get("name", "?"), entry.get("role", "?"), entry.get("posture", "?"),
+            entry.get("device_id", "") or "(no identity)"))
+    return prompt.choose(
+        "Is this deployment being extended, or is this a new one?",
+        [("extend", "extend it   add nodes; the ones above keep running, untouched"),
+         ("scratch", "start a new one  in a different directory; this one is left alone")],
+        default=0)
+
+
+def ask_plan(prompt, boards, images, fleet_path, mode="scratch", entries=()):
     """Everything the run needs, settled before anything is touched.
 
     Posture is asked first because it constrains the rest: it decides whether a session id is
     needed, whether a control root is minted, and -- since open addressing is one number handed
     to one pair -- how many Edges this command is willing to provision in a run.
     """
+    entries = list(entries)
+    known = deployment_defaults(entries)
+    extending = mode == "extend"
+
     posture = prompt.choose(
         "Security posture?",
         [(name, "{:<8} {}".format(name, _POSTURE_HELP[name])) for name in POSTURES],
-        default=list(POSTURES).index("secure"))
+        default=list(POSTURES).index(known["posture"] if extending else "secure"))
+    if extending and posture != known["posture"]:
+        # Warned and guided, never refused. A posture is what a node was provisioned with, so
+        # changing it means reflashing every node in the deployment; a tool that refused would
+        # send the operator to do exactly that by hand, one board at a time, which is the
+        # outcome the refusal was trying to prevent.
+        prompt.say("")
+        prompt.bullet("this deployment is {}, and you have asked for {}.".format(
+            known["posture"], posture))
+        prompt.bullet("a posture is what a node was provisioned with, not a setting it can be "
+                      "told. Every node already in this fleet keeps the old one until it is "
+                      "provisioned again, and a {} node and a {} node cannot talk to each "
+                      "other.".format(known["posture"], posture))
+        prompt.bullet("this run provisions the nodes you pick below. The rest stay {} and stop "
+                      "being part of the working deployment until you come back for "
+                      "them:".format(known["posture"]))
+        for entry in entries:
+            prompt.bullet("  {:<6} {:<5} {}".format(
+                entry.get("name", "?"), entry.get("role", "?"), entry.get("posture", "?")))
+        if not prompt.yes("Go on?", default=False):
+            raise BoardError(
+                "nothing was changed. Run `provision setup` again and keep the {} posture to "
+                "add to this deployment as it is.".format(known["posture"]))
 
     most = len(boards) - 1
     if posture == "open":
@@ -214,25 +351,52 @@ def ask_plan(prompt, boards, images, fleet_path):
                           "the identity.")
         most = 1
     edges = 1 if most <= 1 else prompt.number(
-        "How many Edge nodes in this deployment?", default=1, low=1, high=most)
+        "How many Edge nodes {}?".format(
+            "are you adding" if extending else "in this deployment"),
+        default=1, low=1, high=most)
 
     remaining = list(boards)
     chosen = []
     for index in range(edges):
-        question = "Which board is the Edge?" if edges == 1 else \
-            "Which board is Edge {} of {}?".format(index + 1, edges)
+        question = "Which board is the {}Edge?".format("new " if extending else "") \
+            if edges == 1 else "Which board is Edge {} of {}?".format(index + 1, edges)
         board = prompt.choose(question, [(b, _label(b)) for b in remaining], default=0)
         remaining.remove(board)
         chosen.append(board)
-    hub = prompt.choose("Which board is the Hub?", [(b, _label(b)) for b in remaining],
-                        default=0) if len(remaining) > 1 else remaining[0]
+
+    # Asked here, beside the board it is about, rather than at the end with the radio settings:
+    # what an operator is answering is "which of these boards in front of me is this one", and
+    # that is the same act as picking it off the list above.
+    if extending:
+        names = ask_edge_names(prompt, chosen, entries)
+    else:
+        names = [None] if edges == 1 else ["S{}".format(i + 1) for i in range(edges)]
+
+    # The Hub this fleet already registered, if it is one of the boards on the desk. Offered
+    # first rather than merely allowed, because in an extend run picking the wrong one writes a
+    # roster onto a board that is not the deployment's Hub.
+    registered_hub = next((e.get("mac") for e in reversed(entries)
+                           if e.get("role") == "hub" and e.get("mac")), None)
     if len(remaining) == 1:
+        hub = remaining[0]
         prompt.bullet("the Hub is {}, the board left over.".format(_label(hub)))
+    else:
+        known_first = sorted(remaining, key=lambda b: b["mac"] != registered_hub)
+        hub = prompt.choose(
+            "Which board is the Hub?",
+            [(b, "{}{}".format(_label(b), "   (the Hub this fleet registered)"
+                               if b["mac"] == registered_hub else ""))
+             for b in known_first], default=0)
+    if extending and registered_hub and hub["mac"] != registered_hub:
+        prompt.bullet("{} is not the Hub this fleet registered ({}). Its roster is the one "
+                      "that will be extended.".format(hub["mac"], registered_hub))
 
     session_id = None
     if posture == "open":
+        taken = set(known["session_ids"])
+        free = next(n for n in range(1, 256) if n not in taken)
         session_id = prompt.number(
-            "Which session id should the pair share?", default=1, low=0, high=255)
+            "Which session id should the pair share?", default=free, low=0, high=255)
 
     keep = (None, "keep what the boards are running  (no flash, nothing erased)")
     firmware = prompt.choose(
@@ -242,45 +406,67 @@ def ask_plan(prompt, boards, images, fleet_path):
     if firmware:
         prompt.bullet("a flash erases the board: its identity is backed up into the fleet "
                       "first, and each board takes a couple of minutes.")
+        if extending:
+            prompt.bullet("only the Edges above are flashed. The Hub is not: extending it "
+                          "changes one row in its roster and nothing else.")
 
     radio = prompt.choose("Which radio do these boards have?",
                           [(name, "{:<7} {}".format(name, _RADIO_HELP[name]))
                            for name in sorted(RADIOS)],
-                          default=sorted(RADIOS).index("sx127x"))
+                          default=sorted(RADIOS).index(known["radio"] if extending
+                                                       else "sx127x"))
 
     rf = {}
     for field, spelled in _ASKED_RF:
-        rf[field] = prompt.number("Radio {}?".format(spelled), default=DEFAULT_RF[field])
+        rf[field] = prompt.number(
+            "Radio {}?".format(spelled),
+            default=known["rf"].get(field, DEFAULT_RF[field]) if extending
+            else DEFAULT_RF[field])
 
-    names = [None] if edges == 1 else ["S{}".format(i + 1) for i in range(edges)]
-    return {"posture": posture, "session_id": session_id, "firmware": firmware,
-            "radio": radio, "rf": rf, "fleet": fleet_path,
-            "edges": [dict(board, name=name) for board, name in zip(chosen, names)],
-            "hub": dict(hub, name=None),
-            "untouched": [b for b in remaining if b is not hub]}
+    return plan_module.build(
+        mode=mode, fleet=fleet_path, posture=posture, radio=radio, rf=rf,
+        firmware=firmware, session_id=session_id,
+        edges=[{"mac": board["mac"], "name": name}
+               for board, name in zip(chosen, names)],
+        hub={"mac": hub["mac"], "name": None})
 
 
-def describe_plan(prompt, plan):
+def describe_plan(prompt, plan, boards):
     """The plan, in the words of what will happen to which board."""
+    extending = plan["mode"] == "extend"
     prompt.say("\n  Plan")
+    prompt.bullet("this run  {}".format(
+        "extends the deployment above" if extending else "sets up a new deployment"))
     for index, edge in enumerate(plan["edges"], start=1):
-        prompt.bullet("Edge {}  {}".format(index, _label(edge)))
-    prompt.bullet("Hub     {}".format(_label(plan["hub"])))
+        prompt.bullet("Edge {}  {}{}".format(
+            index, _label(_find(boards, edge["mac"])),
+            "   as {}".format(edge["name"]) if edge["name"] else ""))
+    prompt.bullet("Hub     {}{}".format(
+        _label(_find(boards, plan["hub"]["mac"])),
+        "   roster only, not reflashed" if extending else ""))
     prompt.bullet("posture {}{}".format(
         plan["posture"],
         ", session id {}".format(plan["session_id"]) if plan["session_id"] is not None else ""))
     prompt.bullet("radio   {} at sf{}, {} MHz, bw {}".format(
         plan["radio"], plan["rf"]["sf"], plan["rf"]["freq"], plan["rf"]["bandwidth"]))
-    prompt.bullet("flash   {}".format(
+    prompt.bullet("flash   {}{}".format(
         os.path.relpath(plan["firmware"], _REPO_ROOT) if plan["firmware"]
-        else "no; the boards keep what they run"))
+        else "no; the boards keep what they run",
+        ", Edges only" if plan["firmware"] and extending else ""))
     prompt.bullet("fleet   {}".format(plan["fleet"]))
-    for board in plan.get("untouched", []):
-        prompt.bullet("left    {}, not part of this deployment".format(_label(board)))
+    named = set(plan_module.macs(plan))
+    for board in boards:
+        if board["mac"] not in named:
+            prompt.bullet("left    {}, not part of this run".format(_label(board)))
     prompt.bullet("then    one real {}-byte transfer, Edge 1 to the Hub".format(PAYLOAD_LEN))
     if len(plan["edges"]) > 1:
         prompt.bullet("        the other Edges are provisioned and registered, and the "
                       "transfer proves the first one")
+    if extending:
+        # The proof drives both boards directly, so the Hub stops serving the deployment for
+        # as long as it runs. Worth approving rather than discovering.
+        prompt.bullet("        that proof runs on the Hub itself, so this deployment is off "
+                      "the air for a couple of minutes at the end")
 
 
 def _stall_prompt(prompt):
@@ -297,28 +483,60 @@ def _stall_prompt(prompt):
     return on_stall
 
 
-def run_plan(plan, result, prompt, runner=None, sleep=None):
-    """Do what was approved, in the order the phases require."""
+def run_plan(plan, boards, result, prompt=None, runner=None, sleep=None):
+    """Do what the plan says, in the order the phases require.
+
+    The one engine behind both front doors: `setup` reaches it with a prompt and a person at
+    the keyboard, `apply` reaches it with neither. What a prompt buys is the tap on RESET
+    offered inside the run; without one the wait ends in the same refusal the non-interactive
+    commands have always given.
+
+    Ports are resolved from MACs here, once, before anything is touched. A plan that names a
+    board nobody plugged in fails at the desk rather than after the first board is provisioned
+    and the second is still holding whatever it held.
+    """
+    ports = plan_module.ports_for(plan, boards)
     fleet = Fleet(plan["fleet"])
+    extending = plan["mode"] == "extend"
     total = len(plan["edges"]) + 2
-    on_stall = _stall_prompt(prompt)
+
+    def stage(index, title):
+        if prompt:
+            prompt.stage(index, total, title)
+        else:
+            result.step("phase", "{}/{} {}".format(index, total, title))
+
+    on_stall = _stall_prompt(prompt) if prompt else None
     common = dict(posture=plan["posture"], firmware=plan["firmware"], rf=plan["rf"],
                   radio=plan["radio"], on_stall=on_stall)
 
     provisioned = []
     for index, edge in enumerate(plan["edges"], start=1):
-        prompt.stage(index, total, "Edge {} on {}".format(index, edge["port"]))
-        board = Board(edge["port"], runner=runner, sleep=sleep)
+        port = ports[edge["mac"]]
+        stage(index, "Edge {} on {}".format(index, port))
+        board = Board(port, runner=runner, sleep=sleep)
         provision_edge(board, fleet, result, name=edge["name"],
                        session_id=plan["session_id"], **common)
         provisioned.append(board)
 
-    prompt.stage(len(plan["edges"]) + 1, total, "Hub on {}".format(plan["hub"]["port"]))
-    hub_board = Board(plan["hub"]["port"], runner=runner, sleep=sleep)
-    provision_hub(hub_board, fleet, result, name=plan["hub"]["name"],
-                  session_id=plan["session_id"], **common)
+    hub_port = ports[plan["hub"]["mac"]]
+    hub_board = Board(hub_port, runner=runner, sleep=sleep)
+    if extending:
+        # The whole reason extend is its own mode. Adding a node changes one row in one file,
+        # and the full Hub phase rewrites four and restarts the board to do it -- over a
+        # deployment that is running, and over rows this Hub has settled in the field.
+        stage(len(plan["edges"]) + 1, "Hub roster on {}".format(hub_port))
+        # The plan's own names, not the ports the Edges came back on: a flashed board can
+        # re-enumerate onto a different path, and the name is the slot the registry keys by.
+        # An extend plan always names its Edges, which is what `free_edge_names` is for.
+        update_hub_roster(hub_board, fleet, result,
+                          set(edge["name"] for edge in plan["edges"]))
+    else:
+        stage(len(plan["edges"]) + 1, "Hub on {}".format(hub_port))
+        provision_hub(hub_board, fleet, result, name=plan["hub"]["name"],
+                      session_id=plan["session_id"], **common)
 
-    prompt.stage(total, total, "Proof: one real transfer")
+    stage(total, "Proof: one real transfer")
     verify_pair(provisioned[0], hub_board, fleet, result,
                 posture=plan["posture"], radio=plan["radio"])
     return fleet
@@ -364,7 +582,7 @@ def _machine_is_ready(prompt, result, runner=None):
     return True
 
 
-def _summarise(prompt, plan, fleet, result):
+def _summarise(prompt, plan, fleet, result, plan_path):
     prompt.say("\n  Done. {}".format(fleet.path))
     for entry in fleet.entries():
         prompt.bullet("{:<6} {:<5} {:<8} {}".format(
@@ -377,10 +595,31 @@ def _summarise(prompt, plan, fleet, result):
     prompt.bullet("that directory is the record of this deployment.")
     prompt.bullet("`provision setup` again adds nodes to it, `provision fleet-show` reads it "
                   "back.")
+    prompt.bullet("what this run did is written down in {}. `provision apply` runs it again, "
+                  "on the same boards, without the questions.".format(plan_path))
+
+
+def _ask_fresh_fleet(prompt, taken):
+    """Where a new deployment goes when the directory named already holds one.
+
+    Never over the old one. A fleet directory is a control root, its mint counter and the
+    record of every node pinned to it; starting a second deployment on top of the first would
+    leave the running nodes' authority in a directory that now describes somebody else.
+    """
+    prompt.bullet("a new deployment needs its own directory: this one holds the control root "
+                  "the nodes above are pinned to, and mints under it.")
+    while True:
+        path = prompt.text("Where should the new deployment live?",
+                           default=taken.rstrip("/") + "-2")
+        if Fleet(path).entries():
+            prompt.bullet("{} already holds a deployment too. Name one that does not, or run "
+                          "`provision setup` again and extend one of them.".format(path))
+            continue
+        return path
 
 
 def run(args, result, runner=None, sleep=None, ask=None, out=None):
-    """The whole command: check, discover, ask, confirm, run, summarise."""
+    """The whole command: check, discover, ask, confirm, write the plan, run it, summarise."""
     prompt = Prompt(read=ask, out=out)
     prompt.say("\n  AlLoRa setup")
     prompt.bullet("this asks what you want, shows you the plan, and then runs it.")
@@ -402,24 +641,56 @@ def run(args, result, runner=None, sleep=None, ask=None, out=None):
             "up under the same names, so only a port that answered is counted.".format(
                 len(boards)))
 
-    plan = ask_plan(prompt, boards, firmware_images(), args.fleet)
-    describe_plan(prompt, plan)
+    fleet_path = args.fleet
+    entries = Fleet(fleet_path).entries()
+    mode = ask_mode(prompt, entries)
+    if mode == "scratch" and entries:
+        fleet_path = _ask_fresh_fleet(prompt, fleet_path)
+        entries = []
+
+    plan = ask_plan(prompt, boards, firmware_images(), fleet_path, mode=mode, entries=entries)
+    describe_plan(prompt, plan, boards)
     if not prompt.yes("Proceed?"):
         raise BoardError("nothing was changed. Run `provision setup` again when you are ready.")
 
+    # Written before the first board is touched, because it is the record of what was
+    # approved. A run that dies halfway leaves the plan behind, and `provision apply` picks it
+    # up rather than making the operator answer every question again to get back to here.
+    fleet = Fleet(fleet_path)
+    fleet.ensure()
+    plan_path = plan_module.write(fleet.plan_path, plan)
+    prompt.bullet("plan written to {}".format(plan_path))
+
     try:
-        fleet = run_plan(plan, result, prompt, runner=runner, sleep=sleep)
+        fleet = run_plan(plan, boards, result, prompt, runner=runner, sleep=sleep)
     except BoardError:
         # Whatever got as far as being registered stays registered, and re-running picks up
         # from there rather than starting the deployment again. Said here because the phase
         # that failed knows why it failed and not what surrounds it.
         prompt.say("")
         prompt.bullet("the nodes that were finished are recorded in {}. Fix what the step "
-                      "above says, then run `provision setup` again: it adds to that fleet "
-                      "rather than starting a new one.".format(args.fleet))
+                      "above says, then run `provision apply {}`: it adds to that fleet "
+                      "rather than starting a new one, and asks nothing.".format(
+                          fleet_path, plan_path))
         raise
-    result.set(plan={k: v for k, v in plan.items() if k not in ("edges", "hub")},
-               fleet=fleet.path)
+    result.set(plan=plan, plan_path=plan_path, fleet=fleet.path)
     if result.ok:
-        _summarise(prompt, plan, fleet, result)
+        _summarise(prompt, plan, fleet, result, plan_path)
+    return result
+
+
+def apply(doc, result, runner=None, sleep=None):
+    """The second front door: run a plan somebody else wrote, and ask nothing.
+
+    Same engine as `setup`, reached without a keyboard. This is what lets something other than
+    a person at a terminal drive a provisioning run: a website writes the plan, this runs it,
+    and `--json` carries back what happened. The plan is already read and validated by the
+    time it arrives, because the caller has to know whether it names a firmware before it can
+    check this machine for the tool that flashes one.
+    """
+    result.step("plan", "{} mode, {} edge(s), fleet {}".format(
+        doc["mode"], len(doc["edges"]), doc["fleet"]))
+    boards = look_for_boards(runner=runner)
+    fleet = run_plan(doc, boards, result, prompt=None, runner=runner, sleep=sleep)
+    result.set(plan=doc, fleet=fleet.path)
     return result

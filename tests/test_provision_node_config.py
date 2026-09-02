@@ -124,3 +124,50 @@ def test_an_unknown_placement_or_posture_is_refused():
         build_lora_json(role="gateway", posture="secure")
     with pytest.raises(ValueError):
         build_lora_json(role="edge", posture="strict")
+
+
+def test_a_sx1262_config_carries_the_pins_its_board_wires_the_radio_on():
+    """The connector reads its pins out of the connector block and falls back to a different
+    board's map when they are absent, so a config that names none provisions a board that
+    cannot find its own chip and says nothing about it."""
+    connector = build_lora_json(role="edge", posture="secure", driver="sx1262")["connector"]
+    assert connector["clk"] == 5
+    assert connector["mosi"] == 6
+    assert connector["miso"] == 3
+    assert connector["cs"] == 7
+    assert connector["rst"] == 8
+    assert connector["irq"] == 33
+    assert connector["gpio"] == 34
+
+
+def test_a_sx127x_config_carries_no_pins_at_all():
+    """That driver takes its pins from its own board file. A pin written here would be a number
+    in the operator's config that nothing reads, which is the same defect from the other end."""
+    connector = build_lora_json(role="edge", posture="secure", driver="sx127x")["connector"]
+    for pin in ("clk", "mosi", "miso", "cs", "rst", "irq", "gpio"):
+        assert pin not in connector
+
+
+def test_both_ends_of_a_mixed_pair_get_their_own_wiring():
+    """The bench pair is an SX127x Hub and an SX1262 Edge on the same board model. One radio is
+    wired through the config and the other through its driver, and each has to get its own."""
+    edge = build_lora_json(role="edge", posture="secure", driver="sx1262")["connector"]
+    hub = build_lora_json(role="hub", posture="secure", driver="sx127x")["connector"]
+    assert edge["cs"] == 7
+    assert "cs" not in hub
+
+
+def test_a_board_this_toolkit_has_no_pin_map_for_is_refused():
+    """Guessing here writes a config that looks provisioned and cannot boot, which is exactly
+    the failure the missing pins produced."""
+    with pytest.raises(ValueError) as excinfo:
+        build_lora_json(role="edge", posture="secure", driver="sx1262", board="heltec_v3")
+    assert "heltec_v3" in str(excinfo.value)
+    assert "t3s3" in str(excinfo.value)
+
+
+def test_the_config_names_no_device_section():
+    """A `device.board` key makes the node build a board object, and on a board whose screen
+    the file does not match that raises before any radio code runs. The wizard provisions the
+    radio and leaves peripherals to a config an operator writes deliberately."""
+    assert "device" not in build_lora_json(role="edge", posture="secure", driver="sx1262")

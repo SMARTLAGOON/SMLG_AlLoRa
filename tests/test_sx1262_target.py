@@ -229,6 +229,24 @@ def test_the_pins_still_come_out_of_the_connector_block():
                           "cs": 7, "irq": 33, "rst": 8, "gpio": 34}
 
 
+def test_the_config_the_wizard_writes_puts_the_radio_on_this_board_s_pins():
+    """The writer and the reader of a pin, checked against each other in one test.
+
+    They disagreed. The wizard wrote no pins at all, and this connector answers a missing pin
+    with a different board's default, so a provisioned SX1262 board came up on a pin map for
+    hardware it is not, asserted ERR_CHIP_NOT_FOUND, and every step of the run before it had
+    said ok. Nothing on either side could see it alone: the wizard's tests never built a
+    radio, and this file's tests always passed the pins in by hand.
+    """
+    from tools.allora_provision.node_config import build_lora_json
+
+    written = build_lora_json(role="edge", posture="secure", driver="sx1262")["connector"]
+    _, radio = _connector(**{k: v for k, v in written.items() if k in (
+        "clk", "mosi", "miso", "cs", "rst", "irq", "gpio", "spi_bus")})
+    assert radio.pins == {"spi_bus": 1, "clk": 5, "mosi": 6, "miso": 3,
+                          "cs": 7, "irq": 33, "rst": 8, "gpio": 34}
+
+
 # -- the setters the base class leaves as no-ops -------------------------------------------
 
 
