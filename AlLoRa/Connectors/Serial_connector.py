@@ -76,6 +76,15 @@ def usb_reset(port, esptool=None, timeout=60, settle=5, attempts=3, runner=None)
 
     import time
 
+    # The stub is not optional here, however much it looks like flashing machinery this call
+    # does not need. Measured on a Raspberry Pi 3B, 2026-09-02: with `--no-stub` the board
+    # resets, re-enumerates and passes its identity check, and then never runs its program
+    # again, because the reset returns it to the ROM loader rather than booting it. The host
+    # sees a healthy port serving nothing, which is a worse failure than not resetting at all.
+    # So a host whose esptool ships without its stub binaries cannot do this, and should fail
+    # here rather than quietly park the board. Debian's `esptool` package is one: it is
+    # repackaged as `+dfsg` with the stubs stripped, and dies on a missing
+    # `stub_flasher_32s3.json`. Install esptool from pip on those hosts.
     argv = [esptool or resolve_esptool(), "--port", port, "--after", "hard_reset", "chip_id"]
     for attempt in range(max(1, attempts)):
         try:

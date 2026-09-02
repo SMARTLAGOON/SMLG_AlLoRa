@@ -373,6 +373,8 @@ def test_usb_reset_issues_the_proven_esptool_call():
     assert usb_reset("/dev/ttyACM0", esptool="esptool", runner=runner, settle=0) is True
     # The call benched on 2026-09-02: uptime 49 318 235 ms to 4 726 ms, same unique_id, no RST
     # pin touched. Pinned here so a well-meaning edit cannot quietly change what ships.
+    # No `--no-stub`, and that absence is load-bearing: benched on a Pi, the stubless reset
+    # leaves the board in the ROM loader, serving nothing behind a port that opens fine.
     assert calls == [["esptool", "--port", "/dev/ttyACM0", "--after", "hard_reset", "chip_id"]]
 
 
