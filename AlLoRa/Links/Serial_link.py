@@ -104,7 +104,6 @@ class Serial_link(Link):
     FRAME_START = b"{"
 
     def __init__(self, port, sentinel=SENTINEL, poll_ms=5, text_safe=True):
-        self._port = port
         self._sentinel = sentinel
         self._poll_ms = poll_ms
         self._text_safe = text_safe
@@ -113,8 +112,22 @@ class Serial_link(Link):
         # mid-session is normal), but a number that keeps climbing during a transfer means
         # something on the far side is writing to the wire while the tunnel is using it.
         self.preamble_dropped = 0
-        # One availability probe, chosen once: pyserial exposes `in_waiting`, machine.UART
-        # exposes `any()`. Without either we fall back to a blocking 1-byte read on the port.
+        # How to build the port again, set by `client()` and by nothing else. A half that was
+        # handed a port it does not own (the bridge, and every test that builds one directly)
+        # cannot rebuild it and must say so rather than guess.
+        self._reopen_recipe = None
+        self._bind(port)
+
+    def _bind(self, port):
+        """Adopt a port and choose the availability probe for it.
+
+        Separate from `__init__` because a reopen swaps the port underneath a live link: the
+        probe is chosen from the port's own shape, so keeping the old one would leave the link
+        reading a descriptor that no longer exists.
+        """
+        self._port = port
+        # One availability probe, chosen once per port: pyserial exposes `in_waiting`,
+        # machine.UART exposes `any()`. Without either we fall back to a blocking 1-byte read.
         if hasattr(port, "in_waiting"):
             self._available = lambda: port.in_waiting
         elif hasattr(port, "any"):
@@ -125,17 +138,31 @@ class Serial_link(Link):
     # --- construction: the three physical ports a serial tunnel binds to ---------------------
 
     @classmethod
-    def client(cls, serial_port, baud=9600, timeout=1, **kwargs):
+    def client(cls, serial_port, baud=9600, timeout=1, open_port=None, **kwargs):
         """Logic-holder half over `pyserial` (imported lazily so the module loads without it).
 
         This is also the host end of a *USB* tunnel, unchanged: a CDC board is an ordinary
         serial device to the host, so only the path differs (`/dev/ttyACM0` on a Pi,
         `/dev/cu.usbmodem*` on macOS). `baud` is honoured by a real UART and ignored by CDC,
         which runs at USB speed whatever it is told.
+
+        `serial_port` may be a **callable** returning a path instead of a path. A native-USB
+        adapter that reboots re-enumerates, and can come back on a different device node, so a
+        fixed string is only correct for a wire that never moves (a Pi's own UART). Passing a
+        lookup — by MAC, by serial number — is what makes `reopen()` find the same board rather
+        than whatever now answers to the old path.
+
+        `open_port` replaces the pyserial construction itself, for callers that need a
+        differently-configured port and for tests that must not touch a real device.
         """
-        import serial
-        port = serial.Serial(serial_port, baud, timeout=timeout)
-        return cls(port, **kwargs)
+        def _open(path):
+            import serial
+            return serial.Serial(path, baud, timeout=timeout)
+
+        opener = open_port if open_port is not None else _open
+        link = cls(opener(_resolve(serial_port)), **kwargs)
+        link._reopen_recipe = (serial_port, opener)
+        return link
 
     @classmethod
     def bridge(cls, uartid=0, baud=9600, tx=None, rx=None, bits=8, parity=None, stop=1,
@@ -267,3 +294,42 @@ class Serial_link(Link):
             self._port.close()
         except Exception:
             pass
+
+    def reopen(self, attempts=10, delay=1.0):
+        """Rebuild the port after the far side went away and came back. True once it answers.
+
+        Over a Pi's own UART this is never needed: the port belongs to the Pi, so resetting the
+        board at the other end leaves the descriptor valid. Over USB the serial device *is* the
+        board, so a reset makes it re-enumerate and the open descriptor dies with it. That is
+        the whole difference between the two wirings, and this is the half of it that lives at
+        the link.
+
+        Bounded on purpose, and reported rather than raised. The first opens after a reset fail
+        on a board that is about to be fine, because the reset call returns before the host has
+        finished enumerating the device; giving up on the first refusal would call a healthy
+        board dead. Waiting forever is worse, because it hangs a node's visit loop on hardware
+        that may simply be gone. So: a fixed number of tries, then False, and the caller decides
+        what a dead adapter means for it.
+        """
+        if self._reopen_recipe is None:
+            return False
+        resolver, opener = self._reopen_recipe
+        self.close()
+        # Whatever was buffered belongs to the board that just went away. Half a frame from
+        # before the reboot, glued to the first frame after it, parses as neither.
+        self._buf = bytearray()
+        for attempt in range(attempts):
+            try:
+                self._bind(opener(_resolve(resolver)))
+                self._flush_input()
+                return True
+            except Exception:
+                pass
+            if attempt < attempts - 1:
+                sleep_ms(int(delay * 1000))
+        return False
+
+
+def _resolve(port):
+    """A device path, from either a path or a lookup that finds one. See `client`."""
+    return port() if callable(port) else port

@@ -1,0 +1,59 @@
+[
+  {
+      "name": "A",
+      "mac_address": "9a76ba3f",
+      "sleep_mesh": false,
+      "active": false,
+      "asking_frequency": 3600,
+      "listening_time": 60,
+      "lock_on_file_receive": false,
+      "max_listen_time_when_locked": 600
+  },
+  {
+      "name": "Sentiment1",
+      "mac_address": "75e05f6c",
+      "sleep_mesh": true,
+      "active": true,
+      "asking_frequency": 300,
+      "listening_time": 20,
+      "lock_on_file_receive": false,
+      "max_listen_time_when_locked": 60
+  },
+  {
+      "name": "sentiment2",
+      "mac_address": "75e05f64",
+      "sleep_mesh": true,
+      "active": false,
+      "asking_frequency": 300,
+      "listening_time": 60,
+      "lock_on_file_receive": false,
+      "max_listen_time_when_locked": 60
+  },
+  {
+      "name": "GPS",
+      "mac_address": "75dbb244",
+      "sleep_mesh": true,
+      "active": false,
+      "asking_frequency": 900,
+      "listening_time": 120,
+      "lock_on_file_receive": true,
+      "max_listen_time_when_locked": 600
+  },
+  {
+      "name": "GPS2",
+      "mac_address": "da5ace8c",
+      "sleep_mesh": true,
+      "active": true,
+      "asking_frequency": 300,
+      "listening_time": 60,
+      "lock_on_file_receive": true,
+      "max_listen_time_when_locked": 60,
+      "connector": {
+          "freq": 868,
+          "sf": 8,
+          "bandwidth": 125,
+          "coding_rate": 1,
+          "tx_power": 14
+      }
+  }
+]

@@ -24,6 +24,12 @@ from AlLoRa.utils.debug_utils import print
 
 class Tunnel_connector(Connector):
 
+    # How many link deadlines in a row mean the bridge has stopped talking, rather than one
+    # frame having been missed. One is far too eager: the far side is a small board serving a
+    # radio, and a single slow reply would otherwise reboot it in the middle of a healthy
+    # transfer. Nothing recovers until the link has been silent this many verbs running.
+    LINK_FAILURES_BEFORE_RECOVERY = 3
+
     def __init__(self, link=None, rpc_timeout=20, link_margin=5):
         super().__init__()
         self.link = link
@@ -31,6 +37,11 @@ class Tunnel_connector(Connector):
         # for up to the window, so its link deadline is window + slack for link + processing.
         self._rpc_timeout = rpc_timeout
         self._link_margin = link_margin
+        self._link_failures = 0
+        # The outcome of the last recovery attempt: True, False, or None for "never tried".
+        # A caller that wants to log or give up on a dead adapter reads it here; the node's
+        # loop is deliberately not interrupted by a recovery either way.
+        self.link_recovered = None
 
     def config(self, config_json):
         super().config(config_json)
@@ -42,15 +53,66 @@ class Tunnel_connector(Connector):
         if getattr(self, "addressing", "mac") == "mac" and self.link is not None:
             self.request_mac()
 
+    # --- the link, and noticing when it has stopped answering ---
+
+    def _rpc(self, request, timeout):
+        """Every verb goes through here, so one place counts how long the bridge has been quiet.
+
+        A `None` back from the link is not a radio timeout: an empty receive window comes back
+        as a real reply frame carrying no wire. `None` means the *bridge* did not answer at all,
+        which on a healthy link should never happen. Enough of those in a row and the adapter is
+        wedged, or has been unplugged, or rebooted into something that is not listening.
+
+        A raise counts the same as a silence, and on the wiring this exists for it is the more
+        common of the two. A board reached over USB takes the serial device with it when it
+        goes, so the very next read is not a timeout but an I/O error on a descriptor that no
+        longer refers to anything. Reading that as a fatal error rather than as a failed verb
+        would take down a node holding sessions the adapter knows nothing about.
+        """
+        try:
+            reply = self.link.rpc(request, timeout=timeout)
+        except Exception as e:
+            if self.debug:
+                print("Link rpc raised: {}".format(e))
+            reply = None
+        if reply:
+            self._link_failures = 0
+            return reply
+        self._link_failures += 1
+        if self._link_failures >= self.LINK_FAILURES_BEFORE_RECOVERY:
+            # Reset the count before recovering, not after: a link that is still dead then gets
+            # a full run of failures before the next attempt, instead of rebooting the board on
+            # every verb for as long as it stays down.
+            self._link_failures = 0
+            try:
+                self.link_recovered = self.recover_link()
+            except Exception as e:
+                # Recovery is best-effort by construction. A Hub with several other endpoints
+                # to serve must not go down because one adapter could not be rebooted.
+                if self.debug:
+                    print("Link recovery raised: {}".format(e))
+                self.link_recovered = False
+        return None
+
+    def recover_link(self):
+        """Bring a stalled link back, if this tunnel knows how. False when it does not.
+
+        The base tunnel does not: a WiFi link has no board to reboot and no descriptor to
+        rebuild, so the honest answer is that nothing was recovered. `Serial_connector`
+        overrides it, because a serial adapter is a board on a wire that can be power-cycled
+        and reopened.
+        """
+        return False
+
     # --- transport verbs, forwarded to the bridge radio over the link ---
 
     def transmit(self, wire):
-        reply = self.link.rpc(tunnel_codec.encode_transmit(wire), timeout=self._rpc_timeout)
+        reply = self._rpc(tunnel_codec.encode_transmit(wire), timeout=self._rpc_timeout)
         return tunnel_codec.decode_bool_reply(reply) if reply else False
 
     def listen(self, window):
-        reply = self.link.rpc(tunnel_codec.encode_listen(window),
-                              timeout=window + self._link_margin)
+        reply = self._rpc(tunnel_codec.encode_listen(window),
+                          timeout=window + self._link_margin)
         if not reply:
             return None, window          # link gave up: treat as a radio timeout of ~one window
         return tunnel_codec.decode_listen_reply(reply)
@@ -62,8 +124,8 @@ class Tunnel_connector(Connector):
         # The bridge runs the whole match loop at its radio; we send only the keyless prefix
         # down and get the matching reply (or a timeout) + the radio-measured td back up.
         prefix = match_key.wire_prefix()
-        reply = self.link.rpc(tunnel_codec.encode_exchange(wire, window, prefix),
-                              timeout=window + self._link_margin)
+        reply = self._rpc(tunnel_codec.encode_exchange(wire, window, prefix),
+                          timeout=window + self._link_margin)
         if not reply:
             return None, window, "timeout"
         return tunnel_codec.decode_exchange_reply(reply)
@@ -113,7 +175,7 @@ class Tunnel_connector(Connector):
 
     def change_rf_config(self, frequency=None, sf=None, bw=None, cr=None, tx_power=None,
                          backup=True):
-        reply = self.link.rpc(
+        reply = self._rpc(
             tunnel_codec.encode_set_rf(freq=frequency, sf=sf, bw=bw, cr=cr, tx=tx_power),
             timeout=self._rpc_timeout)
         if not reply or not tunnel_codec.decode_bool_reply(reply):
@@ -135,7 +197,7 @@ class Tunnel_connector(Connector):
         return True
 
     def get_rf_config(self):
-        reply = self.link.rpc(tunnel_codec.encode_get_rf(), timeout=self._rpc_timeout)
+        reply = self._rpc(tunnel_codec.encode_get_rf(), timeout=self._rpc_timeout)
         if not reply:
             return []
         return tunnel_codec.decode_get_rf_reply(reply)

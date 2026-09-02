@@ -1,0 +1,17 @@
+{
+    "name": "G",
+    "debug": true,
+    "mesh_mode": false,
+    "chunk_size": 235,
+    "result_path": "/allora_files",
+    "connector": {
+        "freq": 868,
+        "sf": 7,
+        "min_timeout": 0.5,
+        "max_timeout": 12,
+        "baud": 9600,
+        "timeout": 1,
+        "debug": true
+    },
+    "results_path": "/allora_files"
+}
