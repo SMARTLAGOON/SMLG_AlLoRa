@@ -343,7 +343,13 @@ def test_a_lost_final_ok_costs_a_second_delivery(tmp_path):
     assert not server.is_alive()
 
     assert edge_conn.dropped == 1, "the final OK was not the frame that went missing"
-    assert len(sink.received) == 2, \
+    # At least two, not exactly two, for the same reason the case above cannot assert exactly
+    # one: the reclaim timer is 1.0 s and a delivery on a loaded machine takes longer than
+    # that, so the timer can fire again *during* the second delivery and cost a third copy.
+    # Measured under the full suite on 2026-09-02: one dropped OK, three whole correct copies.
+    # What this test exists to pin is that a lost confirmation costs another delivery at all,
+    # and that survives; an exact count pins the machine's load instead of the protocol.
+    assert len(sink.received) >= 2, \
         "a lost confirmation has to cost a second delivery, or the reading of the flake is wrong"
     assert all((n, c) == ("relay.bin", payload) for n, c, _ in sink.received), \
         "the duplicate must be a whole correct copy, not a damaged one"
