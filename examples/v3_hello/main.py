@@ -60,6 +60,98 @@ def build_board(name):
         "is not on that list needs one import and one branch in build_board above.".format(name))
 
 
+# The boundary table, beside the radio table and the board table, and never inside AlLoRa/. A
+# library that grew a table of legal boundaries would start deciding which compositions are
+# blessed, which is the one thing v3 promises not to do, and it would drag paho into the import
+# path of every deployment that publishes nothing.
+#
+# Each entry lists the keys that kind accepts. A key outside its list stops the boot rather than
+# being ignored, so "hosts" is a halt and not a silent fall back to localhost: a boundary that
+# publishes into the wrong place looks exactly like one that works.
+_SINK_KINDS = {
+    "disk": (),
+    "mqtt": ("host", "port", "topic_prefix", "client_id", "qos", "retain", "keepalive",
+             "cleanup"),
+}
+_SOURCE_KINDS = {
+    "disk": ("queue_path", "file_queue_size"),
+    "mqtt": ("host", "port", "topics", "client_id", "keepalive", "file_queue_size"),
+}
+
+
+def _boundary_args(block, table, key_name, reserved=()):
+    """Read one boundary block: which kind it names, and what to hand the constructor.
+
+    Only the keys present are passed on, so every default stays where the class defines it and
+    there is one place to read it. `reserved` names keys this config already spells somewhere
+    else, which are refused here rather than quietly shadowing the outer one.
+    """
+    kind = block.get("kind", None)
+    if kind is None:
+        raise SystemExit(
+            "the {} block names no kind. It is one of: {}.".format(
+                key_name, ", ".join(sorted(table))))
+    if kind not in table:
+        # Never a fall back to disk. A config naming a boundary this program cannot build was
+        # written against a different program, and running it as disk gives a node that looks
+        # provisioned, delivers nowhere and says nothing.
+        raise SystemExit(
+            "{}.kind is '{}', which this program does not know. It builds: {}. A boundary that "
+            "is not on that list is still supported: pass it to the constructor, as "
+            "examples/Hubs/Many-Edges/USB/main_mqtt.py does.".format(
+                key_name, kind, ", ".join(sorted(table))))
+    args = {}
+    for key in block:
+        if key == "kind":
+            continue
+        if key in reserved:
+            raise SystemExit(
+                "{} names '{}' inside the block, but this config already spells it at the top "
+                "level. Keep the one that is there and remove this one, so there is a single "
+                "place to read it.".format(key_name, key))
+        if key not in table[kind]:
+            raise SystemExit(
+                "{} names '{}', which a '{}' boundary does not take. It takes: {}.".format(
+                    key_name, key, kind, ", ".join(table[kind]) or "nothing but kind"))
+        args[key] = block[key]
+    return kind, args
+
+
+def build_data_sink(block, key_name="data_sink"):
+    """The sink this block names, or None for the disk sink the node builds itself.
+
+    Disk returns None rather than a Disk_DataSink deliberately: the node builds one lazily from
+    result_path when a file first completes, so handing it one at construction would be a nearly
+    identical node instead of an identical one, and the two would drift the day that lazy path
+    changes.
+    """
+    kind, args = _boundary_args(block, _SINK_KINDS, key_name, reserved=("result_path",))
+    if kind == "disk":
+        return None
+    from AlLoRa.DataSinks.MQTT_DataSink import MQTT_DataSink
+    return MQTT_DataSink(**args)
+
+
+def build_datasource(block, key_name="datasource", queue_path=None, reserved=()):
+    """The source this block names.
+
+    `queue_path` is what a disk source falls back to when the block does not carry one, which is
+    how the node-level key stays the single home for an outbox folder. A roster entry has no
+    outer key to defer to, so there it carries its own.
+    """
+    kind, args = _boundary_args(block, _SOURCE_KINDS, key_name, reserved=reserved)
+    if kind == "disk":
+        from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
+        if queue_path is not None and "queue_path" not in args:
+            args["queue_path"] = queue_path
+        return Disk_DataSource(**args)
+    from AlLoRa.DataSources.MQTT_DataSource import MQTT_DataSource
+    if "topics" in args:
+        # JSON gives a list; the source keeps a tuple.
+        args["topics"] = tuple(args["topics"])
+    return MQTT_DataSource(**args)
+
+
 # What the screen draws. Both layouts reserve the left 40 pixels for the logo and start text at
 # x=40, which is what makes them fit a 128x32 display.
 _EDGE_LAYOUT = [
@@ -232,6 +324,57 @@ def wire_control(node):
     return "verifying signed artifacts against the provisioned root"
 
 
+def wire_downlink_sources(node):
+    """Give each endpoint whatever downlink source its roster entry names, and say which got one.
+
+    A Hub serves a different downlink to each Edge, so the source is a property of the endpoint
+    and its block sits in that endpoint's entry rather than in the Hub's own config.
+
+    Read here rather than inside add_digital_endpoints on purpose. The Hub would have to hold a
+    kind-to-class table to do it, and that table belongs to the deployment: a Hub that knew which
+    boundaries are legal would start deciding which compositions are blessed. So the library
+    keeps a public verb, set_downlink_source, and this file supplies the object.
+
+    Registration happens here, before the loop starts, because set_downlink_source calls
+    prepare(): a broker that cannot be reached should fail while somebody is watching, not
+    several visits into a drive loop where it reads as an Edge that never receives anything.
+    """
+    from AlLoRa.Digital_Endpoint import label_for_config
+    if not node.nodes_file:
+        return []
+    try:
+        with open(node.nodes_file, "r") as f:
+            roster = json.loads(f.read())
+    except (OSError, ValueError):
+        # The Hub already reported a roster it could not read, and it is running on whatever it
+        # registered. Saying it twice helps nobody.
+        return []
+
+    blocks = {}
+    for entry in roster:
+        block = entry.get("datasource", None)
+        if block:
+            blocks[label_for_config(entry)] = block
+
+    wired = []
+    for endpoint in node.digital_endpoints:
+        block = blocks.pop(endpoint.get_label(), None)
+        if not block:
+            continue
+        node.set_downlink_source(
+            endpoint, build_datasource(block, key_name="datasource for " + endpoint.get_name()))
+        wired.append("{} serves downlink from {}".format(endpoint.get_name(), block["kind"]))
+
+    # An entry that names a source and never becomes an endpoint is a block nobody will read:
+    # the entry is inactive, or its label was edited on one side only. Silence here is how a
+    # deployment ends up wondering why one Edge receives nothing.
+    for label in blocks:
+        wired.append(
+            "WARNING: an entry labelled {} names a datasource but is not a registered endpoint, "
+            "so nothing serves it. Check \"active\" and its address.".format(label))
+    return wired
+
+
 def build_node(config, config_file, connector):
     """The node this config describes, wired and ready to run.
 
@@ -257,16 +400,42 @@ def build_node(config, config_file, connector):
 
     if node_type == "edge":
         from AlLoRa.Nodes.Edge import Edge
-        from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
-        # What the Edge serves: the files waiting in its outbound folder, streamed from where
-        # they lie rather than held in RAM. An empty folder is a node with nothing to send yet,
-        # not an error and not a cue to invent something; it answers polls and waits.
-        datasource = Disk_DataSource(queue_path=config.get("queue_path", "Outbox"))
-        return Edge(connector, config_file=config_file, datasource=datasource)
+        # What the Edge serves: by default the files waiting in its outbound folder, streamed
+        # from where they lie rather than held in RAM. An empty folder is a node with nothing to
+        # send yet, not an error and not a cue to invent something; it answers polls and waits.
+        datasource = build_datasource(config.get("datasource", None) or {"kind": "disk"},
+                                      queue_path=config.get("queue_path", "Outbox"),
+                                      reserved=("queue_path",))
+
+        sink_block = config.get("data_sink", None)
+        if sink_block and config.get("control_root_file", None):
+            # A node that answers to an authority keeps its verify gate in the sink slot, and
+            # that gate is the only thing standing between a signed command and an unsigned one.
+            # A config key able to displace it would let a text edit disarm the signature check,
+            # so a config asking for both is refused where a human can still see it rather than
+            # resolved in favour of either.
+            raise SystemExit(
+                "this config names both control_root_file and data_sink. A node holding a "
+                "control root puts its verify gate in the sink slot, so the two cannot both "
+                "have it. Remove the data_sink block, or remove control_root_file if this node "
+                "is not meant to answer to a control root.")
+
+        return Edge(connector, config_file=config_file, datasource=datasource,
+                    data_sink=build_data_sink(sink_block) if sink_block else None)
 
     if node_type == "hub":
         from AlLoRa.Nodes.Hub import Hub
-        return Hub(connector, config_file=config_file, nodes_file="Nodes.json")
+        if config.get("datasource", None):
+            # Not a refusal of the idea, a redirection to the right file. A Hub serves a
+            # different downlink to each Edge it holds, so one source at the top of its own
+            # config would say every Edge is served the same file, which is the one thing a
+            # per-endpoint downlink exists not to say.
+            raise SystemExit(
+                "a Hub serves a different downlink to each Edge, so a datasource block belongs "
+                "in that Edge's entry in Nodes.json, not at the top of this file.")
+        sink_block = config.get("data_sink", None)
+        return Hub(connector, config_file=config_file, nodes_file="Nodes.json",
+                   data_sink=build_data_sink(sink_block) if sink_block else None)
 
     raise SystemExit(
         "\"node\" is '{}' in {}. A node is an \"edge\" or a \"hub\": named by where it sits, "
@@ -303,7 +472,8 @@ def main():
             # The one value that registers this node on its Hub. Stable across reboots for as
             # long as identity_file stays set and the file survives a reflash.
             print("EDGE device_id (register this on the Hub):", node.device_id.hex())
-        print("EDGE serving from:", node.datasource.queue_path)
+        # An MQTT source has no folder to name, so say what it is rather than reach for one.
+        print("EDGE serving from:", getattr(node.datasource, "queue_path", node.datasource))
         print("control:", wire_control(node))
         node.run()
         return
@@ -319,6 +489,9 @@ def main():
     for endpoint in node.digital_endpoints:
         print("  polling", endpoint.get_name(), "as", endpoint.get_label(),
               "every", endpoint.asking_frequency, "s")
+
+    for note in wire_downlink_sources(node):
+        print("downlink:", note)
 
     # No actuator and no verify gate on this side. A Hub is the authority: it issues control
     # artifacts and is never commanded by one over the radio, so the half of a control root it

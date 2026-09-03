@@ -34,6 +34,36 @@ SX1262 Edge produced an SX127x one, because the program said so and nobody reads
 longhand, every class named. Read it if you would rather see the classes than follow a dispatch,
 and start from it if you have a radio this repository has never supported.
 
+## Where files come from, and where they go
+
+A node's two boundaries are `DataSource` in and `DataSink` out, and the config names them the
+same way it names a radio. Both keys are optional, and leaving them out gives exactly the node
+you had before they existed: an Edge serves the folder at `queue_path`, and a Hub writes what
+arrives under `result_path`.
+
+```json
+"data_sink":  { "kind": "mqtt", "host": "10.0.0.4", "topic_prefix": "albufera" },
+"datasource": { "kind": "mqtt", "topics": ["sensors/#"] }
+```
+
+`kind` is `disk` or `mqtt`. Every other key inside the block is passed straight to that class, so
+what you leave out is whatever the class already defaults to, and there is one place to read it.
+A key the kind does not take stops the boot rather than being ignored, which is what makes a
+typed `hosts` a halt instead of a node quietly publishing to localhost.
+
+Two rules worth knowing before you write one:
+
+- **A Hub serves a different downlink to each Edge**, so its `datasource` block goes in that
+  Edge's entry in `Nodes.json`, not at the top of the Hub's own config. A disk block there
+  carries its own `queue_path`, because there is no outer key for it to fall back on.
+- **A node holding a control root cannot name a `data_sink`.** Its sink slot is the verify gate
+  that checks signatures on incoming commands, and a config key able to take that slot would
+  disarm the signature check with a text edit. Such a config is refused at boot.
+
+Passing a boundary to the constructor still works and still wins:
+[`../Hubs/Many-Edges/USB/main_mqtt.py`](../Hubs/Many-Edges/USB/main_mqtt.py) is that shape, and
+it is the way in for a boundary this repository has never heard of.
+
 ## Flash and load
 
 All three postures run the same AlLoRa firmware on both boards. Then put one posture's files on
