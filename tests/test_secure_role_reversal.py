@@ -33,6 +33,7 @@ import time
 
 import pytest
 
+from delegation_drive import drive_until
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
@@ -329,17 +330,23 @@ def test_a_lost_final_ok_costs_a_second_delivery(tmp_path):
                 edge_conn.drop_kind(OK_KIND, count=1)
 
     sink = _Arming_sink()
+    # `session_recovery_after` is out of the way because the drive below may take more than
+    # one visit on a slow machine, and a visit whose only business was a delegation counts as
+    # silent. Letting the number of visits decide whether a live session is torn down would
+    # make an unrelated mechanism load-dependent, which is the bug this test was flaking on.
     edge, hub, endpoint, _ = _make_pair(tmp_path, edge_conn, hub_conn,
-                                        edge_sink=sink, reclaim_timeout=1.0)
+                                        edge_sink=sink, reclaim_timeout=1.0,
+                                        session_recovery_after=10 ** 6)
 
     hub.queue_downlink(endpoint, AlLoRa_File(name="relay.bin", content=bytearray(payload),
                                              chunk_size=hub.get_chunk_size()))
 
-    server = threading.Thread(target=edge.serve, kwargs={"timeout": 12},
-                              name="edge-serve", daemon=True)
-    server.start()
-    hub.listen_to_endpoint(endpoint, listening_time=8, save_file=True)
-    server.join(timeout=14)
+    # Drive until the Hub has let the file go, not for a fixed eight seconds. The work here is
+    # two whole deliveries plus a reclaim window, which takes about 3.2 s unloaded and can
+    # exceed any budget on a loaded one. See tests/delegation_drive.py.
+    server = drive_until(hub, endpoint, edge,
+                         done=lambda: not hub.downlink_pending(endpoint),
+                         listening_time=8)
     assert not server.is_alive()
 
     assert edge_conn.dropped == 1, "the final OK was not the frame that went missing"

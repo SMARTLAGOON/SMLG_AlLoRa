@@ -19,6 +19,7 @@ import time
 
 import pytest
 
+from delegation_drive import drive_until
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
@@ -266,11 +267,13 @@ def test_reclaim_on_lost_first_pull_then_recovery(tmp_path):
                                              chunk_size=hub.get_chunk_size()))
     first_swap_id = hub._swap_id
 
-    server = threading.Thread(target=edge.serve, kwargs={"timeout": 22},
-                              name="edge-serve", daemon=True)
-    server.start()
-    hub.listen_to_endpoint(endpoint, listening_time=18, save_file=True)
-    server.join(timeout=12)
+    # Drive until the Hub has let the file go, not for a fixed eighteen seconds: this case
+    # waits on four dropped pulls plus however many reclaim windows they cost, and that
+    # duration belongs to the machine rather than to the protocol. The secure twin of this
+    # case flaked on exactly that. See tests/delegation_drive.py.
+    server = drive_until(hub, endpoint, edge,
+                         done=lambda: not hub.downlink_pending(endpoint),
+                         listening_time=18)
     assert not server.is_alive()
 
     assert edge_conn.dropped >= 4, "the pull drops never happened — filter inert"
