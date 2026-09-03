@@ -13,6 +13,23 @@ There are three main files in each folder:
 - **LoRa.json**: This file contains the configuration for the Connector module. It is used by the AlLoRa library to configure the Connector module. You should be sure to have both the Edge and the Hub with the same LoRa configuration in order to establish a proper communication between them.
 - **Nodes.json**: This file contains the configuration for the Edges. It is used by the AlLoRa library to build the Digital Endpoint for each Edge. Each Edge must be registered and be active in order to be polled by the Hub. Different Edges can have different LoRa configurations, and the Hub will adjust its Connector configuration to match the Edge it is about to visit.
 
+## Where the files go once they arrive
+
+By default a completed file is written to this host's disk, under `result_path`. That is one
+`DataSink`, not a fact about the protocol, and it is swappable: the Hub only knows "hand the
+finished file to my sink".
+
+`USB/main_mqtt.py` is the same Hub as `USB/main.py` with the sink changed, and it is the whole
+difference between the two files. Each completed file is published to
+`<topic_prefix>/<source>/<filename>` with the payload byte-for-byte, so what arrived over the
+radio leaves the gateway on a broker instead of landing on a card. It needs `paho-mqtt` and a
+broker this host can reach.
+
+That is the side of a deployment where a broker earns its place: a gateway with a real network
+behind it, republishing what came in over the constrained link. Carrying files *over* the LoRa
+link inside MQTT messages is the other thing, and a worse one, because an envelope costs airtime
+on every chunk and a lost message has no retry.
+
 ## Per-Edge radio settings
 
 An entry that says nothing about radio is polled on **the Hub's own `LoRa.json` config**. That is the
