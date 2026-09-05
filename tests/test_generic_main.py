@@ -105,10 +105,21 @@ def test_every_radio_the_wizard_offers_is_a_radio_this_program_can_build():
 
 
 def test_the_wizard_writes_the_radio_it_was_asked_for_into_the_config():
+    """Every pair the wizard offers builds a config naming that pair's radio.
+
+    Iterated over the board-and-radio pairs rather than over the radios alone, because a radio
+    is only provisionable on a board that carries it: an E5 on a T3-S3 is a real combination
+    nobody has recorded the pins for, and a LoPy4 is not a chip that board can have at all.
+    Both are refused deliberately, and a hand-written deployment reaches them anyway, which is
+    why `DRIVERS` above stays the full vocabulary.
+    """
     from tools.allora_provision.node_config import build_lora_json
-    for driver in ("sx127x", "sx1262", "e5", "lopy4"):
+    from tools.allora_provision.setup import hardware_options
+    offered = hardware_options()
+    assert offered, "the wizard offers no hardware at all"
+    for board, driver in offered:
         for role in ("edge", "hub"):
-            config = build_lora_json(role=role, posture="secure", driver=driver)
+            config = build_lora_json(role=role, posture="secure", driver=driver, board=board)
             assert config["connector"]["driver"] == driver
 
 

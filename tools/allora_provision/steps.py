@@ -323,7 +323,8 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
     entry = fleet.register(name=config["name"], role="edge",
                            device_id=device_id, posture=posture,
                            session_id=config.get("session_id"),
-                           port=board.port, mac=mac, radio=radio, on_notice=result.warn,
+                           port=board.port, mac=mac, radio=radio, board=board_model,
+                           on_notice=result.warn,
                            connector={k: config["connector"][k]
                                       for k in ("freq", "sf", "bandwidth", "coding_rate",
                                                 "tx_power")})
@@ -416,7 +417,8 @@ def provision_hub(board, fleet, result, posture="secure", firmware=None, name=No
     # the port it answered on today says nothing about that tomorrow.
     entry = fleet.register(name=config["name"], role="hub", device_id=device_id,
                            posture=posture, port=board.port, mac=mac, radio=radio,
-                           on_site_root=on_site_root, on_notice=result.warn)
+                           board=board_model, on_site_root=on_site_root,
+                           on_notice=result.warn)
     result.step("registered", "{} in {}".format(entry["name"], fleet.registry_path))
 
     # Restart into what was just pushed. Without this the board is provisioned on disk and
@@ -440,24 +442,13 @@ def _rf_summary(entry):
     return ", ".join(stated) if stated else "no radio settings of its own"
 
 
-def update_hub_roster(board, fleet, result, names):
-    """Add or replace the rows for the Edges this run provisioned, and touch nothing else.
+def _roster_on(board):
+    """The roster this Hub is holding, or a refusal that says why it cannot be extended.
 
-    This is the phase that extends a deployment already in the field. Adding an Edge changes
-    one row in one file, and the full Hub phase rewrites four and restarts the board to do it,
-    which on a live deployment costs more than the change is worth.
-
-    **What it exists to protect is the rows it does not write.** `Nodes.json` is a read/write
-    state file: when a retune is accepted, `Hub._persist_endpoint_rf` writes that endpoint's
-    settled radio settings back into it. So the Hub's copy, not the operator's record, is the
-    truth about what an Edge in the field is listening on. Rebuilding the roster from the fleet
-    registry would put the Hub back on the settings that Edge was provisioned with a year ago
-    and has since left, and nothing on either side would say so: the Hub simply polls an
-    address nobody answers on.
-
-    Rows are matched the way the Hub matches its own, by `label_for_config`, so an entry found
-    here is the entry the Hub would have found. `names` are the fleet's names for the Edges
-    this run provisioned; every other row is carried across exactly as it was read.
+    Every branch here stops rather than falls back, and for one reason: the file on the board is
+    the truth about what its Edges are listening on, so replacing an unreadable one from the
+    fleet registry would silently undo whatever the Hub has settled on since it was provisioned.
+    Replacing it is a thing an operator does deliberately, through the full Hub phase.
     """
     existing = board.read_remote("Nodes.json")
     if existing is None:
@@ -477,6 +468,29 @@ def update_hub_roster(board, fleet, result, names):
         raise BoardError(
             "the Nodes.json on the Hub at {} is not a list of entries. Run the full Hub phase "
             "to replace it deliberately.".format(board.port))
+    return roster
+
+
+def update_hub_roster(board, fleet, result, names):
+    """Add or replace the rows for the Edges this run provisioned, and touch nothing else.
+
+    This is the phase that extends a deployment already in the field. Adding an Edge changes
+    one row in one file, and the full Hub phase rewrites four and restarts the board to do it,
+    which on a live deployment costs more than the change is worth.
+
+    **What it exists to protect is the rows it does not write.** `Nodes.json` is a read/write
+    state file: when a retune is accepted, `Hub._persist_endpoint_rf` writes that endpoint's
+    settled radio settings back into it. So the Hub's copy, not the operator's record, is the
+    truth about what an Edge in the field is listening on. Rebuilding the roster from the fleet
+    registry would put the Hub back on the settings that Edge was provisioned with a year ago
+    and has since left, and nothing on either side would say so: the Hub simply polls an
+    address nobody answers on.
+
+    Rows are matched the way the Hub matches its own, by `label_for_config`, so an entry found
+    here is the entry the Hub would have found. `names` are the fleet's names for the Edges
+    this run provisioned; every other row is carried across exactly as it was read.
+    """
+    roster = _roster_on(board)
 
     incoming = [entry for entry in json.loads(fleet.render_nodes_json())
                 if entry.get("name") in names]

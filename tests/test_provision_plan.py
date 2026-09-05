@@ -80,16 +80,21 @@ class FakeWire:
             return 0, "MAC:{}\n".format(MACS[port]), ""
         if "load_or_create_identity" in joined:
             return 0, "DEVID:{}\n".format(DEVICE_IDS[port]), ""
-        if "fs" in argv and "cat" in argv:
-            name = argv[-1].lstrip(":")
-            held = self.files.get(port, {}).get(name)
-            if held is None:
-                return 1, "", "no such file"
-            return 0, held, ""
-        if "fs" in argv and "rm" in argv:
+        if "fs" in argv:
+            return self._filesystem(argv, port)
+        if "run" in argv:
+            return 0, self.verify_output.get(port, ""), ""
+        return 0, "", ""
+
+    def _filesystem(self, argv, port):
+        """The board's filesystem: what a previous run, or the Hub itself, left on it."""
+        if "cat" in argv:
+            held = self.files.get(port, {}).get(argv[-1].lstrip(":"))
+            return (1, "", "no such file") if held is None else (0, held, "")
+        if "rm" in argv:
             self.files.get(port, {}).pop(argv[-1].lstrip(":"), None)
             return 0, "", ""
-        if "fs" in argv and "cp" in argv:
+        if "cp" in argv:
             local, remote = argv[-2], argv[-1].lstrip(":")
             with open(local, "rb") as f:
                 raw = f.read()
@@ -98,9 +103,6 @@ class FakeWire:
             except UnicodeDecodeError:
                 content = raw
             self.files.setdefault(port, {})[remote] = content
-            return 0, "", ""
-        if "run" in argv:
-            return 0, self.verify_output.get(port, ""), ""
         return 0, "", ""
 
     def on(self, port, name):
@@ -156,15 +158,23 @@ def _plan(fleet_dir):
         return json.load(f)
 
 
-# A first run on an empty fleet, in order: posture, which board is the Edge, firmware, radio,
-# sf, freq, bandwidth, proceed. Every answer taken as offered.
-_FIRST_RUN = ("", "", "", "", "", "", "", "")
+# A first run on an empty fleet, in order: posture, which board is the Edge, what that board
+# is, what the Hub is, firmware, sf, freq, bandwidth, proceed. Every answer taken as offered.
+_FIRST_RUN = ("", "", "", "", "", "", "", "", "")
 
 # A second run over that fleet, adding the third board. The same questions with the
 # scratch-or-extend one in front: extend, posture, how many Edges are added, which board (the
-# third, which is the one not already in the fleet), which board is the Hub, new-or-replacement,
-# firmware, radio, sf, freq, bandwidth, proceed.
+# third, which is the one not already in the fleet), new-or-replacement, what that board is,
+# which board is the Hub, firmware, sf, freq, bandwidth, proceed. The Hub is not asked what it
+# is: an extend run writes one row in its roster and never its config.
 _EXTEND_RUN = ("", "", "", "3", "", "", "", "", "", "", "", "")
+
+
+def _node(**fields):
+    """One node entry as a plan holds it, with the bench pair's hardware unless told otherwise."""
+    entry = {"mac": None, "name": None, "board": "t3s3", "radio": "sx127x", "firmware": None}
+    entry.update(fields)
+    return entry
 
 
 # --- the document ---------------------------------------------------------------------------
@@ -199,42 +209,101 @@ def test_the_plan_is_written_before_a_board_is_touched(tmp_path, monkeypatch):
     assert seen["plan_on_disk"] is True
 
 
+def _plan_for(edges, hub, **fields):
+    document = dict(mode="scratch", fleet="f", posture="secure",
+                    rf={"sf": 7, "freq": 868, "bandwidth": 125})
+    document.update(fields)
+    return plan_module.build(edges=edges, hub=hub, **document)
+
+
 def test_a_plan_from_a_future_toolkit_is_refused_rather_than_guessed_at():
     with pytest.raises(ValueError) as raised:
         plan_module.validate({"version": 99, "mode": "scratch", "fleet": "f",
-                              "posture": "secure", "radio": "sx127x", "rf": {},
-                              "edges": [{"mac": "aa"}], "hub": {"mac": "bb"}})
+                              "posture": "secure", "rf": {},
+                              "edges": [_node(mac="aa")], "hub": _node(mac="bb")})
     assert "version 99" in str(raised.value)
 
 
 def test_one_board_cannot_be_both_ends_of_its_own_deployment():
     with pytest.raises(ValueError) as raised:
-        plan_module.validate(plan_module.build(
-            mode="scratch", fleet="f", posture="secure", radio="sx127x",
-            rf={"sf": 7, "freq": 868, "bandwidth": 125},
-            edges=[{"mac": "9eeff0dc", "name": "S"}], hub={"mac": "9eeff0dc"}))
+        plan_module.validate(_plan_for([_node(mac="9eeff0dc", name="S")],
+                                       _node(mac="9eeff0dc")))
     assert "named twice" in str(raised.value)
 
 
 def test_two_edges_under_one_name_are_refused_because_a_name_is_a_slot():
     with pytest.raises(ValueError) as raised:
-        plan_module.validate(plan_module.build(
-            mode="scratch", fleet="f", posture="secure", radio="sx127x",
-            rf={"sf": 7, "freq": 868, "bandwidth": 125},
-            edges=[{"mac": "aa", "name": "S2"}, {"mac": "bb", "name": "S2"}],
-            hub={"mac": "cc"}))
+        plan_module.validate(_plan_for(
+            [_node(mac="aa", name="S2"), _node(mac="bb", name="S2")], _node(mac="cc")))
     assert "one name is one node" in str(raised.value)
 
 
 def test_a_plan_naming_a_board_nobody_plugged_in_fails_before_anything_runs():
-    doc = plan_module.build(
-        mode="scratch", fleet="f", posture="secure", radio="sx127x",
-        rf={"sf": 7, "freq": 868, "bandwidth": 125},
-        edges=[{"mac": "9eeff0dc", "name": None}], hub={"mac": "9eeff0e0"})
+    doc = _plan_for([_node(mac="9eeff0dc")], _node(mac="9eeff0e0"))
     with pytest.raises(ValueError) as raised:
         plan_module.ports_for(doc, [{"port": EDGE_PORT, "mac": "9eeff0dc"}])
     message = str(raised.value)
     assert "9eeff0e0" in message and "1 board is" in message
+
+
+# --- what a node is made of -------------------------------------------------------------------
+
+def test_each_node_carries_its_own_board_and_radio_so_a_mixed_pair_is_expressible():
+    """The bench pair, as a document. One radio for the run could not say this."""
+    doc = _plan_for([_node(mac="4a274ae0", board="t3s3-epaper", radio="sx1262")],
+                    _node(mac="9eeff0e0", board="t3s3", radio="sx127x"))
+    plan_module.validate(doc)
+    assert doc["edges"][0]["radio"] == "sx1262"
+    assert doc["hub"]["radio"] == "sx127x"
+    assert "radio" not in doc, "a run-level radio is the thing that could not describe this"
+
+
+def test_the_rf_settings_stay_run_level_because_both_ends_have_to_agree():
+    doc = _plan_for([_node(mac="aa", radio="sx1262")], _node(mac="bb"))
+    assert doc["rf"] == {"sf": 7, "freq": 868, "bandwidth": 125}
+    for entry in [doc["hub"]] + doc["edges"]:
+        assert not set(entry) & {"sf", "freq", "bandwidth"}, \
+            "a per-node tuning is a way to build a fleet that cannot talk"
+
+
+def test_a_node_that_names_no_radio_describes_half_a_node():
+    with pytest.raises(ValueError) as raised:
+        plan_module.validate(_plan_for([_node(mac="aa", radio=None)], _node(mac="bb")))
+    assert "names no radio" in str(raised.value)
+
+
+def test_a_board_that_cannot_carry_the_radio_is_refused_permanently():
+    """Not a deployment waiting on a pin map: a transceiver is part of a board's design."""
+    with pytest.raises(ValueError) as raised:
+        plan_module.validate(_plan_for([_node(mac="aa", radio="lopy4")], _node(mac="bb")))
+    assert "does not carry" in str(raised.value)
+
+
+def test_a_pair_nobody_has_recorded_the_pins_for_is_refused_until_somebody_does():
+    """The other refusal, and it says something different: this one is real and unmeasured."""
+    with pytest.raises(ValueError) as raised:
+        plan_module.validate(_plan_for([_node(mac="aa", radio="e5")], _node(mac="bb")))
+    message = str(raised.value)
+    assert "is a real combination" in message
+    assert "add them to the board table" in message
+
+
+# --- a plan written before the hardware is on the desk ------------------------------------------
+
+def test_a_plan_may_describe_a_deployment_no_board_has_been_assigned_to():
+    """Board, radio, role and posture are design-time facts. Which unit fills the slot is not."""
+    doc = _plan_for([_node(name="S", board="t3s3", radio="sx1262")], _node())
+    plan_module.validate(doc)
+    assert plan_module.unbound(doc) == ["the hub", "S"]
+
+
+def test_an_unbound_plan_is_refused_at_the_moment_something_would_be_flashed():
+    doc = _plan_for([_node(name="S")], _node(mac="9eeff0e0"))
+    with pytest.raises(ValueError) as raised:
+        plan_module.require_bound(doc)
+    message = str(raised.value)
+    assert "no board is assigned to yet (S)" in message
+    assert "provision setup" in message
 
 
 # --- the second front door ------------------------------------------------------------------

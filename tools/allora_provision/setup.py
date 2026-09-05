@@ -37,15 +37,15 @@ from tools.allora_provision import doctor as doctor_module
 from tools.allora_provision import plan as plan_module
 from tools.allora_provision.board import Board, BoardError, discover_boards
 from tools.allora_provision.fleet import Fleet
-from tools.allora_provision.node_config import DEFAULT_RF, POSTURES
+from tools.allora_provision.node_config import (BOARD_ALIASES, BOARD_TABLE, DEFAULT_BOARD,
+                                                DEFAULT_RF, POSTURES, check_pair, radios_for)
 from tools.allora_provision.result import OK, SKIPPED
-from tools.allora_provision.steps import (PAYLOAD_LEN, RADIOS, provision_edge, provision_hub,
+from tools.allora_provision.steps import (PAYLOAD_LEN, provision_edge, provision_hub,
                                            update_hub_roster, verify_pair)
 
-# Where a build lands. Searched rather than named so the operator picks a firmware off a list
-# instead of remembering a path that changes with every CI run.
+# Where a build lands. Searched rather than named so the operator never types a path that
+# changes with every CI run.
 FIRMWARE_DIR = "firmware"
-_MAX_IMAGES = 6
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -59,10 +59,18 @@ _POSTURE_HELP = {
 }
 
 _RADIO_HELP = {
-    "sx127x": "T3S3 / most SX1276 boards",
-    "sx1262": "Heltec V3, T3S3 SX1262",
-    "e5": "Wio-E5",
+    "sx127x": "SX1276 transceiver",
+    "sx1262": "SX1262 transceiver",
+    "e5": "Wio-E5 modem",
     "lopy4": "Pycom LoPy4",
+}
+
+# What the operator calls the thing in their hand. The table's own name is a wiring row and the
+# two variants here share one, so a board is offered under the name printed on it: the person
+# at the bench is answering "which of these am I holding", not "which pin map applies".
+_BOARD_HELP = {
+    "t3s3": "LilyGo T3-S3",
+    "t3s3-epaper": "LilyGo T3-S3 E-Paper",
 }
 
 # The radio settings worth asking about. The rest of the connector block has defaults that have
@@ -170,11 +178,13 @@ class Prompt:
             raise BoardError("stopped at the keyboard. Nothing was changed on any board.")
 
 
-def firmware_images(root=None, limit=_MAX_IMAGES):
+def firmware_images(root=None, limit=None):
     """The firmware builds on this machine, newest first.
 
-    Newest first because the answer is nearly always the build that was just downloaded, and a
-    list ordered by path would bury it under the ones that came before.
+    Newest first because the answer for any one target is nearly always the build that was just
+    downloaded. Unlimited by default: the list is matched against a target rather than shown as
+    a menu, and a cap would hide the only image for one radio behind six newer ones for the
+    other, which on a mixed pair is the whole problem.
     """
     base = os.path.join(root or _REPO_ROOT, FIRMWARE_DIR)
     found = []
@@ -184,7 +194,65 @@ def firmware_images(root=None, limit=_MAX_IMAGES):
                 path = os.path.join(directory, name)
                 found.append((os.path.getmtime(path), path))
     found.sort(reverse=True)
-    return [path for _, path in found[:limit]]
+    return [path for _, path in found[:limit]] if limit else [path for _, path in found]
+
+
+def target_of(board, radio):
+    """The firmware target one board and one radio need, in the name CI builds it under.
+
+    A target is exactly a board and a radio, so it is derived here rather than stored: an alias
+    resolves to its wiring row first, because the image is built for the wiring and the E-Paper
+    variant runs the plain board's build.
+    """
+    return "{}-{}".format(BOARD_ALIASES.get(board, board), radio)
+
+
+def image_for(target, images):
+    """The newest build for this target, or None if this machine holds none.
+
+    Matched on the filename because that is where the target already lives: CI names the
+    artifact `AlLoRa-<target>-firmware.bin`. None is a real answer and not a failure. It means
+    this node keeps what it is running, which is the only safe thing to do with a board whose
+    image is not on this machine: the alternative is flashing it with another radio's build,
+    which is a board that reports provisioned at every step and never finds its chip.
+    """
+    for path in images:
+        if target in os.path.basename(path):
+            return path
+    return None
+
+
+def hardware_options():
+    """Every board and radio pair this toolkit can provision, in the order it offers them.
+
+    Built from the board table rather than listed, so a pair nobody has recorded the pins for
+    is not offered by the wizard and not silently accepted either: it is refused by the same
+    check that refuses it in a plan somebody else wrote.
+    """
+    options = []
+    for board in list(BOARD_TABLE) + list(BOARD_ALIASES):
+        for radio in radios_for(board):
+            try:
+                check_pair(board, radio)
+            except ValueError:
+                continue
+            options.append((board, radio))
+    return options
+
+
+def ask_hardware(prompt, board, default=None):
+    """What one board is: the model in the operator's hand and the chip on it.
+
+    Asked per board, and asked at all, because a board does not imply its radio. The bench pair
+    is two T3-S3s carrying different chips, so one question for the run would describe one of
+    them wrongly and the wizard would write a config for a radio that is not there.
+    """
+    options = hardware_options()
+    labels = [(pair, "{:<12} {:<7} {}".format(
+        pair[0], pair[1], _BOARD_HELP.get(pair[0], _RADIO_HELP[pair[1]])))
+        for pair in options]
+    index = options.index(default) if default in options else 0
+    return prompt.choose("What is {}?".format(_label(board)), labels, default=index)
 
 
 def look_for_boards(runner=None):
@@ -215,12 +283,15 @@ def deployment_defaults(entries):
     every default the way to break the deployment, which is the wrong shape for a wizard whose
     every question can be answered with Enter.
     """
-    defaults = {"posture": "secure", "radio": "sx127x", "rf": {}, "session_ids": []}
+    defaults = {"posture": "secure", "radio": "sx127x", "board": DEFAULT_BOARD, "rf": {},
+                "session_ids": []}
     for entry in entries:
         if entry.get("posture"):
             defaults["posture"] = entry["posture"]
         if entry.get("radio"):
             defaults["radio"] = entry["radio"]
+        if entry.get("board"):
+            defaults["board"] = entry["board"]
         if entry.get("session_id") is not None:
             defaults["session_ids"].append(entry["session_id"])
         if entry.get("role") != "edge":
@@ -280,6 +351,19 @@ def ask_edge_names(prompt, chosen, entries):
     return names
 
 
+def _registered_hardware(entries, role):
+    """What the fleet says this role is made of, for a run that is not re-provisioning it.
+
+    A fleet written before a node's board was recorded says only its radio, so the board falls
+    back to the one this toolkit flashes. That is the same assumption the run made when it
+    wrote the entry, rather than a new guess.
+    """
+    for entry in reversed(entries):
+        if entry.get("role") == role and entry.get("radio"):
+            return (entry.get("board") or DEFAULT_BOARD, entry["radio"])
+    return (DEFAULT_BOARD, "sx127x")
+
+
 def ask_mode(prompt, entries):
     """Scratch or extend, asked only when there is something to extend.
 
@@ -302,44 +386,41 @@ def ask_mode(prompt, entries):
         default=0)
 
 
-def ask_plan(prompt, boards, images, fleet_path, mode="scratch", entries=()):
-    """Everything the run needs, settled before anything is touched.
-
-    Posture is asked first because it constrains the rest: it decides whether a session id is
-    needed, whether a control root is minted, and -- since open addressing is one number handed
-    to one pair -- how many Edges this command is willing to provision in a run.
-    """
-    entries = list(entries)
-    known = deployment_defaults(entries)
-    extending = mode == "extend"
-
+def ask_posture(prompt, known, entries, extending):
+    """Which posture this run provisions, and what it means for the nodes it does not touch."""
     posture = prompt.choose(
         "Security posture?",
         [(name, "{:<8} {}".format(name, _POSTURE_HELP[name])) for name in POSTURES],
         default=list(POSTURES).index(known["posture"] if extending else "secure"))
-    if extending and posture != known["posture"]:
-        # Warned and guided, never refused. A posture is what a node was provisioned with, so
-        # changing it means reflashing every node in the deployment; a tool that refused would
-        # send the operator to do exactly that by hand, one board at a time, which is the
-        # outcome the refusal was trying to prevent.
-        prompt.say("")
-        prompt.bullet("this deployment is {}, and you have asked for {}.".format(
-            known["posture"], posture))
-        prompt.bullet("a posture is what a node was provisioned with, not a setting it can be "
-                      "told. Every node already in this fleet keeps the old one until it is "
-                      "provisioned again, and a {} node and a {} node cannot talk to each "
-                      "other.".format(known["posture"], posture))
-        prompt.bullet("this run provisions the nodes you pick below. The rest stay {} and stop "
-                      "being part of the working deployment until you come back for "
-                      "them:".format(known["posture"]))
-        for entry in entries:
-            prompt.bullet("  {:<6} {:<5} {}".format(
-                entry.get("name", "?"), entry.get("role", "?"), entry.get("posture", "?")))
-        if not prompt.yes("Go on?", default=False):
-            raise BoardError(
-                "nothing was changed. Run `provision setup` again and keep the {} posture to "
-                "add to this deployment as it is.".format(known["posture"]))
+    if not extending or posture == known["posture"]:
+        return posture
 
+    # Warned and guided, never refused. A posture is what a node was provisioned with, so
+    # changing it means reflashing every node in the deployment; a tool that refused would send
+    # the operator to do exactly that by hand, one board at a time, which is the outcome the
+    # refusal was trying to prevent.
+    prompt.say("")
+    prompt.bullet("this deployment is {}, and you have asked for {}.".format(
+        known["posture"], posture))
+    prompt.bullet("a posture is what a node was provisioned with, not a setting it can be "
+                  "told. Every node already in this fleet keeps the old one until it is "
+                  "provisioned again, and a {} node and a {} node cannot talk to each "
+                  "other.".format(known["posture"], posture))
+    prompt.bullet("this run provisions the nodes you pick below. The rest stay {} and stop "
+                  "being part of the working deployment until you come back for "
+                  "them:".format(known["posture"]))
+    for entry in entries:
+        prompt.bullet("  {:<6} {:<5} {}".format(
+            entry.get("name", "?"), entry.get("role", "?"), entry.get("posture", "?")))
+    if not prompt.yes("Go on?", default=False):
+        raise BoardError(
+            "nothing was changed. Run `provision setup` again and keep the {} posture to add "
+            "to this deployment as it is.".format(known["posture"]))
+    return posture
+
+
+def ask_edges(prompt, boards, posture, extending):
+    """How many Edges this run provisions and which boards they are, and what is left over."""
     most = len(boards) - 1
     if posture == "open":
         # An open pair is addressed by a number both ends carry, assigned by hand. Handing out
@@ -355,80 +436,172 @@ def ask_plan(prompt, boards, images, fleet_path, mode="scratch", entries=()):
             "are you adding" if extending else "in this deployment"),
         default=1, low=1, high=most)
 
-    remaining = list(boards)
-    chosen = []
+    remaining, chosen = list(boards), []
     for index in range(edges):
         question = "Which board is the {}Edge?".format("new " if extending else "") \
             if edges == 1 else "Which board is Edge {} of {}?".format(index + 1, edges)
         board = prompt.choose(question, [(b, _label(b)) for b in remaining], default=0)
         remaining.remove(board)
         chosen.append(board)
+    return chosen, remaining
 
-    # Asked here, beside the board it is about, rather than at the end with the radio settings:
-    # what an operator is answering is "which of these boards in front of me is this one", and
-    # that is the same act as picking it off the list above.
-    if extending:
-        names = ask_edge_names(prompt, chosen, entries)
-    else:
-        names = [None] if edges == 1 else ["S{}".format(i + 1) for i in range(edges)]
 
-    # The Hub this fleet already registered, if it is one of the boards on the desk. Offered
-    # first rather than merely allowed, because in an extend run picking the wrong one writes a
-    # roster onto a board that is not the deployment's Hub.
-    registered_hub = next((e.get("mac") for e in reversed(entries)
-                           if e.get("role") == "hub" and e.get("mac")), None)
+def ask_hub(prompt, remaining, entries, extending):
+    """Which of the boards left over is the Hub.
+
+    The Hub this fleet already registered is offered first rather than merely allowed, because
+    in an extend run picking the wrong one writes a roster onto a board that is not the
+    deployment's Hub.
+    """
+    registered = next((e.get("mac") for e in reversed(entries)
+                       if e.get("role") == "hub" and e.get("mac")), None)
     if len(remaining) == 1:
         hub = remaining[0]
         prompt.bullet("the Hub is {}, the board left over.".format(_label(hub)))
     else:
-        known_first = sorted(remaining, key=lambda b: b["mac"] != registered_hub)
+        known_first = sorted(remaining, key=lambda b: b["mac"] != registered)
         hub = prompt.choose(
             "Which board is the Hub?",
             [(b, "{}{}".format(_label(b), "   (the Hub this fleet registered)"
-                               if b["mac"] == registered_hub else ""))
+                               if b["mac"] == registered else ""))
              for b in known_first], default=0)
-    if extending and registered_hub and hub["mac"] != registered_hub:
+    if extending and registered and hub["mac"] != registered:
         prompt.bullet("{} is not the Hub this fleet registered ({}). Its roster is the one "
-                      "that will be extended.".format(hub["mac"], registered_hub))
+                      "that will be extended.".format(hub["mac"], registered))
+    return hub
 
-    session_id = None
-    if posture == "open":
-        taken = set(known["session_ids"])
-        free = next(n for n in range(1, 256) if n not in taken)
-        session_id = prompt.number(
-            "Which session id should the pair share?", default=free, low=0, high=255)
 
-    keep = (None, "keep what the boards are running  (no flash, nothing erased)")
-    firmware = prompt.choose(
+def ask_names(prompt, chosen, entries, extending):
+    """What each Edge in this run is called, which on an extend run is which slot it takes."""
+    if extending:
+        return ask_edge_names(prompt, chosen, entries)
+    return [None] if len(chosen) == 1 else ["S{}".format(i + 1) for i in range(len(chosen))]
+
+
+def ask_each_board(prompt, chosen, first):
+    """What each of these boards is, asked one board at a time.
+
+    Beside the board it is about, for the same reason the name is: what the operator answers is
+    "which of these things in front of me is this one". Each answer becomes the next question's
+    default, since a mixed pair is the case this exists for and a matched pair is still the
+    common one.
+    """
+    hardware, default = [], first
+    for board in chosen:
+        default = ask_hardware(prompt, board, default=default)
+        hardware.append(default)
+    return hardware
+
+
+def ask_session_id(prompt, known):
+    """The number an open pair shares, defaulting to one this fleet has not handed out."""
+    taken = set(known["session_ids"])
+    free = next(n for n in range(1, 256) if n not in taken)
+    return prompt.number("Which session id should the pair share?", default=free,
+                         low=0, high=255)
+
+
+def ask_firmware(prompt, images, hardware, extending):
+    """Whether to flash, and then which image each board gets. Returns that lookup.
+
+    One question, and then an image per board rather than a path per run. A board is flashed
+    with the build for its own target or with nothing: offering one image for the whole run is
+    how a mixed pair gets the wrong radio's firmware with every step reporting success.
+    """
+    flashing = prompt.choose(
         "Flash firmware, or keep what the boards run?",
-        [(path, os.path.relpath(path, _REPO_ROOT)) for path in images] + [keep],
-        default=len(images))
-    if firmware:
-        prompt.bullet("a flash erases the board: its identity is backed up into the fleet "
-                      "first, and each board takes a couple of minutes.")
-        if extending:
-            prompt.bullet("only the Edges above are flashed. The Hub is not: extending it "
-                          "changes one row in its roster and nothing else.")
+        [(True, "flash the newest build on this machine for each board"),
+         (False, "keep what the boards are running  (no flash, nothing erased)")],
+        default=0 if images else 1)
 
-    radio = prompt.choose("Which radio do these boards have?",
-                          [(name, "{:<7} {}".format(name, _RADIO_HELP[name]))
-                           for name in sorted(RADIOS)],
-                          default=sorted(RADIOS).index(known["radio"] if extending
-                                                       else "sx127x"))
+    def firmware_for(pair):
+        return image_for(target_of(*pair), images) if flashing else None
 
-    rf = {}
-    for field, spelled in _ASKED_RF:
-        rf[field] = prompt.number(
-            "Radio {}?".format(spelled),
-            default=known["rf"].get(field, DEFAULT_RF[field]) if extending
-            else DEFAULT_RF[field])
+    if not flashing:
+        return firmware_for
+    prompt.bullet("a flash erases the board: its identity is backed up into the fleet first, "
+                  "and each board takes a couple of minutes.")
+    if extending:
+        prompt.bullet("only the Edges above are flashed. The Hub is not: extending it changes "
+                      "one row in its roster and nothing else.")
+    # Said at the moment it becomes true, rather than left to be noticed in the summary. A
+    # target with no build on this machine is the ordinary state for the second radio of a
+    # mixed pair, and that board is about to be provisioned without being flashed.
+    for pair in hardware:
+        if firmware_for(pair) is None:
+            prompt.bullet("no {} build on this machine, so that board keeps what it runs. Its "
+                          "config is still written.".format(target_of(*pair)))
+    return firmware_for
+
+
+def ask_rf(prompt, known, extending):
+    """The radio settings both ends of this deployment will share."""
+    return {field: prompt.number(
+        "Radio {}?".format(spelled),
+        default=known["rf"].get(field, DEFAULT_RF[field]) if extending else DEFAULT_RF[field])
+        for field, spelled in _ASKED_RF}
+
+
+def ask_plan(prompt, boards, images, fleet_path, mode="scratch", entries=()):
+    """Everything the run needs, settled before anything is touched.
+
+    Posture is asked first because it constrains the rest: it decides whether a session id is
+    needed, whether a control root is minted, and -- since open addressing is one number handed
+    to one pair -- how many Edges this command is willing to provision in a run.
+    """
+    entries = list(entries)
+    known = deployment_defaults(entries)
+    extending = mode == "extend"
+
+    posture = ask_posture(prompt, known, entries, extending)
+    chosen, remaining = ask_edges(prompt, boards, posture, extending)
+    names = ask_names(prompt, chosen, entries, extending)
+    edge_hardware = ask_each_board(
+        prompt, chosen,
+        (known["board"], known["radio"]) if extending else (DEFAULT_BOARD, "sx127x"))
+
+    hub = ask_hub(prompt, remaining, entries, extending)
+    # The Hub is not asked what it is when extending: that run changes one row in its roster and
+    # never writes its config, so its hardware is a fact the registry already holds and a
+    # question here would invite an answer that changes nothing.
+    hub_hardware = _registered_hardware(entries, "hub") if extending else \
+        ask_hardware(prompt, hub, default=edge_hardware[-1])
+
+    session_id = ask_session_id(prompt, known) if posture == "open" else None
+    firmware_for = ask_firmware(prompt, images, edge_hardware + [hub_hardware], extending)
+    rf = ask_rf(prompt, known, extending)
 
     return plan_module.build(
-        mode=mode, fleet=fleet_path, posture=posture, radio=radio, rf=rf,
-        firmware=firmware, session_id=session_id,
-        edges=[{"mac": board["mac"], "name": name}
-               for board, name in zip(chosen, names)],
-        hub={"mac": hub["mac"], "name": None})
+        mode=mode, fleet=fleet_path, posture=posture, rf=rf, session_id=session_id,
+        edges=[{"mac": board["mac"], "name": name, "board": hardware[0],
+                "radio": hardware[1], "firmware": firmware_for(hardware)}
+               for board, name, hardware in zip(chosen, names, edge_hardware)],
+        hub={"mac": hub["mac"], "name": None, "board": hub_hardware[0],
+             "radio": hub_hardware[1],
+             "firmware": None if extending else firmware_for(hub_hardware)})
+
+
+def _hardware_line(entry):
+    """One node's hardware and what will be written to it, in one line under its board.
+
+    The flash half is spelled out per node rather than once per run because it is the half that
+    can be wrong invisibly. A board with no build for its target keeps what it runs, and that
+    has to be readable in the plan the operator approves rather than discovered afterwards.
+    """
+    return "{} {}   {}".format(
+        entry["board"], entry["radio"],
+        "flash " + _readable(entry["firmware"]) if entry["firmware"]
+        else "keeps what it runs")
+
+
+def _readable(path):
+    """A firmware path as it is worth reading: relative to the repo, or whole.
+
+    An image kept outside the repository is an ordinary thing to have, and `relpath` renders one
+    as a chain of `..` that is longer than the path it replaced and says less.
+    """
+    relative = os.path.relpath(path, _REPO_ROOT)
+    return path if relative.startswith(os.pardir) else relative
 
 
 def describe_plan(prompt, plan, boards):
@@ -441,18 +614,17 @@ def describe_plan(prompt, plan, boards):
         prompt.bullet("Edge {}  {}{}".format(
             index, _label(_find(boards, edge["mac"])),
             "   as {}".format(edge["name"]) if edge["name"] else ""))
+        prompt.bullet("        {}".format(_hardware_line(edge)))
     prompt.bullet("Hub     {}{}".format(
         _label(_find(boards, plan["hub"]["mac"])),
         "   roster only, not reflashed" if extending else ""))
+    if not extending:
+        prompt.bullet("        {}".format(_hardware_line(plan["hub"])))
     prompt.bullet("posture {}{}".format(
         plan["posture"],
         ", session id {}".format(plan["session_id"]) if plan["session_id"] is not None else ""))
-    prompt.bullet("radio   {} at sf{}, {} MHz, bw {}".format(
-        plan["radio"], plan["rf"]["sf"], plan["rf"]["freq"], plan["rf"]["bandwidth"]))
-    prompt.bullet("flash   {}{}".format(
-        os.path.relpath(plan["firmware"], _REPO_ROOT) if plan["firmware"]
-        else "no; the boards keep what they run",
-        ", Edges only" if plan["firmware"] and extending else ""))
+    prompt.bullet("radio   sf{}, {} MHz, bw {}, on both ends".format(
+        plan["rf"]["sf"], plan["rf"]["freq"], plan["rf"]["bandwidth"]))
     prompt.bullet("fleet   {}".format(plan["fleet"]))
     named = set(plan_module.macs(plan))
     for board in boards:
@@ -507,8 +679,12 @@ def run_plan(plan, boards, result, prompt=None, runner=None, sleep=None):
             result.step("phase", "{}/{} {}".format(index, total, title))
 
     on_stall = _stall_prompt(prompt) if prompt else None
-    common = dict(posture=plan["posture"], firmware=plan["firmware"], rf=plan["rf"],
-                  radio=plan["radio"], on_stall=on_stall)
+    common = dict(posture=plan["posture"], rf=plan["rf"], on_stall=on_stall)
+
+    def hardware(entry):
+        """What this one node is made of, as the phases take it."""
+        return dict(radio=entry["radio"], board_model=entry["board"],
+                    firmware=entry["firmware"])
 
     provisioned = []
     for index, edge in enumerate(plan["edges"], start=1):
@@ -516,7 +692,7 @@ def run_plan(plan, boards, result, prompt=None, runner=None, sleep=None):
         stage(index, "Edge {} on {}".format(index, port))
         board = Board(port, runner=runner, sleep=sleep)
         provision_edge(board, fleet, result, name=edge["name"],
-                       session_id=plan["session_id"], **common)
+                       session_id=plan["session_id"], **dict(common, **hardware(edge)))
         provisioned.append(board)
 
     hub_port = ports[plan["hub"]["mac"]]
@@ -534,11 +710,15 @@ def run_plan(plan, boards, result, prompt=None, runner=None, sleep=None):
     else:
         stage(len(plan["edges"]) + 1, "Hub on {}".format(hub_port))
         provision_hub(hub_board, fleet, result, name=plan["hub"]["name"],
-                      session_id=plan["session_id"], **common)
+                      session_id=plan["session_id"],
+                      **dict(common, **hardware(plan["hub"])))
 
     stage(total, "Proof: one real transfer")
+    # Each end's own radio, and `verify_pair` reads the registry for the settled answer: a
+    # mixed pair needs two different board-side scripts, and one radio for the run would build
+    # the Edge's script for the Hub's chip.
     verify_pair(provisioned[0], hub_board, fleet, result,
-                posture=plan["posture"], radio=plan["radio"])
+                posture=plan["posture"], radio=plan["edges"][0]["radio"])
     return fleet
 
 

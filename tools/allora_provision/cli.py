@@ -369,9 +369,14 @@ def cmd_apply(args, result, runner=None, sleep=None, **_):
     # the plan knows: it is checked for when a plan names a firmware and not otherwise, and a
     # phase that dies halfway through for a missing tool leaves a half-configured board.
     doc = plan_module.read(args.plan)
+    plan_module.require_bound(doc)
     if args.fleet is not None:
         doc["fleet"] = args.fleet
-    args.firmware = doc.get("firmware")
+    # Any node naming an image is enough to need the flashing tool, since the run stops at the
+    # first phase that cannot find it and a mixed pair routinely flashes one board and not the
+    # other.
+    args.firmware = next((e["firmware"] for e in [doc["hub"]] + doc["edges"] if e["firmware"]),
+                         None)
     preflight(args, result, runner=runner)
     return setup_module.apply(doc, result, runner=runner, sleep=sleep)
 

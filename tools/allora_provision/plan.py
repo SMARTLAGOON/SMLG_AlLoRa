@@ -15,11 +15,26 @@ an Edge, replacing a broken node, or swapping a Hub into a deployment that is al
 field. Not asking the question is what let a run flash into a non-empty fleet, orphan a record
 and append a phantom the Hub then spent a listening window polling every cycle.
 
+**Each node names its own board, radio and firmware; the RF settings stay run-level.** Which
+chip a node has and where it is attached is a fact about that node: the bench pair is an SX127x
+Hub and an SX1262 Edge, and a run-level radio cannot describe it. How the radio is tuned is a
+fact about the deployment, because both ends have to agree on `sf`, `freq` and `bandwidth` or
+they do not hear each other, and a per-node setting there is a way to build a fleet that cannot
+talk.
+
+**A node may be described before the board that will be it exists.** Board, radio, role, name,
+posture and RF are design-time facts, which somebody planning a deployment knows. Which
+physical unit fills the slot is a bench-time fact, which they do not. So an entry may carry no
+MAC: `validate` accepts that, and the refusal moves to the only moment it matters, which is
+`apply`, where something is about to be flashed.
+
 This module holds the document and nothing else: no board is touched here, no fleet is read.
 That is what lets a plan be checked, printed and diffed before anything is plugged in.
 """
 import json
 import os
+
+from tools.allora_provision.node_config import DRIVERS, check_pair
 
 VERSION = 1
 
@@ -36,14 +51,25 @@ MODES = ("scratch", "extend")
 # spell nine values would be a config file with a different name.
 RF_KEYS = ("sf", "freq", "bandwidth")
 
-_REQUIRED = ("mode", "fleet", "posture", "radio", "rf", "edges", "hub")
+_REQUIRED = ("mode", "fleet", "posture", "rf", "edges", "hub")
+
+# What one node entry holds. `mac` is the board that will be it, and is the one field a plan may
+# leave empty. `firmware` empty means this node keeps what it is running, which is a legitimate
+# answer and the only safe one for a target this machine holds no image for.
+_ENTRY_KEYS = ("mac", "name", "board", "radio", "firmware")
 
 
-def build(mode, fleet, posture, radio, rf, edges, hub, firmware=None, session_id=None):
+def _entry(node):
+    """One node entry, carrying its own hardware and nothing the run-level fields already say."""
+    return {key: node.get(key) for key in _ENTRY_KEYS}
+
+
+def build(mode, fleet, posture, rf, edges, hub, session_id=None):
     """A plan document, in the order it reads best rather than the order it was built.
 
-    `edges` and `hub` are `{"mac": ..., "name": ...}`. A name of None means the phase picks the
-    default for the role, which is only ever right when the fleet holds no node under it.
+    `edges` and `hub` are node entries: a MAC, a name, a board, a radio and a firmware image.
+    A name of None means the phase picks the default for the role, which is only ever right
+    when the fleet holds no node under it. A MAC of None is a slot nobody has bound yet.
     """
     return {
         "version": VERSION,
@@ -51,11 +77,9 @@ def build(mode, fleet, posture, radio, rf, edges, hub, firmware=None, session_id
         "fleet": fleet,
         "posture": posture,
         "session_id": session_id,
-        "radio": radio,
         "rf": {key: rf[key] for key in RF_KEYS if key in rf},
-        "firmware": firmware,
-        "edges": [{"mac": e["mac"], "name": e.get("name")} for e in edges],
-        "hub": {"mac": hub["mac"], "name": hub.get("name")},
+        "edges": [_entry(e) for e in edges],
+        "hub": _entry(hub),
     }
 
 
@@ -92,14 +116,13 @@ def validate(doc):
 
     for index, entry in enumerate([doc["hub"]] + list(edges)):
         where = "the hub" if index == 0 else "edge {}".format(index)
-        if not isinstance(entry, dict) or not entry.get("mac"):
-            raise ValueError(
-                "{} names no MAC. A plan addresses boards by MAC and not by port, because the "
-                "port changes on every hard reset; `provision ports` prints the MAC of every "
-                "board answering.".format(where))
+        if not isinstance(entry, dict):
+            raise ValueError("{} is not a node entry; this plan holds {}".format(
+                where, type(entry).__name__))
+        _validate_hardware(entry, where)
 
-    macs = [doc["hub"]["mac"]] + [e["mac"] for e in edges]
-    repeated = sorted({mac for mac in macs if macs.count(mac) > 1})
+    bound = [entry["mac"] for entry in _entries(doc) if entry.get("mac")]
+    repeated = sorted({mac for mac in bound if bound.count(mac) > 1})
     if repeated:
         raise ValueError(
             "the same board is named twice in this plan ({}). One board is one node: a board "
@@ -114,6 +137,66 @@ def validate(doc):
             "registry keys a node's slot by its role and its name, so the second registration "
             "would update the first one's record instead of adding its own.".format(
                 ", ".join(clashing)))
+    return doc
+
+
+def _entries(doc):
+    """Every node this plan describes, Hub first, in the order the run reaches them."""
+    return [doc["hub"]] + list(doc["edges"])
+
+
+def _validate_hardware(entry, where):
+    """What one node is made of, checked as a document before a board is opened.
+
+    The radio is checked against the board rather than on its own, because the pair is what
+    decides whether a config can be written: a board that cannot carry the radio is one
+    refusal, and a board that can carry it with nobody having recorded the pins is another.
+    """
+    board, radio = entry.get("board"), entry.get("radio")
+    if not board or not radio:
+        raise ValueError(
+            "{} names no {}. A node is a board and a radio, and neither follows from the other: "
+            "two boards of the same model carry different chips, so a plan that named only one "
+            "of them would describe half of this node.{}".format(
+                where, "board" if not board else "radio",
+                # A plan written when the radio was one field for the whole run reads exactly
+                # like this, and it is likelier than a hand-written mistake.
+                " A plan that names one radio for the whole run predates this: write a fresh "
+                "one with `provision setup`." if not board and not radio else ""))
+    if radio not in DRIVERS:
+        raise ValueError("{} names radio '{}', and this toolkit knows {}.".format(
+            where, radio, ", ".join(DRIVERS)))
+    try:
+        check_pair(board, radio)
+    except ValueError as e:
+        raise ValueError("{}: {}".format(where, e))
+
+
+def unbound(doc):
+    """The slots this plan describes and no board has been assigned to yet."""
+    absent = []
+    for index, entry in enumerate(_entries(doc)):
+        if not entry.get("mac"):
+            absent.append("the hub" if index == 0 else
+                          (entry.get("name") or "edge {}".format(index)))
+    return absent
+
+
+def require_bound(doc):
+    """Return `doc` if every slot names a board, or raise saying which ones do not.
+
+    The refusal a design becomes a run at. A plan may be written with no hardware in the room,
+    which is what lets a deployment be designed away from the bench; what may never happen is a
+    flash aimed at a slot nobody has said which board fills.
+    """
+    absent = unbound(doc)
+    if absent:
+        raise ValueError(
+            "this plan describes {} that no board is assigned to yet ({}). A plan can be "
+            "written before the hardware is on the desk, and running one cannot: `provision "
+            "setup` binds a design to the boards answering, and `provision ports` prints the "
+            "MAC of each one.".format(
+                "a slot" if len(absent) == 1 else "slots", ", ".join(absent)))
     return doc
 
 
@@ -149,7 +232,7 @@ def write(path, doc):
 
 def macs(doc):
     """Every board this plan touches, Hub first, in the order the run reaches them."""
-    return [doc["hub"]["mac"]] + [edge["mac"] for edge in doc["edges"]]
+    return [entry["mac"] for entry in _entries(doc) if entry.get("mac")]
 
 
 def ports_for(doc, boards):
@@ -159,7 +242,12 @@ def ports_for(doc, boards):
     REPL. Every MAC has to be found before anything runs, so a plan naming a board nobody
     plugged in fails at the desk rather than halfway through, with one board provisioned and
     the other still holding whatever it held.
+
+    An unbound plan is refused here too, and for the same reason one step earlier: a design
+    nobody has bound names no board to look for, so matching it against the desk would report
+    every slot as present and flash nothing.
     """
+    require_bound(doc)
     answering = {}
     for board in boards:
         if board.get("mac"):

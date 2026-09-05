@@ -11,7 +11,7 @@ python3 tools/provision.py setup
 
 `setup` is the guided path and the only interactive command. It checks the machine, finds the
 boards and shows you their MACs, asks what this deployment is (posture, which board is the
-Edge, firmware, radio), prints the plan, and runs it once you say yes. It ends by driving one
+Edge, what each board is, firmware), prints the plan, and runs it once you say yes. It ends by driving one
 real 1000-byte transfer, because "provisioned" otherwise means only that files were copied.
 
 `setup` writes down what it was told to do before it does any of it, as a **plan file**, and
@@ -151,9 +151,23 @@ recovered it every time it was tried.
 
 ## The board decides where the radio is wired
 
-`--board` (default `t3s3`) names what the radio is soldered to. It is a separate question from
-`--radio`, and it has to be, because **a pin is a board fact rather than a radio fact**: the
-same SX1262 sits on clk 5 on a T3S3 and on clk 9 on a Heltec LoRa32 V3.
+`--board` (default `t3s3`) names the hardware that runs the node. It is a separate question
+from `--radio`, and it has to be, because **a board does not imply its radio and a pin is a
+board fact rather than a radio fact**: the bench pair is two T3-S3s carrying different chips,
+and the same SX1262 sits on clk 5 on a T3S3 and on clk 9 on a Heltec LoRa32 V3.
+
+A board row says what that product has soldered in, what it can host on a header, and where
+each of those meets it. That gives two refusals, and they are deliberately different. A board
+that cannot carry the radio at all is refused permanently, because a bare transceiver is part
+of a board's design and never something plugged into a header. A board that can carry it with
+nobody having recorded the pins, an E5 on a T3-S3 today, is refused for now, and the message
+says the combination is real and asks for the measurement.
+
+Board names are a closed set with aliases, because the point is refusing what cannot be wired
+and a free-form name cannot be checked. `t3s3-epaper` resolves to the `t3s3` row: the two wire
+their radios identically and differ only in the screen. **The registry records the name the
+operator gave, not the row it resolved to**, so when a revision moves a pin it can still say
+which nodes are affected.
 
 The wizard writes the board's pin map into the connector block for the radios whose connector
 reads pins from there, which today is `sx1262` alone. `sx127x` takes its pins from its own
@@ -189,17 +203,38 @@ the operator can keep, diff, re-run and hand to somebody else.
 ```json
 {
   "version": 1,
-  "mode": "extend",
+  "mode": "scratch",
   "fleet": "allora-fleet",
   "posture": "secure",
   "session_id": null,
-  "radio": "sx127x",
   "rf": {"sf": 7, "freq": 868, "bandwidth": 125},
-  "firmware": null,
-  "edges": [{"mac": "9eeff0f4", "name": "S2"}],
-  "hub": {"mac": "9eeff0e0", "name": null}
+  "edges": [{"mac": "4a274ae0", "name": null, "board": "t3s3-epaper",
+             "radio": "sx1262", "firmware": null}],
+  "hub": {"mac": "9eeff0e0", "name": null, "board": "t3s3", "radio": "sx127x",
+          "firmware": "firmware/_dl_33558825130/AlLoRa-t3s3-sx127x-firmware.bin"}
 }
 ```
+
+**Each node names its own board, radio and firmware. The RF settings stay run-level.** The pair
+above is the bench pair: an SX1262 Edge and an SX127x Hub. One radio for the whole run could not
+describe it, and a plan that tried wrote one of the two boards a driver for a chip it does not
+have. Which chip a node has and where it is attached is a fact about that node; how the radio is
+tuned is a fact about the deployment, because `sf`, `freq` and `bandwidth` have to agree across
+the pair or the two ends do not hear each other. A per-node tuning would be a way to build a
+fleet that cannot talk, so `rf` must never move into an entry.
+
+**Firmware is per node for the same reason, and it is the more dangerous half.** Per-node radio
+with one image for the run would let a plan describe the mixed pair and then flash the SX1262
+board with the SX127x build, with every step still reporting success. `setup` picks each node
+the newest local build whose filename names that node's target, `<board>-<radio>`, and a node
+whose target has no build on this machine keeps what it is running and is told so before the
+plan is approved.
+
+**A plan may be written before the hardware is on the desk.** Board, radio, role, name, posture
+and RF are design-time facts, which somebody planning a deployment knows; which physical unit
+fills a slot is a bench-time fact, which they do not. So `mac` may be `null`: the document is
+valid, `provision setup` binds it to the boards answering, and `apply` refuses an unbound plan
+and names the slots that need a board. Nothing is ever flashed against a slot nobody has filled.
 
 **A plan names boards by MAC, never by port.** The port is not an identity: on native USB it
 re-enumerates on every hard reset, so a plan recording ports would aim Monday's intent at

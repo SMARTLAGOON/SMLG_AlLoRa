@@ -17,7 +17,7 @@ import json
 import pytest
 
 from tools.allora_provision.node_config import (
-    DEFAULT_RF, RF_FIELDS, build_lora_json, merge_rf)
+    DEFAULT_RF, RF_FIELDS, attachment, build_lora_json, check_pair, merge_rf)
 
 
 def test_a_secure_edge_names_its_identity_file_and_no_session_id():
@@ -164,6 +164,46 @@ def test_a_board_this_toolkit_has_no_pin_map_for_is_refused():
         build_lora_json(role="edge", posture="secure", driver="sx1262", board="heltec_v3")
     assert "heltec_v3" in str(excinfo.value)
     assert "t3s3" in str(excinfo.value)
+
+
+def test_an_alias_resolves_to_the_row_that_wires_the_radio_the_same_way():
+    """The E-Paper variant differs from the plain board in its screen, which is not a radio fact.
+
+    One wiring row serves both, and a board is still named the way it is printed on the case:
+    the operator answers what they are holding, not which pin map applies to it.
+    """
+    plain = build_lora_json(role="edge", posture="secure", driver="sx1262", board="t3s3")
+    epaper = build_lora_json(role="edge", posture="secure", driver="sx1262",
+                             board="t3s3-epaper")
+    assert epaper["connector"] == plain["connector"]
+
+
+def test_a_board_that_cannot_carry_the_radio_at_all_is_refused_permanently():
+    """A bare transceiver is part of a board's design, so this pair is never a pin map away."""
+    with pytest.raises(ValueError) as excinfo:
+        check_pair("t3s3", "lopy4")
+    message = str(excinfo.value)
+    assert "does not carry" in message
+    assert "sx127x or sx1262" in message
+
+
+def test_a_pair_whose_pins_nobody_recorded_is_refused_until_somebody_records_them():
+    """The other refusal. An E5 on a T3-S3 is a real thing to build and an unmeasured one.
+
+    Said differently from the refusal above on purpose: this one names what is missing and who
+    can supply it, because the thing standing in the way is a measurement rather than physics.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        check_pair("t3s3", "e5")
+    message = str(excinfo.value)
+    assert "real combination" in message
+    assert "add them to the board table" in message
+
+
+def test_a_radio_that_reads_no_pins_needs_no_attachment_row():
+    """Otherwise the check that closes the pin hole would refuse the pair that works today."""
+    assert attachment("t3s3", "sx127x") == {}
+    assert attachment("t3s3", "sx1262")["clk"] == 5
 
 
 def test_the_config_names_no_device_section():
