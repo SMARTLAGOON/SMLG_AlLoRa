@@ -127,11 +127,20 @@ class Serial_DataSource(Disk_DataSource):
         the old code used, a single read of a chunk that is still in flight parks the node for
         two seconds, and the collector on the other side of the radio times out waiting for a
         packet this node was in no position to answer.
+
+        Not waiting is only half of it: what is not read has to keep. The driver's buffer
+        defaults to 256 bytes, which is smaller than one chunk, so a producer that sends 512
+        bytes between two rounds overruns it and the middle of the chunk is simply gone. It
+        was measured on the bench at 9600 baud with rounds 1500 ms apart: 342 bytes of a
+        600-byte burst arrived on the default, the same burst arrived whole at 1024. The size
+        asked for here is the one the read budget already uses, so the port holds exactly what
+        one round is willing to take, and a chunk with its checksum line in front of it always
+        fits inside that.
         """
         import machine
         uart = machine.UART(self.uart_id, baudrate=self.baudrate)
         uart.init(baudrate=self.baudrate, tx=self.tx, rx=self.rx,
-                  bits=8, parity=None, stop=1, timeout=0)
+                  bits=8, parity=None, stop=1, timeout=0, rxbuf=self._read_budget)
         return uart
 
     def close(self):

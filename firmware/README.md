@@ -255,3 +255,22 @@ session is up rather than growing with every frame, and that resetting the bridg
 costs one retry rather than the session. Nothing may be attached to the bridge board's console
 while any of that runs: an `mpremote` or a `screen` on that port eats the bytes the host is
 waiting for.
+
+**A chunk that arrives between two rounds now fits in the port.** A board flashed before this
+freeze loses the middle of any chunk much larger than 380 bytes, so a 512-byte chunk arrives with
+a hole in it and the file it belongs to is never queued.
+
+`Serial_DataSource` opened `machine.UART` without asking for a receive buffer, so the port kept
+the ESP32 driver's default 256 bytes with the hardware FIFO's 128 behind it. `check()` returns
+rather than waiting for a chunk to finish arriving, which is what keeps the radio loop moving, and
+the price of not waiting is that whatever has not been read yet has to keep. 384 bytes is less
+than one chunk. Measured at 9600 baud with rounds 1500 ms apart: 342 bytes of a 600-byte burst
+survived on the default and the whole burst survived at 1024, three runs each side. The port now
+asks for the read budget the pump already uses, so what one round is willing to take always fits,
+and the two numbers cannot drift apart.
+
+The wire is untouched, so an old board and a new one still interoperate; an old board simply
+drops the middle of what it is sent. On a board this is the part worth testing, and only in the
+posture the deployment actually runs in: the board on its own power, running `main.py`, with no
+host attached to it. Every measurement that produced the numbers above had `mpremote` driving the
+board over USB, which a deployed board never has.
