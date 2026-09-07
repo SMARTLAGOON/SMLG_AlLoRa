@@ -49,7 +49,7 @@ where a node loading a file could not hear the radio.
 """
 
 from AlLoRa.DataSources.DataSource import DataSource
-from AlLoRa.File import AlLoRa_File, OnDemandFileReader
+from AlLoRa.File import AlLoRa_File, OnDemandFileReader, OnDemandFileWriter
 from AlLoRa.utils.file_utils import commit_bytes, commit_file
 from AlLoRa.utils.json_utils import json
 from AlLoRa.utils.os_utils import os
@@ -192,12 +192,7 @@ class Disk_DataSource(DataSource):
         appears in the folder is always a whole one: a reader finding it mid-write would
         otherwise send a truncated reading that looks exactly like a short one.
         """
-        if not name or "/" in name:
-            # The name doubles as a filename here and again on the receiving side, where it
-            # builds the reassembly path. A separator in it escapes both.
-            raise ValueError("queued file name must be a plain name, got {}".format(name))
-        if name == INDEX_NAME:
-            raise ValueError("{} is the queue's own index".format(INDEX_NAME))
+        self._check_name(name)
         if not payload:
             # An empty file has no chunks to ask for, so it would sit at the head of the
             # queue and never complete. Refused at the door, where the producer can still
@@ -216,6 +211,70 @@ class Disk_DataSource(DataSource):
         # order would name a payload that does not exist.
         self._save_index()
         return True
+
+    def _check_name(self, name):
+        if not name or "/" in name:
+            # The name doubles as a filename here and again on the receiving side, where it
+            # builds the reassembly path. A separator in it escapes both.
+            raise ValueError("queued file name must be a plain name, got {}".format(name))
+        if name == INDEX_NAME:
+            raise ValueError("{} is the queue's own index".format(INDEX_NAME))
+
+    # -- a file that arrives over time rather than all at once -----------------------------
+    #
+    # `enqueue` wants the whole payload in RAM, which is the right shape for a sensor reading
+    # and the wrong one for a file crossing a cable: minutes long, and larger than the heap of
+    # the board receiving it. These three verbs let a subclass write the payload straight to
+    # flash as it arrives and only then join the queue, without reimplementing any of the
+    # invariants above.
+
+    def begin_incoming(self, name):
+        """Open a writer for a file that is still arriving. Raises on a name that cannot be
+        queued, so a producer sending a bad one is refused before any bytes hit the card.
+
+        It writes to `name.tmp`, which is not a queued file by any of this class's own rules:
+        `_names_on_disk` filters it out, so `_reconcile` cannot adopt it, and `prepare` deletes
+        it on the next boot. That is what makes a transfer cut off by a power cut cost nothing
+        but the transfer. It becomes a queued file in `commit_incoming` and nowhere else.
+        """
+        self._check_name(name)
+        return OnDemandFileWriter(self.queue_path + "/" + name + ".tmp")
+
+    def commit_incoming(self, name, queue_as=None):
+        """The whole file arrived and was checked: put it in the queue. True if it was taken.
+
+        False, with nothing touched, when that name is already queued. The durability promise
+        is that a name in this queue is the same bytes across a reboot, and a node that
+        rebooted mid-send resumes from the collector's next missing index on the strength of
+        it; replacing the payload under a name that may be half sent is exactly how bytes from
+        two files end up in one artifact. The caller still holds the arrival and decides.
+
+        `queue_as` queues it under a different name from the one it was opened with, which is
+        how a caller settles that clash without asking the producer to send the file again.
+        """
+        target_name = queue_as if queue_as else name
+        if target_name in self._order:
+            return False
+        self._make_room()
+        source = self.queue_path + "/" + name + ".tmp"
+        target = self.queue_path + "/" + target_name
+        try:
+            os.rename(source, target)
+        except OSError:
+            # The same split as every other commit here: littlefs replaces the target, FAT
+            # refuses a name already in use, and an ESP32 can be flashed either way. Nothing
+            # is queued under this name, so whatever is in the way is a leftover.
+            self._remove(target_name)
+            os.rename(source, target)
+        self._order.append(target_name)
+        # Second, always, for the reason enqueue gives: interrupted here the file is on the
+        # card without a place in the order, and the next reconcile adopts it.
+        self._save_index()
+        return True
+
+    def discard_incoming(self, name):
+        """Throw away an arrival that will not be queued. Safe on a file that is not there."""
+        self._remove(name + ".tmp")
 
     def add_to_queue(self, file: AlLoRa_File):
         """The base's verb, routed to flash: queue this file's bytes under its own name."""

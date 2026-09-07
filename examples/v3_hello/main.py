@@ -77,6 +77,9 @@ _SINK_KINDS = {
 _SOURCE_KINDS = {
     "disk": ("queue_path", "file_queue_size", "cleanup", "archive_path", "archive_budget"),
     "mqtt": ("host", "port", "topics", "client_id", "keepalive", "file_queue_size"),
+    "serial": ("queue_path", "file_queue_size", "cleanup", "archive_path", "archive_budget",
+               "uart_id", "baudrate", "tx", "rx", "link_chunk_size", "name_length",
+               "shorten_names", "stall_timeout"),
 }
 
 
@@ -154,10 +157,16 @@ def build_datasource(block, key_name="datasource", queue_path=None, reserved=())
     outer key to defer to, so there it carries its own.
     """
     kind, args = _boundary_args(block, _SOURCE_KINDS, key_name, reserved=reserved)
-    if kind == "disk":
-        from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
+    if kind in ("disk", "serial"):
+        # Both are the same outbox on flash, so both fall back to the node-level queue_path.
+        # A serial source is that queue with a producer filling it over a cable instead of the
+        # node's own code, which is why it subclasses the disk one rather than sitting beside it.
         if queue_path is not None and "queue_path" not in args:
             args["queue_path"] = queue_path
+        if kind == "serial":
+            from AlLoRa.DataSources.Serial_DataSource import Serial_DataSource
+            return Serial_DataSource(**args)
+        from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
         return Disk_DataSource(**args)
     from AlLoRa.DataSources.MQTT_DataSource import MQTT_DataSource
     if "topics" in args:

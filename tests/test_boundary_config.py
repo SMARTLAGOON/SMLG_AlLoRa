@@ -31,6 +31,7 @@ from AlLoRa.DataSinks.HTTP_DataSink import HTTP_DataSink
 from AlLoRa.DataSinks.MQTT_DataSink import MQTT_DataSink
 from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
 from AlLoRa.DataSources.MQTT_DataSource import MQTT_DataSource
+from AlLoRa.DataSources.Serial_DataSource import Serial_DataSource
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 
@@ -115,6 +116,35 @@ def test_naming_the_disk_source_explicitly_still_uses_the_top_level_queue_path(
                   _config("edge", queue_path="Queue", datasource={"kind": "disk"}))
     assert isinstance(node.datasource, Disk_DataSource)
     assert node.datasource.queue_path == "Queue"
+
+
+def test_an_edge_can_be_fed_over_a_cable_by_naming_it(tmp_path, monkeypatch):
+    """The GNSS rig, in one block. A Raspberry Pi pushes whole files down a UART and the board
+    keeps the protocol, which the ubiquitous language has always listed as a first-class
+    composition and nothing implemented."""
+    node = _build(tmp_path, monkeypatch,
+                  _config("edge", queue_path="/sd/Outbox",
+                          datasource={"kind": "serial", "baudrate": 9600, "tx": 43, "rx": 44}))
+    assert isinstance(node.datasource, Serial_DataSource)
+    assert node.datasource.baudrate == 9600
+    assert (node.datasource.tx, node.datasource.rx) == (43, 44)
+
+
+def test_a_serial_source_reads_the_same_outbox_key_as_a_disk_one(tmp_path, monkeypatch):
+    """It is the disk queue with a producer on the far end of a cable, so `queue_path` stays
+    the one place the outbox folder is written."""
+    node = _build(tmp_path, monkeypatch,
+                  _config("edge", queue_path="/sd/Outbox", datasource={"kind": "serial"}))
+    assert node.datasource.queue_path == "/sd/Outbox"
+    assert isinstance(node.datasource, Disk_DataSource)   # order and durability come with it
+
+
+def test_a_mistyped_serial_key_stops_the_boot(tmp_path, monkeypatch):
+    # `baud` rather than `baudrate` would otherwise give a node listening at 9600 to a Pi
+    # talking at 115200: provisioned, silent, and with nothing to say about why.
+    with pytest.raises(SystemExit):
+        _build(tmp_path, monkeypatch,
+               _config("edge", datasource={"kind": "serial", "baud": 115200}))
 
 
 # --- the config can now select the other boundary ----------------------------------------

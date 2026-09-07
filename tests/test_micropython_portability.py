@@ -41,6 +41,9 @@ _ON_DEVICE_SECURE = [
     "AlLoRa/DataSources/DataSource.py",
     "AlLoRa/DataSources/Disk_DataSource.py",
     "AlLoRa/DataSources/MQTT_DataSource.py",
+    # The cable a producer feeds an Edge over: frozen, and reached on every round of the
+    # serve loop on the board it runs on.
+    "AlLoRa/DataSources/Serial_DataSource.py",
     "AlLoRa/DataSources/mqtt_naming.py",
     "AlLoRa/DataSources/Loop_guard.py",
     "AlLoRa/DataSinks/DataSink.py",

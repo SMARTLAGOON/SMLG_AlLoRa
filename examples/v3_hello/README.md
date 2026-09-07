@@ -16,7 +16,9 @@ Start at the top and stop when you have what you need.
 
 Beside them, [`pro/`](pro) is not a fourth posture: it is the `open/` pair with the board's
 screen, card and LED switched on through a `device` block, and that block drops into any of the
-three unchanged.
+three unchanged. [`gps/`](gps) is not one either: it is a `pro` Edge whose files arrive from a
+Raspberry Pi over a cable rather than from its own code, which is the rig this repository's
+serial `DataSource` was written for.
 
 ## One program, six configs
 
@@ -46,7 +48,7 @@ arrives under `result_path`.
 "datasource": { "kind": "mqtt", "topics": ["sensors/#"] }
 ```
 
-A sink's `kind` is `disk`, `mqtt` or `http`; a source's is `disk` or `mqtt`. Every other key
+A sink's `kind` is `disk`, `mqtt` or `http`; a source's is `disk`, `mqtt` or `serial`. Every other key
 inside the block is passed straight to that class, so what you leave out is whatever the class
 already defaults to, and there is one place to read it. A key the kind does not take stops the
 boot rather than being ignored, which is what makes a typed `hosts` a halt instead of a node
@@ -64,6 +66,18 @@ RSSI, SNR, chunk count) travels in `X-AlLoRa-*` headers. The Hub always posts ou
 Hub usually sits behind NAT and is asleep half the time, so nothing can reach in to collect from
 it. If the service refuses, the file is not thrown away: the transfer goes unacknowledged and the
 next round pulls it again.
+
+The `serial` source is the other direction: a producer beside the board, feeding it whole files
+over a UART while the board keeps the protocol and the radio.
+
+```json
+"datasource": { "kind": "serial", "baudrate": 9600, "tx": 43, "rx": 44 }
+```
+
+It is the disk outbox with something else filling it, so it takes every `disk` key as well and
+reads the same top-level `queue_path`. [`gps/`](gps) has the whole deployment and the wire it
+speaks. Worth keeping straight: this moves **files**, and a Serial *connector* moves **packets**.
+The same cable can carry either, and which one you want depends on which end holds the protocol.
 
 `url` is the one key in any block with no default, so an `http` block without one stops the boot.
 `token` is worth a thought before you write it: it lands in a config file on the board's
