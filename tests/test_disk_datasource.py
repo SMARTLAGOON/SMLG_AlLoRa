@@ -301,3 +301,135 @@ def test_the_queue_is_drained_in_order_across_rounds(tmp_path):
     edge._retire_file(True)
     edge._pump_datasource()
     assert edge.file is None
+
+
+# -- keeping a copy of what was delivered ---------------------------------------------------
+#
+# Delivery is deletion by default, which is what keeps a card from filling up with everything
+# ever sent. It also leaves a field node with no evidence of what it actually captured: if the
+# transfer was fine and the reading in it was wrong, the only copy is whatever arrived at the
+# far end. `cleanup=False` buys that copy back.
+
+
+def test_a_delivered_file_is_kept_when_cleanup_is_off(tmp_path):
+    import os
+    ds = _queue(tmp_path, cleanup=False)
+    ds.enqueue("a.bin", b"aaa")
+    ds.peek_file()
+    ds.confirm_file()
+    assert "a.bin" not in os.listdir(str(tmp_path / "outbox"))
+    assert os.listdir(str(tmp_path / "outbox-sent")) == ["a.bin"]
+    with open(str(tmp_path / "outbox-sent" / "a.bin"), "rb") as f:
+        assert f.read() == b"aaa"
+
+
+def test_the_archive_is_a_sibling_of_the_outbox_and_never_a_child(tmp_path):
+    # A directory inside queue_path would be adopted by _reconcile as a queued file, then fail
+    # to open on every round for ever. Pinned because the cheap implementation gets it wrong.
+    ds = _queue(tmp_path, cleanup=False)
+    assert ds.archive_path == str(tmp_path / "outbox-sent")
+    ds.enqueue("a.bin", b"aaa")
+    ds.peek_file()
+    ds.confirm_file()
+    ds.check()
+    assert ds._names_on_disk() == set()
+    assert not ds.has_pending()
+
+
+def test_a_kept_file_is_not_queued_again_on_the_next_drain(tmp_path):
+    # The whole reason keeping means moving rather than skipping the delete.
+    ds = _queue(tmp_path, cleanup=False)
+    ds.enqueue("a.bin", b"aaa")
+    assert _drain(ds) == ["a.bin"]
+    ds.check()
+    assert _drain(ds) == []
+
+
+def test_a_kept_file_is_not_queued_again_after_a_reboot(tmp_path):
+    ds = _queue(tmp_path, cleanup=False)
+    ds.enqueue("a.bin", b"aaa")
+    _drain(ds)
+    again = _queue(tmp_path, cleanup=False)
+    assert not again.has_pending()
+    assert again._archived == ["a.bin"]
+
+
+def test_an_evicted_file_is_destroyed_rather_than_archived(tmp_path):
+    # Eviction is a reading being dropped *because* the card had no room. Moving it sideways
+    # into another folder on the same card would not make any.
+    import os
+    ds = _queue(tmp_path, cleanup=False, file_queue_size=2)
+    ds.enqueue("001.bin", b"a")
+    ds.enqueue("002.bin", b"b")
+    ds.enqueue("003.bin", b"c")
+    assert "001.bin" not in os.listdir(str(tmp_path / "outbox"))
+    assert "001.bin" not in os.listdir(str(tmp_path / "outbox-sent"))
+
+
+def test_the_archive_evicts_its_oldest_to_stay_under_budget(tmp_path):
+    import os
+    ds = _queue(tmp_path, cleanup=False, archive_budget=10)
+    for name, payload in (("001.bin", b"aaaa"), ("002.bin", b"bbbb"), ("003.bin", b"cccc")):
+        ds.enqueue(name, payload)
+        ds.peek_file()
+        ds.confirm_file()
+    kept = sorted(os.listdir(str(tmp_path / "outbox-sent")))
+    assert kept == ["002.bin", "003.bin"]
+    assert ds._archive_bytes == 8
+
+
+def test_the_budget_sizes_itself_from_the_volume(tmp_path):
+    ds = _queue(tmp_path, cleanup=False)
+    assert ds.archive_budget > 0
+
+
+def test_an_explicit_budget_is_taken_as_given(tmp_path):
+    ds = _queue(tmp_path, cleanup=False, archive_budget=4096)
+    assert ds.archive_budget == 4096
+
+
+def test_an_archive_that_cannot_be_written_still_frees_the_queue(tmp_path):
+    # Every failure path falls through to the delete, because a delivered file left in the
+    # outbox is re-adopted and sent again for ever.
+    import os
+    ds = _queue(tmp_path, cleanup=False)
+    ds.enqueue("a.bin", b"aaa")
+
+    def explode(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    ds._archive_remove = lambda name: None
+    original, os.rename = os.rename, explode
+    try:
+        ds.peek_file()
+        ds.confirm_file()
+    finally:
+        os.rename = original
+    assert "a.bin" not in os.listdir(str(tmp_path / "outbox"))
+    ds.check()
+    assert not ds.has_pending()
+
+
+def test_cleanup_defaults_to_erasing_and_writes_no_archive(tmp_path):
+    # The acceptance criterion: absence is today's behaviour, byte for byte.
+    import os
+    ds = _queue(tmp_path)
+    assert ds.cleanup is True
+    ds.enqueue("a.bin", b"aaa")
+    ds.peek_file()
+    ds.confirm_file()
+    assert os.listdir(str(tmp_path / "outbox")) == ["queue.json"]
+    assert not os.path.exists(str(tmp_path / "outbox-sent"))
+
+
+def test_a_repeat_of_an_archived_name_replaces_the_copy(tmp_path):
+    import os
+    ds = _queue(tmp_path, cleanup=False)
+    ds.enqueue("a.bin", b"first")
+    _drain(ds)
+    ds.enqueue("a.bin", b"second")
+    _drain(ds)
+    assert os.listdir(str(tmp_path / "outbox-sent")) == ["a.bin"]
+    with open(str(tmp_path / "outbox-sent" / "a.bin"), "rb") as f:
+        assert f.read() == b"second"
+    assert ds._archive_bytes == 6

@@ -57,12 +57,45 @@ from AlLoRa.utils.debug_utils import print
 
 INDEX_NAME = "queue.json"
 
+# What the archive is allowed to hold when the filesystem will not say how big it is, and
+# the ceiling is deliberately low. A board whose `statvfs` is missing could be anything,
+# including the 2 MB internal partition, and an archive is a convenience while the outbox is
+# the job: crowding out a reading that has not been sent yet to keep one that has would
+# invert the whole point of the queue. An operator with a card under it passes
+# `archive_budget` and gets whatever they ask for.
+ARCHIVE_BUDGET_FALLBACK = 256 * 1024
+
+# The share of the volume the archive may take when it sizes itself. Read from the total
+# rather than from what is free right now, so the budget is the same number on every boot
+# instead of shrinking towards nothing as the archive itself fills the card.
+ARCHIVE_BUDGET_SHARE = 4       # a quarter
+
 
 class Disk_DataSource(DataSource):
 
-    def __init__(self, queue_path="Outbox", file_queue_size=25):
+    def __init__(self, queue_path="Outbox", file_queue_size=25,
+                 cleanup=True, archive_path=None, archive_budget=None):
         super().__init__(file_queue_size=file_queue_size)
         self.queue_path = queue_path
+        # Erase a file once the peer confirms it, or keep a copy. True is what this class has
+        # always done and stays the default, so every config already in the field is
+        # unchanged. False buys the one thing delivery-is-deletion cannot give: something on
+        # the card to compare against what arrived, when a transfer succeeded and the reading
+        # in it was still wrong.
+        #
+        # The same word as `cleanup` on the sinks, meaning the same thing on the other side
+        # of the boundary layer: discard the payload once it is safely somewhere else.
+        self.cleanup = cleanup
+        # A sibling of the outbox and never a child of it. `_names_on_disk` filters the index,
+        # dotfiles and temps and nothing else, so a directory inside `queue_path` would be
+        # adopted as a queued file and then fail to open, every round, forever.
+        self.archive_path = archive_path if archive_path else queue_path + "-sent"
+        self.archive_budget = archive_budget
+        # Delivered names in the order they were archived, and the bytes they occupy. Both
+        # are rebuilt at prepare() and maintained from there rather than re-scanned, because
+        # a directory listing per delivery is a flash read the radio loop pays for.
+        self._archived = []
+        self._archive_bytes = 0
         # The send order, by name. The directory says what exists; this says in what
         # order, and is reconciled against the directory rather than believed.
         self._order = []
@@ -90,6 +123,51 @@ class Disk_DataSource(DataSource):
                 self._remove(name)
         self._order = self._load_index()
         self._reconcile()
+        if not self.cleanup:
+            self._prepare_archive()
+
+    def _prepare_archive(self):
+        """Open the archive and work out what it already holds.
+
+        The order it comes back in is whatever the filesystem reports, which is not the order
+        the files were delivered in: `listdir` makes no promise, and the timestamps that would
+        settle it are useless on a board whose clock comes up unset. It decides only which
+        copy is dropped first when the budget is reached, so the cost of getting it wrong is
+        keeping a slightly different set of old files than intended. The queue itself keeps a
+        real index because there the same mistake would send readings out of order.
+        """
+        try:
+            os.mkdir(self.archive_path)
+        except OSError:
+            pass    # already there, which is the normal case after the first boot
+        self._archived = []
+        self._archive_bytes = 0
+        for name in self._archive_listdir():
+            if name.endswith(".tmp"):
+                self._archive_remove(name)
+                continue
+            self._archived.append(name)
+            self._archive_bytes += self._archive_size(name)
+        if self.archive_budget is None:
+            self.archive_budget = self._default_archive_budget()
+
+    def _default_archive_budget(self):
+        """A share of the volume, or a low fixed ceiling when it will not say.
+
+        A constant here would be wrong on both boards this runs on at once: generous enough
+        for an SD card is most of the internal flash, and safe for the internal flash throws
+        away almost all of a card an operator put in for exactly this.
+        """
+        try:
+            stats = os.statvfs(self.archive_path)
+            total = stats[1] * stats[2]     # f_frsize * f_blocks
+            if total > 0:
+                return total // ARCHIVE_BUDGET_SHARE
+        except (AttributeError, OSError, IndexError):
+            pass    # no statvfs on this port, or the path is not on a mounted volume
+        print("Disk_DataSource: the filesystem would not report its size, so the archive is",
+              "capped at", ARCHIVE_BUDGET_FALLBACK, "bytes")
+        return ARCHIVE_BUDGET_FALLBACK
 
     def check(self):
         # The non-blocking pump the serve loop calls every round, so it re-scans only when
@@ -218,9 +296,9 @@ class Disk_DataSource(DataSource):
             # Confirmed without a peek. The base drains its head in that case, so this does
             # too rather than diverging on a shared contract.
             if self._order:
-                self._forget(self._order[0])
+                self._forget(self._order[0], delivered=True)
             return None
-        self._forget(name)
+        self._forget(name, delivered=True)
         return delivered
 
     def get_next_file(self):
@@ -269,16 +347,24 @@ class Disk_DataSource(DataSource):
             self._forget(victim, save=False)
         return
 
-    def _forget(self, name, save=True):
+    def _forget(self, name, save=True, delivered=False):
         """Drop a file from both truths, the card first.
 
         The handle comes before either, when this is the file being served: an open reader
         over a file that has just been deleted is defined behaviour on POSIX and not on
         littlefs or FAT, and the node runs on those.
+
+        `delivered` says the peer confirmed this file, which is the only way out of the queue
+        that earns a copy. Eviction under a full queue comes through here too and must not:
+        that path is a reading being destroyed *because* there was no room, and moving it
+        sideways into another folder on the same card would not make room at all.
         """
         if name == self._head_name:
             self._release_head()
-        self._remove(name)
+        if delivered and not self.cleanup:
+            self._archive(name)
+        else:
+            self._remove(name)
         try:
             self._order.remove(name)
         except ValueError:
@@ -354,3 +440,88 @@ class Disk_DataSource(DataSource):
             os.remove(self.queue_path + "/" + name)
         except OSError:
             pass
+
+    # -- the archive -----------------------------------------------------------------------
+
+    def _archive(self, name):
+        """Move a delivered file out of the queue, or erase it if it cannot be moved.
+
+        The one hard rule is that the file does not stay where it is. `_reconcile` adopts
+        anything in the queue folder the index does not know, which is what lets a producer
+        drop a file in by hand, and it cannot tell that apart from a delivered file left
+        behind: the reading would be sent again on the next drain, and again after that.
+        So every failure here falls through to the delete this class would have done anyway.
+        A lost copy is the feature not working; a file left in the outbox is the node stuck.
+        """
+        size = self._size(name)
+        if name in self._archived:
+            # A repeat of a name already kept, which is ordinary: a producer that names its
+            # files by the hour reuses one every time the hour comes round. The old copy's
+            # bytes come off the books here rather than when it is overwritten, because on
+            # littlefs and POSIX the rename below replaces it without a word, and nothing
+            # else would ever subtract them: the budget would drift upwards with every
+            # repeat until the archive was effectively uncapped.
+            self._archive_forget(name)
+        self._make_archive_room(size)
+        source = self.queue_path + "/" + name
+        target = self.archive_path + "/" + name
+        try:
+            try:
+                os.rename(source, target)
+            except OSError:
+                # Same split as the config commit: littlefs replaces the target, FAT refuses
+                # a name already in use, and an ESP32 can be flashed either way. A repeat of
+                # a name already archived is the ordinary way to get here.
+                self._archive_remove(name)
+                os.rename(source, target)
+        except OSError as e:
+            print("Disk_DataSource: could not archive a delivered file, erasing it:", name, e)
+            self._remove(name)
+            return
+        self._archived.append(name)
+        self._archive_bytes += size
+
+    def _make_archive_room(self, incoming):
+        """Evict oldest-first until the incoming file fits under the budget.
+
+        Said out loud for the same reason `_make_room` says it: a store quietly eating itself
+        to stay under a limit looks exactly like one that has plenty of space.
+        """
+        while self._archived and self._archive_bytes + incoming > self.archive_budget:
+            victim = self._archived[0]
+            print("Disk_DataSource: archive full, dropping oldest delivered file", victim)
+            self._archive_forget(victim)
+
+    def _archive_forget(self, name):
+        self._archive_bytes -= self._archive_size(name)
+        if self._archive_bytes < 0:
+            self._archive_bytes = 0
+        self._archive_remove(name)
+        try:
+            self._archived.remove(name)
+        except ValueError:
+            pass
+
+    def _archive_listdir(self):
+        try:
+            return os.listdir(self.archive_path)
+        except OSError:
+            return []
+
+    def _archive_remove(self, name):
+        try:
+            os.remove(self.archive_path + "/" + name)
+        except OSError:
+            pass
+
+    def _size(self, name):
+        return self._stat_size(self.queue_path + "/" + name)
+
+    def _archive_size(self, name):
+        return self._stat_size(self.archive_path + "/" + name)
+
+    def _stat_size(self, path):
+        try:
+            return os.stat(path)[6]
+        except (OSError, IndexError):
+            return 0

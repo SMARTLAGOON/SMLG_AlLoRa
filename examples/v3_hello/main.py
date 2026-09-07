@@ -75,7 +75,7 @@ _SINK_KINDS = {
     "http": ("url", "token", "timeout", "cleanup"),
 }
 _SOURCE_KINDS = {
-    "disk": ("queue_path", "file_queue_size"),
+    "disk": ("queue_path", "file_queue_size", "cleanup", "archive_path", "archive_budget"),
     "mqtt": ("host", "port", "topics", "client_id", "keepalive", "file_queue_size"),
 }
 
