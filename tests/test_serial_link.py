@@ -193,6 +193,69 @@ def test_full_v3_transfer_over_serial_link(tmp_path):
     assert received.read_bytes() == payload, "tunneled v3 transfer over Serial_link did not reassemble"
 
 
+def test_full_v3_transfer_with_the_edge_over_the_serial_link(tmp_path):
+    """The mirror of the test above: the *Edge* is the half on the far side of the tunnel.
+
+    Every other tunnel test in this suite puts the Hub on the tunnel and a standalone node on
+    the radio, because that is the deployment we built first: a gateway on a host, driving a
+    board as its radio. The opposite arrangement is a real deployment too, a companion computer
+    holding the protocol and its keys while a board beside it is only a radio, and it is not the
+    same code path. A Hub *drives*: it issues a request and waits for the answer it asked for.
+    An Edge *listens*: it spends its life waiting for a poll that may never come, and over a
+    tunnel every one of those listens is a round trip to the bridge. Between one returning and
+    the next being issued the bridge is not in receive, so a poll landing in that window is
+    lost. The hardware pass measured that window and found the protocol's retries cover it; this
+    test is here so a refactor cannot quietly break the arrangement between benches.
+    """
+    payload = bytes(i % 256 for i in range(1000))          # 5 chunks at 243
+
+    # Reversed against the test above: the radio carrying the *source* address is the one behind
+    # the bridge, and the collector keeps a direct connector.
+    bridge_radio, collector_conn = Loopback_connector.create_pair(SOURCE_MAC, COLLECTOR_MAC)
+
+    result_path = str(tmp_path / "Results")
+    config_file = str(tmp_path / "LoRa.json")
+    config = _write_config(config_file, result_path)
+    bridge_radio.config(config["connector"])
+
+    client_link, bridge_link = _serial_pair()
+    bridge = Adapter(bridge_radio, link=bridge_link)
+    stop = threading.Event()
+    pump = threading.Thread(target=lambda: bridge.serve(should_stop=stop.is_set), daemon=True)
+    pump.start()
+
+    # Built after the pump is serving: the Edge configures its radio over the tunnel, which is
+    # an RPC the bridge has to answer.
+    source = Edge(Tunnel_connector(link=client_link), config_file=config_file)
+    source.set_file(AlLoRa_File(name="serial.bin", content=bytearray(payload),
+                                chunk_size=source.get_chunk_size()))
+    collector = Hub(collector_conn, config_file=config_file)
+    endpoint = Digital_Endpoint(name="src", mac_address=SOURCE_MAC, active=True,
+                                session_id=SESSION_ID)
+
+    errors = []
+
+    def serve():
+        try:
+            source.send_file(timeout=30)
+        except Exception as e:  # pragma: no cover
+            errors.append(e)
+
+    server = threading.Thread(target=serve, name="tunneled-source-serve", daemon=True)
+    server.start()
+
+    collector.listen_to_endpoint(endpoint, listening_time=30, save_file=True, one_file=True)
+    server.join(timeout=15)
+    stop.set()
+    pump.join(timeout=2)
+
+    assert not errors, "tunneled source thread raised: {}".format(errors)
+    received = tmp_path / "Results" / SOURCE_MAC / "serial.bin"
+    assert received.exists(), "collector never saved the file at {}".format(received)
+    assert received.read_bytes() == payload, \
+        "v3 transfer with the Edge behind a Serial_link did not reassemble"
+
+
 class _MicroPythonBytearray(bytearray):
     """A bytearray with slice deletion removed, the way MicroPython ships it.
 
