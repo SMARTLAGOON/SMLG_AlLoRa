@@ -39,6 +39,19 @@ committed RF trial actually survive a reboot (the earlier freeze wrote the live 
 the loader never read, so a committed sf7→sf9 came back as sf7 on the next boot); reboot-persistence
 therefore only works once the device runs a rebuild from this freeze.
 
+This freeze is the first to carry **`AlLoRa/DataSources/Serial_DataSource.py`**, which a board
+flashed before it simply does not have. It is the boundary the GNSS rig needs: a Raspberry Pi
+pushes whole files over UART and the board keeps the protocol, the outbox and the radio. The
+receive protocol itself has been frozen into both T3S3 targets since they were created, as
+`modules/board/uart_manager.py`, and nothing has ever imported it. That module stays where it is
+(`tests/test_sx1262_target.py` pins the target's module set) and is now superseded: its
+`read_zipfile` is one blocking loop with 2000 ms port timeouts, which cannot run on a node whose
+`check()` shares the radio loop, so the library re-implements the same wire as a resumable state
+machine. A rig on this freeze speaks the identical handshake to the Pi and needs no change on the
+Pi side. `Disk_DataSource` also gains the streaming ingest it rests on, so a file can arrive over
+minutes without ever being held whole in RAM. None of that reaches a board any way but a rebuild,
+and this paragraph is the trigger for one.
+
 The structure pass changes the **set** of frozen modules, not just their contents:
 `AlLoRa/Nodes/Swap_base.py` is gone and its two whole-file loops now live on `AlLoRa/Nodes/Node.py`,
 so a device flashed before it holds a module the source no longer has. It also changes how a
