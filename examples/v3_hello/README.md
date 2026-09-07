@@ -46,10 +46,29 @@ arrives under `result_path`.
 "datasource": { "kind": "mqtt", "topics": ["sensors/#"] }
 ```
 
-`kind` is `disk` or `mqtt`. Every other key inside the block is passed straight to that class, so
-what you leave out is whatever the class already defaults to, and there is one place to read it.
-A key the kind does not take stops the boot rather than being ignored, which is what makes a
-typed `hosts` a halt instead of a node quietly publishing to localhost.
+A sink's `kind` is `disk`, `mqtt` or `http`; a source's is `disk` or `mqtt`. Every other key
+inside the block is passed straight to that class, so what you leave out is whatever the class
+already defaults to, and there is one place to read it. A key the kind does not take stops the
+boot rather than being ignored, which is what makes a typed `hosts` a halt instead of a node
+quietly publishing to localhost.
+
+The `http` sink posts each finished file to a web service, which is how a deployment reaches a
+control website:
+
+```json
+"data_sink": { "kind": "http", "url": "https://control.example/api/ingest", "token": "..." }
+```
+
+The file bytes are the request body and the transfer's own record (source, session, device id,
+RSSI, SNR, chunk count) travels in `X-AlLoRa-*` headers. The Hub always posts outward, because a
+Hub usually sits behind NAT and is asleep half the time, so nothing can reach in to collect from
+it. If the service refuses, the file is not thrown away: the transfer goes unacknowledged and the
+next round pulls it again.
+
+`url` is the one key in any block with no default, so an `http` block without one stops the boot.
+`token` is worth a thought before you write it: it lands in a config file on the board's
+filesystem, so treat it as a per-Hub credential you can revoke, not a shared secret. On a board
+whose `urequests` build takes no `timeout`, set `"timeout": null`.
 
 Two rules worth knowing before you write one:
 

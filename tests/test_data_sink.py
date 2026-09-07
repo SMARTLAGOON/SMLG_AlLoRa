@@ -4,11 +4,18 @@ v3 splits "what to do with a received file" out of the Collector's hardwired dis
 Collector (Requester/Gateway) hands every finished AlLoRa_File to its DataSink.consume(file,
 source). The default Disk_DataSink reproduces the legacy Results/<source>/<name> save
 byte-for-byte, so nothing that relies on files-on-disk changes; an MQTT_DataSink publishes the
-file to a broker instead, without the Collector knowing where its data goes.
+file to a broker instead, and an HTTP_DataSink posts it to a web service, without the Collector
+knowing where its data goes.
 
 This proves: (1) the default path is unchanged (files still land on disk), (2) an injected sink
 receives the completed file end-to-end over a real transfer and replaces the disk write, and
-(3) the Disk / MQTT sinks and File.discard behave in isolation.
+(3) the Disk / MQTT / HTTP sinks and File.discard behave in isolation.
+
+The HTTP sink carries one property the other two do not have to think about: it talks to
+something that can refuse. A broker publish at QoS 0 and a disk write effectively cannot fail
+halfway, but a site can be down, full or wrong about its token. So the tests below pin what
+happens on a refusal as hard as what happens on success, because the failure mode of getting
+that wrong is silent data loss after the radio has already spent the minutes.
 """
 import json
 import math
@@ -22,6 +29,7 @@ from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.DataSinks.DataSink import DataSink, Reception
 from AlLoRa.DataSinks.Disk_DataSink import Disk_DataSink
+from AlLoRa.DataSinks.HTTP_DataSink import HTTP_DataSink
 from AlLoRa.DataSinks.MQTT_DataSink import MQTT_DataSink
 
 SOURCE_MAC = "a1a1a1a1"
@@ -99,6 +107,33 @@ class _FakeMQTTClient:
 
     def publish(self, topic, msg, *args, **kwargs):
         self.published.append((topic, bytes(msg)))
+
+
+class _FakeResponse:
+    def __init__(self, status_code, client):
+        self.status_code = status_code
+        self._client = client
+
+    def close(self):
+        self._client.closed += 1
+
+
+class _FakeHTTPClient:
+    """Stand-in for `requests` / `urequests`, which the sink treats as the client itself: both
+    libraries are modules exposing the one call it makes, so a test double is any object with
+    the same `post`."""
+
+    def __init__(self, status_code=200):
+        self.status_code = status_code
+        self.calls = []       # (url, body bytes, headers, other kwargs)
+        self.closed = 0
+
+    def post(self, url, data=None, headers=None, **kwargs):
+        self.calls.append((url, bytes(data), dict(headers or {}), kwargs))
+        return _FakeResponse(self.status_code, self)
+
+
+SITE_URL = "https://control.example/api/ingest"
 
 
 # --- end-to-end: the sink seam in a real transfer -------------------------------------------
@@ -286,3 +321,168 @@ def test_publish_uses_umqtt_positional_signature_and_bytes():
     (args, kwargs) = sink._client.calls[0]
     assert args == (b"allora/a/f.bin", b"payload", True, 1)
     assert kwargs == {}
+
+
+# --- HTTP sink: the last leg, and the only sink talking to something that can refuse ---------
+
+def test_http_sink_posts_the_file_bytes_as_the_request_body(tmp_path):
+    """Raw bytes, not multipart and not base64 in JSON. A radio spent minutes on this payload;
+    inflating it by a third to get it through a JSON string would be paid for twice, once in
+    bandwidth and once in a heap that has no room for the second copy."""
+    payload = b"telemetry-json-or-image-bytes"
+    f = _received_file(str(tmp_path / "recv"), "cam.jpg", payload, chunk_size=8)
+    client = _FakeHTTPClient()
+    HTTP_DataSink(url=SITE_URL, client=client).consume(f, Reception(source=SOURCE_MAC))
+
+    assert len(client.calls) == 1
+    url, body, headers, _ = client.calls[0]
+    assert url == SITE_URL
+    assert body == payload
+    assert headers["Content-Type"] == "application/octet-stream"
+    assert headers["X-AlLoRa-Filename"] == "cam.jpg"
+
+
+def test_http_sink_carries_the_reception_snapshot_in_headers(tmp_path):
+    """Everything the receiving site needs to file the row: who sent it, over what session and
+    identity, and how the link was behaving when it landed."""
+    f = _received_file(str(tmp_path / "recv"), "t.json", b"21.5", chunk_size=4)
+    client = _FakeHTTPClient()
+    reception = Reception(source=SOURCE_MAC, session_id=SESSION_ID, device_id="ab12cd34",
+                          rssi=-97, snr=7, total_chunks=1, timestamp_ms=1757100000000)
+    HTTP_DataSink(url=SITE_URL, client=client).consume(f, reception)
+
+    headers = client.calls[0][2]
+    assert headers["X-AlLoRa-Source"] == SOURCE_MAC
+    assert headers["X-AlLoRa-Session-Id"] == str(SESSION_ID)
+    assert headers["X-AlLoRa-Device-Id"] == "ab12cd34"
+    assert headers["X-AlLoRa-Rssi"] == "-97"
+    assert headers["X-AlLoRa-Snr"] == "7"
+    assert headers["X-AlLoRa-Total-Chunks"] == "1"
+    assert headers["X-AlLoRa-Timestamp-Ms"] == "1757100000000"
+
+
+def test_http_sink_omits_a_header_the_transfer_had_no_value_for(tmp_path):
+    """An open-mode node has no device_id. The header must be absent rather than carry the
+    string "None", which a database would happily store as an identity."""
+    f = _received_file(str(tmp_path / "recv"), "t.json", b"21.5", chunk_size=4)
+    client = _FakeHTTPClient()
+    HTTP_DataSink(url=SITE_URL, client=client).consume(
+        f, Reception(source=SOURCE_MAC, session_id=SESSION_ID))
+
+    headers = client.calls[0][2]
+    assert "X-AlLoRa-Device-Id" not in headers
+    assert "X-AlLoRa-Rssi" not in headers
+    assert "None" not in "".join(headers.values())
+
+
+def test_http_sink_sends_a_bearer_token_only_when_one_is_configured(tmp_path):
+    f = _received_file(str(tmp_path / "recv"), "a.bin", b"x", chunk_size=4)
+    client = _FakeHTTPClient()
+    HTTP_DataSink(url=SITE_URL, token="s3cret", client=client).consume(f, None)
+    assert client.calls[0][2]["Authorization"] == "Bearer s3cret"
+
+    g = _received_file(str(tmp_path / "recv2"), "b.bin", b"x", chunk_size=4)
+    plain = _FakeHTTPClient()
+    HTTP_DataSink(url=SITE_URL, client=plain).consume(g, None)
+    assert "Authorization" not in plain.calls[0][2]
+
+
+def test_http_sink_raises_and_keeps_the_temp_when_the_site_refuses(tmp_path):
+    """The property this sink exists to get right. Node's consume call site treats an exception
+    as "not delivered": it discards the temp itself, rewinds the endpoint and re-pulls the file
+    next round. So a refusal must raise and must not have already thrown the bytes away, or a
+    site outage becomes silent data loss after the radio has paid for the transfer."""
+    payload = b"must survive a 503"
+    f = _received_file(str(tmp_path / "recv"), "x.bin", payload, chunk_size=4)
+    temp = f.temp_file_path
+    sink = HTTP_DataSink(url=SITE_URL, client=_FakeHTTPClient(status_code=503))
+
+    try:
+        sink.consume(f, Reception(source=SOURCE_MAC))
+    except Exception as e:
+        assert "503" in str(e), "the refusal must say what the site answered"
+    else:
+        raise AssertionError("a refused post must raise, not return quietly")
+
+    assert os.path.exists(temp), "a refused post threw the reassembly temp away"
+
+
+def test_http_sink_cleans_up_the_temp_only_after_a_confirmed_post(tmp_path):
+    payload = b"posted then discarded"
+    f = _received_file(str(tmp_path / "recv"), "x.bin", payload, chunk_size=4)
+    temp = f.temp_file_path
+    assert os.path.exists(temp)
+    HTTP_DataSink(url=SITE_URL, client=_FakeHTTPClient()).consume(f, Reception(source=SOURCE_MAC))
+    assert not os.path.exists(temp), "HTTP sink left the reassembly temp behind"
+
+
+def test_http_sink_keeps_the_temp_when_cleanup_is_off(tmp_path):
+    f = _received_file(str(tmp_path / "recv"), "x.bin", b"keep me", chunk_size=4)
+    temp = f.temp_file_path
+    HTTP_DataSink(url=SITE_URL, cleanup=False, client=_FakeHTTPClient()).consume(f, None)
+    assert os.path.exists(temp)
+
+
+def test_http_sink_without_a_url_is_refused_at_construction(tmp_path):
+    """MQTT_DataSink may default its host, because a Hub beside its broker is the ordinary
+    deployment and localhost is usually the right guess. There is no right guess for a site."""
+    try:
+        HTTP_DataSink()
+    except ValueError as e:
+        assert "url" in str(e)
+        return
+    raise AssertionError("a sink with nowhere to post must not be constructible")
+
+
+def test_http_sink_closes_every_response(tmp_path):
+    """urequests holds the socket until the response is closed. A Hub leaking one per file runs
+    out within a day of ordinary collection, and does it on the board rather than in a test."""
+    client = _FakeHTTPClient()
+    sink = HTTP_DataSink(url=SITE_URL, client=client)
+    for i in range(3):
+        f = _received_file(str(tmp_path / "recv{}".format(i)), "x.bin", b"y", chunk_size=4)
+        sink.consume(f, None)
+    assert client.closed == 3
+
+    # And on the failure path too, which is where a leak would otherwise accumulate fastest.
+    refusing = _FakeHTTPClient(status_code=500)
+    bad = HTTP_DataSink(url=SITE_URL, client=refusing)
+    g = _received_file(str(tmp_path / "recvbad"), "x.bin", b"y", chunk_size=4)
+    try:
+        bad.consume(g, None)
+    except Exception:
+        pass
+    assert refusing.closed == 1
+
+
+def test_http_sink_omits_timeout_when_it_is_none(tmp_path):
+    """Older urequests builds take no `timeout`. Rather than a second sink for those boards,
+    the config sets it to null and the keyword is left off the call."""
+    f = _received_file(str(tmp_path / "recv"), "x.bin", b"y", chunk_size=4)
+    client = _FakeHTTPClient()
+    HTTP_DataSink(url=SITE_URL, timeout=None, client=client).consume(f, None)
+    assert "timeout" not in client.calls[0][3]
+
+    g = _received_file(str(tmp_path / "recv2"), "x.bin", b"y", chunk_size=4)
+    timed = _FakeHTTPClient()
+    HTTP_DataSink(url=SITE_URL, timeout=30, client=timed).consume(g, None)
+    assert timed.calls[0][3]["timeout"] == 30
+
+
+def test_http_sink_receives_a_completed_file_over_a_real_transfer(tmp_path):
+    """End to end over the loopback seam, the same proof the injected sink gets: the file that
+    reaches the site is the file the Edge served, whole."""
+    payload = bytes(i % 256 for i in range(1000))   # 5 chunks at 243
+    client = _FakeHTTPClient()
+    _run_transfer(tmp_path, payload, "v3.bin",
+                  data_sink=HTTP_DataSink(url=SITE_URL, token="t", client=client))
+
+    assert len(client.calls) == 1, "the site was not posted exactly one completed file"
+    url, body, headers, _ = client.calls[0]
+    assert url == SITE_URL
+    assert body == payload, "the site received a corrupt or incomplete file"
+    assert headers["X-AlLoRa-Filename"] == "v3.bin"
+    assert headers["X-AlLoRa-Source"] == SOURCE_MAC
+    assert headers["X-AlLoRa-Session-Id"] == str(SESSION_ID)
+    # The HTTP sink replaces the disk write, like any other sink.
+    assert not (tmp_path / "Results" / SOURCE_MAC / "v3.bin").exists()

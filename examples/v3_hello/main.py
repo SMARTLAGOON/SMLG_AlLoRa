@@ -72,6 +72,7 @@ _SINK_KINDS = {
     "disk": (),
     "mqtt": ("host", "port", "topic_prefix", "client_id", "qos", "retain", "keepalive",
              "cleanup"),
+    "http": ("url", "token", "timeout", "cleanup"),
 }
 _SOURCE_KINDS = {
     "disk": ("queue_path", "file_queue_size"),
@@ -128,6 +129,19 @@ def build_data_sink(block, key_name="data_sink"):
     kind, args = _boundary_args(block, _SINK_KINDS, key_name, reserved=("result_path",))
     if kind == "disk":
         return None
+    if kind == "http":
+        # The first boundary with a key that has no defensible default. Every mqtt key can fall
+        # back to the class, because a Hub beside its broker is the ordinary deployment and
+        # localhost is usually right; there is no equivalent guess for which website a
+        # deployment's data belongs to. Halted here rather than left to the constructor so the
+        # operator gets the same one-line boot refusal every other config mistake gives them,
+        # instead of a traceback out of a library.
+        if "url" not in args:
+            raise SystemExit(
+                "{}.kind is 'http' but the block names no url. It takes: {}.".format(
+                    key_name, ", ".join(_SINK_KINDS["http"])))
+        from AlLoRa.DataSinks.HTTP_DataSink import HTTP_DataSink
+        return HTTP_DataSink(**args)
     from AlLoRa.DataSinks.MQTT_DataSink import MQTT_DataSink
     return MQTT_DataSink(**args)
 

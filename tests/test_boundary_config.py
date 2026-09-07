@@ -27,6 +27,7 @@ import os
 import pytest
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
+from AlLoRa.DataSinks.HTTP_DataSink import HTTP_DataSink
 from AlLoRa.DataSinks.MQTT_DataSink import MQTT_DataSink
 from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
 from AlLoRa.DataSources.MQTT_DataSource import MQTT_DataSource
@@ -127,6 +128,36 @@ def test_a_hub_config_can_put_its_received_files_on_a_broker(tmp_path, monkeypat
     assert isinstance(node.data_sink, MQTT_DataSink)
     assert node.data_sink.host == "10.0.0.4"
     assert node.data_sink.topic_prefix == "albufera"
+
+
+def test_a_hub_config_can_post_its_received_files_to_a_website(tmp_path, monkeypatch):
+    """The last leg of a deployment, selected the same way as the other two. Nothing can reach
+    in to a Hub behind NAT, so the Hub posts outward the instant a file is whole."""
+    node = _build(tmp_path, monkeypatch,
+                  _config("hub", data_sink={"kind": "http",
+                                            "url": "https://control.example/api/ingest",
+                                            "token": "s3cret"}),
+                  nodes=[])
+    assert isinstance(node.data_sink, HTTP_DataSink)
+    assert node.data_sink.url == "https://control.example/api/ingest"
+    assert node.data_sink.token == "s3cret"
+
+
+def test_an_http_block_with_no_url_halts_and_says_what_it_takes():
+    """The one required key in any boundary block. Every mqtt key can fall back to the class,
+    because localhost is usually the right broker; there is no guess at all for which website a
+    deployment's data belongs to, so absence is a boot refusal rather than a default."""
+    with pytest.raises(SystemExit) as excinfo:
+        generic.build_data_sink({"kind": "http", "token": "s3cret"})
+    message = str(excinfo.value)
+    assert "url" in message
+    assert "token" in message, "the refusal should list the keys the kind takes"
+
+
+def test_an_http_block_rejects_a_mistyped_key_like_every_other_kind():
+    with pytest.raises(SystemExit) as excinfo:
+        generic.build_data_sink({"kind": "http", "url": "https://x/i", "bearer": "s3cret"})
+    assert "bearer" in str(excinfo.value)
 
 
 def test_keys_left_out_of_a_block_keep_the_classs_own_defaults(tmp_path, monkeypatch):
