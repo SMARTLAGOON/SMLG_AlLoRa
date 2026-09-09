@@ -193,8 +193,16 @@ class Serial_link(Link):
     def rpc(self, request, timeout=None):
         # A fresh request supersedes anything still buffered from a request we already gave up
         # on (the protocol layer retransmits, so a stale reply must not answer the new one).
+        #
+        # This reaches only what has already arrived. A bridge part-way through a `listen` or
+        # an `exchange` has not written its reply yet, so no flush can remove it and it lands
+        # after this one. Catching that is the call id's job, up in the client connector.
         self._flush_input()
         self._port.write(request + self._sentinel)
+        return self._read_frame(timeout)
+
+    def read_reply(self, timeout=None):
+        # Same framing as any other read; what differs is that nothing was sent to prompt it.
         return self._read_frame(timeout)
 
     def read_request(self, timeout=None):

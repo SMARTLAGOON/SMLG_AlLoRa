@@ -8,9 +8,11 @@ reply comes back — the CPython-testable core of the hardware tunnel.
 """
 import threading
 
+from AlLoRa import tunnel_codec
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
 from AlLoRa.Adapters.Adapter import Adapter
+from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Links.Loopback_link import Loopback_link
 from AlLoRa.Codec import V3OpenCodec
 from AlLoRa.Packet_v3 import Packet_v3
@@ -99,6 +101,115 @@ def test_get_rf_config_verb_reads_the_bridge_radio():
         assert conn.get_rf_config() == [868, 7, 125, 1, 14]
     finally:
         _teardown(stop, pump)
+
+
+class _AnswersThePreviousVerb:
+    """A bridge that is still finishing the verb the last client asked for.
+
+    It is not silent and it is not broken: it replies, and the reply is well-formed. It just
+    belongs to an `exchange` that was already running when this half opened the link, so it
+    reaches the RF question as an answer to something else. Flushing cannot prevent it, because
+    those bytes had not been written when the flush ran.
+    """
+
+    def rpc(self, request, timeout=None):
+        return tunnel_codec.encode_exchange_reply(b"\x2a\x00stale", 0.5, "matched")
+
+
+class _SaysNothing:
+
+    def rpc(self, request, timeout=None):
+        return None
+
+
+def test_get_rf_config_falls_back_when_the_bridge_answers_the_previous_verb():
+    conn = Tunnel_connector(link=_AnswersThePreviousVerb())
+    conn.config(CONNCFG)
+    # The reply decodes to None, not to a config. What comes back is this half's own, which is
+    # the same answer the base Connector gives a node whose radio is local.
+    assert conn.get_rf_config() == [868, 7, 125, 1, 14]
+
+
+def test_get_rf_config_falls_back_when_the_bridge_says_nothing():
+    conn = Tunnel_connector(link=_SaysNothing())
+    conn.config(CONNCFG)
+    assert conn.get_rf_config() == [868, 7, 125, 1, 14]
+
+
+def test_an_unlucky_startup_answer_still_leaves_endpoints_resolvable():
+    # The regression this exists for. A node snapshots get_rf_config ONCE and resolves every
+    # endpoint against that snapshot forever, so an empty or absent answer at construction is
+    # not a missed round trip: it is a node that registers endpoints and can never visit one.
+    conn = Tunnel_connector(link=_AnswersThePreviousVerb())
+    conn.config(CONNCFG)
+    endpoint = Digital_Endpoint(name="T")            # states no RF, like a plain roster entry
+    assert endpoint.resolve_rf(conn.get_rf_config()) is True
+    assert endpoint.describe_rf() == "868/SF7/BW125/CR1/14dBm"
+
+
+class _OwesAnOlderAnswer:
+    """A bridge holding a reply to a call this half never made.
+
+    That is the state a bridge is left in whenever the previous client stopped waiting: it was
+    part-way through a window, and it finishes and writes that reply regardless. Here it arrives
+    first, ahead of the answer to the call actually being made.
+    """
+
+    def __init__(self):
+        self.asked = []
+
+    def rpc(self, request, timeout=None):
+        self.asked.append(request)
+        return tunnel_codec.encode_exchange_reply(b"\x2a\x00old", 9.9, "matched", req_id=999)
+
+    def read_reply(self, timeout=None):
+        wanted = tunnel_codec.decode_request(self.asked[-1])[1]["req_id"]
+        return tunnel_codec.encode_get_rf_reply([868, 12, 250, 1, 20], req_id=wanted)
+
+
+def test_a_reply_to_an_earlier_call_is_discarded_and_the_real_answer_taken():
+    link = _OwesAnOlderAnswer()
+    conn = Tunnel_connector(link=link)
+    conn.config(CONNCFG)
+    # Without the id the leftover exchange reply is what `get_rf` would have decoded, and it
+    # carries no `rf` at all. With it, that frame is put aside and the next one is read.
+    assert conn.get_rf_config() == [868, 12, 250, 1, 20]
+
+
+def test_the_bridges_own_readings_reach_the_logic_holder():
+    conn, peer, stop, pump = _tunnel()
+    try:
+        # The bridge measures at its radio; this half has no radio to ask. Stub the far side so
+        # the numbers are recognisable, then read them back through the ordinary accessors.
+        conn._remember_signal(None, None)
+        peer.transmit(b"\x2a\x01yo")
+        wire, td = conn.listen(1.0)
+        assert wire == b"\x2a\x01yo"
+        # A Loopback radio measures nothing, so what crosses is its stub. What is pinned here is
+        # that the reply carries the pair at all and that listen still answers with two values.
+        assert conn.get_rssi() == conn.get_snr() == 0
+    finally:
+        _teardown(stop, pump)
+
+
+def test_nothing_heard_leaves_no_reading_rather_than_a_plausible_one():
+    conn, peer, stop, pump = _tunnel()
+    try:
+        wire, td = conn.listen(0.4)          # an empty window: the peer sends nothing
+        assert wire is None
+        assert conn.get_rssi() is None and conn.get_snr() is None
+    finally:
+        _teardown(stop, pump)
+
+
+def test_a_tunnel_reports_no_reading_before_it_has_heard_anything():
+    # The stub this replaces returned 0 dBm here, which is a reading no LoRa radio takes, and
+    # every Hub on a USB adapter published it as though the link had been measured.
+    conn = Tunnel_connector(link=_SaysNothing())
+    conn.config(CONNCFG)
+    assert conn.get_rssi() is None
+    assert conn.get_snr() is None
+    assert conn.signal_estimation() == 0      # and nothing downstream raises on the absence
 
 
 def test_request_mac_verb_caches_the_bridge_radio_identity():

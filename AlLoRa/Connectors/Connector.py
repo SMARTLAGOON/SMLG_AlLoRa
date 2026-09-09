@@ -410,6 +410,11 @@ class Connector:
     def signal_estimation(self):
         percentage = 0
         rssi = self.get_rssi()
+        # A connector that reports its readings honestly has None for "nothing heard yet", and
+        # there is no strength to estimate from that. Zero percent is the answer, not a crash
+        # and not the full bar that comparing against a missing value would otherwise skip to.
+        if rssi is None:
+            return percentage
         if (rssi >= -50):
             percentage = 100
         elif (rssi <= -50) and (rssi >= -100):

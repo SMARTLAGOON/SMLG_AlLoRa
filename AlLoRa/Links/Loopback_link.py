@@ -31,6 +31,12 @@ class Loopback_link(Link):
         except queue.Empty:
             return None
 
+    def read_reply(self, timeout=None):
+        try:
+            return self._up.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
     def read_request(self, timeout=None):
         try:
             return self._down.get(timeout=timeout)

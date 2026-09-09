@@ -157,6 +157,10 @@ class Adapter:
         request = self.link.read_request(timeout=timeout)
         if request is None:
             return False
+        # Read outside the try so a request that fails to dispatch is still answered under its
+        # own number. An error reply the client cannot place is one it has to discard, which
+        # would leave it waiting out the whole deadline for an answer that already came.
+        req_id = tunnel_codec.reply_id(request)
         try:
             verb, args = tunnel_codec.decode_request(request)
             self._dispatch(verb, args)
@@ -164,31 +168,51 @@ class Adapter:
             if self.debug:
                 print("Adapter error: {}".format(e))
             # Reply so a client rpc never blocks forever on a malformed/failed request.
-            self.link.write_reply(tunnel_codec.encode_bool_reply(False))
+            self.link.write_reply(tunnel_codec.encode_bool_reply(False, req_id=req_id))
         return True
 
+    def _signal(self, received):
+        """What the radio measured on the frame it just took, or (None, None) if it took none.
+
+        Asked here, immediately after the verb, because these are properties of the last frame
+        received and the next verb overwrites them. A window that heard nothing has nothing to
+        report, and saying so is the point: a number invented for that case is indistinguishable
+        downstream from a node that is genuinely being heard.
+        """
+        if not received:
+            return None, None
+        return self.connector.get_rssi(), self.connector.get_snr()
+
     def _dispatch(self, verb, args):
+        req_id = args.get("req_id")
         if verb == tunnel_codec.TRANSMIT:
             ok = self.connector.transmit(args["wire"])
-            self.link.write_reply(tunnel_codec.encode_bool_reply(ok))
+            self.link.write_reply(tunnel_codec.encode_bool_reply(ok, req_id=req_id))
         elif verb == tunnel_codec.LISTEN:
             wire, td = self.connector.listen(args["window"])
-            self.link.write_reply(tunnel_codec.encode_listen_reply(wire, td))
+            rssi, snr = self._signal(wire)
+            self.link.write_reply(
+                tunnel_codec.encode_listen_reply(wire, td, rssi=rssi, snr=snr, req_id=req_id))
         elif verb == tunnel_codec.EXCHANGE:
             reply, td, status = self.connector.exchange(
                 args["wire"], args["window"], _PrefixMatch(args["match_prefix"]))
-            self.link.write_reply(tunnel_codec.encode_exchange_reply(reply, td, status))
+            rssi, snr = self._signal(reply)
+            self.link.write_reply(
+                tunnel_codec.encode_exchange_reply(reply, td, status, rssi=rssi, snr=snr,
+                                                   req_id=req_id))
         elif verb == tunnel_codec.SET_RF:
             ok = self.connector.change_rf_config(
                 frequency=args.get("freq"), sf=args.get("sf"), bw=args.get("bw"),
                 cr=args.get("cr"), tx_power=args.get("tx"))
-            self.link.write_reply(tunnel_codec.encode_bool_reply(bool(ok)))
+            self.link.write_reply(tunnel_codec.encode_bool_reply(bool(ok), req_id=req_id))
         elif verb == tunnel_codec.GET_RF:
-            self.link.write_reply(tunnel_codec.encode_get_rf_reply(self.connector.get_rf_config()))
+            self.link.write_reply(
+                tunnel_codec.encode_get_rf_reply(self.connector.get_rf_config(), req_id=req_id))
         elif verb == tunnel_codec.GET_MAC:
-            self.link.write_reply(tunnel_codec.encode_get_mac_reply(self.connector.get_mac()))
+            self.link.write_reply(
+                tunnel_codec.encode_get_mac_reply(self.connector.get_mac(), req_id=req_id))
         else:
-            self.link.write_reply(tunnel_codec.encode_bool_reply(False))
+            self.link.write_reply(tunnel_codec.encode_bool_reply(False, req_id=req_id))
 
     # --- who is watching -------------------------------------------------------------------
 
