@@ -16,9 +16,16 @@ DataSource's name.
 9600 baud, and `check()` is called from the serve loop the radio shares, where nothing may
 block. So there is no "read a file" call here: there is a state machine that consumes whatever
 bytes have arrived, does a bounded amount of work, and returns. It can be stopped between any
-two bytes and picked up on the next round. The v2 code this replaces was a single blocking
-`while True` with 2000 ms port timeouts inside it, which is why it could only ever run on its
-own thread.
+two bytes and picked up on the next round.
+
+**What this changed from the earlier version, stated as a trade rather than a verdict.** The
+code it replaces was a single blocking `while True` with 2000 ms port timeouts, run on its own
+thread. That was deliberate and it worked: it ran in the field for about a year, and because
+the read had a thread to block in, the cable moved at the speed of the wire rather than at one
+handover per radio round. What the cooperative shape buys instead is a partial arrival that
+survives a restart, no thread stack on the board's heap, a source that runs on targets with no
+`_thread` at all, and a failure path that runs when a transfer fails. What it costs is
+throughput per turn, which is why `link_chunk_size` here is worth more than the baud rate.
 
 **A partial arrival is never a queued file.** The bytes land under a `.tmp`, which the queue's
 own rules already exclude from the directory it reads and delete on the next boot, and the

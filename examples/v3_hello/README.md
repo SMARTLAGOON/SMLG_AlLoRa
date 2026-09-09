@@ -16,9 +16,9 @@ Start at the top and stop when you have what you need.
 
 Beside them, [`pro/`](pro) is not a fourth posture: it is the `open/` pair with the board's
 screen, card and LED switched on through a `device` block, and that block drops into any of the
-three unchanged. [`gps/`](gps) is not one either: it is a `pro` Edge whose files arrive from a
-Raspberry Pi over a cable rather than from its own code, which is the rig this repository's
-serial `DataSource` was written for.
+three unchanged. [`serial/`](serial) is not one either: it is a `pro` Edge whose files arrive from
+a producer on the other end of a cable rather than from its own code, which is what this
+repository's serial `DataSource` was written for.
 
 ## One program, six configs
 
@@ -75,7 +75,7 @@ over a UART while the board keeps the protocol and the radio.
 ```
 
 It is the disk outbox with something else filling it, so it takes every `disk` key as well and
-reads the same top-level `queue_path`. [`gps/`](gps) has the whole deployment and the wire it
+reads the same top-level `queue_path`. [`serial/`](serial) has every key and the wire it
 speaks. Worth keeping straight: this moves **files**, and a Serial *connector* moves **packets**.
 The same cable can carry either, and which one you want depends on which end holds the protocol.
 
