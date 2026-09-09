@@ -81,6 +81,23 @@ mirrors the change and the two finish on different radio configurations. It also
 replay counter as an empty file that reads back as zero on the next boot. Reflash any board
 carrying it.
 
+This freeze is the first where **the tunnel numbers its calls and carries the radio's readings**.
+A reply used to say nothing about what it answered, so the client assumed the next frame up
+belonged to the last frame down. A bridge blocks at its radio for up to `max_timeout`, so a bridge
+left mid-verb by a client that died finishes and writes that reply afterwards, where it lands
+against the next call. Between two different verbs that is loud: the Hub reads a `listen` reply as
+an RF config, snapshots `None`, and every endpoint then raises `'NoneType' object is not iterable`.
+The service stays `active (running)` with zero restarts and collects nothing, which is a gateway
+that looks perfect and is deaf. Between two `exchange` calls it does not surface at all: the wrong
+chunk is simply accepted. Every request now carries `"i"` and every reply echoes it. The same
+change brings `rssi` and `snr` home on the `listen` and `exchange` replies, which the bridge always
+measured and never sent, so a Hub on a USB adapter reported 0 dBm for hardware it heard perfectly.
+An un-numbered reply is still accepted, deliberately, because that is what a board flashed before
+this build sends and the fleet is reflashed one board at a time. Both halves are in
+`AlLoRa/tunnel_codec.py`, `AlLoRa/Adapters/Adapter.py` and `AlLoRa/Links/`, which only a bridge
+board freezes and runs, and none of it reaches such a board any way but a rebuild. This paragraph
+is the trigger for one.
+
 ## Adding a target (new device or new modem)
 
 1. If it's a **new modem**, vendor its driver under `drivers/<name>/` (pin the exact version).
