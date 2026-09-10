@@ -159,15 +159,30 @@ class Hub(Node):
     def add_digital_endpoints(self, path):
         """Register the active endpoints listed in a Nodes.json-shaped file.
 
+        Reading the same file twice registers each endpoint once: entries this Hub already
+        holds are skipped, matched by the same off-air label the file itself is keyed by. It
+        used to append everything it read, so a second read to pick up one new Edge duplicated
+        every endpoint already held, and each copy was then polled in its own right, spending a
+        listening window on a node that already had one and landing its files twice. That makes
+        this the verb a running Hub gains an endpoint through.
+
+        The endpoints already held are kept, never rebuilt, because an endpoint object carries
+        the live half: the reassembly in progress and the state machine driving it. A rebuild to
+        gain a neighbour would drop a part-received file, which on a slow link is hours of
+        airtime. It follows that a changed value on an entry already held is NOT applied here;
+        that is a roster change, and it belongs to the reconcile path rather than to a re-read.
+
         Returns how many endpoints the Hub holds afterwards, or False if the file could not
         be read (an absent or malformed file leaves the Hub running with nothing to poll)."""
         try:
             with open(path, "r") as f:
                 nodes_config = loads(f.read())
+            held = set(ep.get_label() for ep in self.digital_endpoints)
             for node in nodes_config:
-                if node['active']:
+                if node['active'] and label_for_config(node) not in held:
                     active_node = Digital_Endpoint(node)
                     self.digital_endpoints.append(active_node)
+                    held.add(active_node.get_label())
                     if self.debug:
                         print("Node {} ({}) added with frequency {}s and listening time {}s.".format(
                             active_node.get_name(), active_node.get_label(),
@@ -227,6 +242,7 @@ class Hub(Node):
                 sleep(self.NEXT_ACTION_TIME_SLEEP)
                 continue
             pass_start = time()
+            self._sync_schedule(next_visit, pass_start)
             for endpoint in sorted(self.digital_endpoints,
                                    key=lambda ep: ticks_diff(next_visit[ep.get_label()],
                                                              pass_start)):
@@ -246,6 +262,36 @@ class Hub(Node):
                         # starve every other endpoint of the channel.
                         next_visit[label] = ticks_add(time(), endpoint.asking_frequency * 1000)
                 sleep(self.NEXT_ACTION_TIME_SLEEP)
+
+    def _sync_schedule(self, next_visit, now):
+        """Bring the visit schedule into line with the endpoints currently held.
+
+        The collection is not frozen while the loop runs: a roster reload, or an operator
+        enabling a node, adds to it between visits. So the schedule is reconciled at the top of
+        every pass rather than built once at loop entry. Built once, it was then indexed inside
+        the sort key, which sits OUTSIDE the try that guards a visit, so an endpoint that
+        arrived after entry raised KeyError there and killed the whole loop. Dropping one was
+        free and putting one back was not, which is the wrong way round for a pair of buttons
+        that exist to disable and re-enable.
+
+        An endpoint that arrived is due now, exactly as every endpoint is at boot. One that left
+        takes its deadline with it, so returning means being due now rather than serving out an
+        interval set before it was removed: a node polled every five minutes, disabled and
+        switched straight back on would otherwise stay silent for the rest of the old interval
+        while the operator reads a page saying it is on. Dropping it also stops the map growing
+        for the life of the process.
+        """
+        for endpoint in self.digital_endpoints:
+            next_visit.setdefault(endpoint.get_label(), now)
+        # Every held label is now in the map, so a size mismatch is the only thing that can mean
+        # a deadline outlived its endpoint. Checked before building anything, because this runs
+        # on every pass for the life of the node and the usual answer is no.
+        if len(next_visit) == len(self.digital_endpoints):
+            return
+        held = [ep.get_label() for ep in self.digital_endpoints]
+        for label in list(next_visit):
+            if label not in held:
+                del next_visit[label]
 
     def check_digital_endpoints(self, print_file_content=False, save_files=False, timeout=None):
         """Deprecated name for `run()`, kept so fielded main.py files call it unchanged.

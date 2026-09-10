@@ -122,6 +122,49 @@ def test_a_hub_with_no_nodes_file_registers_nothing_and_still_builds(tmp_path):
     assert hub.digital_endpoints == []
 
 
+def test_re_reading_the_roster_registers_each_endpoint_once(tmp_path):
+    # Registration appended every active entry it read, so the second read of a file to pick up
+    # one new Edge duplicated every endpoint already held. Each copy is then polled in its own
+    # right: the same node gets two listening windows a round, and its files land twice.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1"), _node("edge-b", "b1b1b1b1")])
+
+    hub.add_digital_endpoints(hub.nodes_file)
+
+    assert [ep.get_name() for ep in hub.digital_endpoints] == ["edge-a", "edge-b"]
+
+
+def test_re_reading_a_grown_roster_gains_only_the_new_endpoint(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    _write_nodes(hub.nodes_file, [_node("edge-a", "a1a1a1a1"), _node("edge-b", "b1b1b1b1")])
+
+    hub.add_digital_endpoints(hub.nodes_file)
+
+    assert [ep.get_name() for ep in hub.digital_endpoints] == ["edge-a", "edge-b"]
+    assert sorted(hub.status["Digital_Endpoints"]) == ["a1a1a1a1", "b1b1b1b1"]
+
+
+def test_a_roster_reload_leaves_a_transfer_already_in_flight_alone(tmp_path):
+    # Why the endpoints already held are kept rather than rebuilt from the file: an endpoint
+    # object carries the live half of the deployment, the reassembly in progress and the state
+    # machine driving it. Rebuilding one to gain a neighbour would throw away a file that is
+    # part way there, and on a slow link that can be hours of airtime.
+    class _PartialFile:
+        def get_missing_chunks(self):
+            return [7]
+
+        def discard(self):
+            raise AssertionError("a reload must not discard the file in flight")
+
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    in_flight = _PartialFile()
+    hub.digital_endpoints[0].set_current_file(in_flight)
+    _write_nodes(hub.nodes_file, [_node("edge-a", "a1a1a1a1"), _node("edge-b", "b1b1b1b1")])
+
+    hub.add_digital_endpoints(hub.nodes_file)
+
+    assert hub.digital_endpoints[0].get_current_file() is in_flight
+
+
 def test_set_digital_endpoints_replaces_the_collection_and_its_status_map(tmp_path):
     hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
 
@@ -262,6 +305,62 @@ def test_run_publishes_each_endpoints_reception_info_to_subscribers(tmp_path, cl
 
     assert seen, "a visit must push the endpoint map to subscribers"
     assert "a1a1a1a1" in seen[-1]
+
+
+# --- the collection changes while the loop runs -------------------------------------------
+#
+# A running Hub's endpoint collection is not frozen: a roster reload, or an operator enabling a
+# node from outside, changes it between visits. The schedule was built once at loop entry and
+# then indexed inside the sort key, which sits outside the `try` that guards a visit, so an
+# endpoint that arrived after entry raised KeyError and took the whole loop down with it.
+# Dropping one was free; putting one back was not, which is the wrong way round for a pair of
+# buttons whose whole purpose is disable and re-enable.
+
+def test_an_endpoint_that_arrives_mid_loop_is_visited_rather_than_killing_the_loop(tmp_path,
+                                                                                   clock):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=10,
+                                     listening_time=1)])
+    visits = []
+    newcomer = Digital_Endpoint(config=_node("edge-b", "b1b1b1b1", asking_frequency=10,
+                                             listening_time=1))
+
+    def arrive(_endpoint):
+        if len(hub.digital_endpoints) == 1:
+            hub.set_digital_endpoints(hub.digital_endpoints + [newcomer])
+
+    _record_visits(hub, clock, visits, on_visit=arrive)
+
+    hub.run(timeout=60)
+
+    assert "edge-b" in {name for name, _ in visits}
+
+
+def test_an_endpoint_that_leaves_and_returns_is_due_again_rather_than_on_its_old_deadline(
+        tmp_path, clock):
+    # Disable then re-enable is the pair of buttons this whole path exists for, and a deadline
+    # that outlives the endpoint makes the second button do nothing visible: a node polled every
+    # five minutes, disabled for ten seconds and switched back on would sit silent for the rest
+    # of its old interval, with the operator watching a page that says it is on.
+    hub = _make_hub(tmp_path, [_node("keeper", "a1a1a1a1", asking_frequency=5,
+                                     listening_time=1),
+                               _node("flapper", "b1b1b1b1", asking_frequency=300,
+                                     listening_time=1)])
+    keeper, flapper = hub.digital_endpoints
+    visits = []
+
+    def flap(_endpoint):
+        keeper_visits = [name for name, _ in visits].count("keeper")
+        if keeper_visits == 2 and flapper in hub.digital_endpoints:
+            hub.set_digital_endpoints([keeper])
+        elif keeper_visits == 4 and flapper not in hub.digital_endpoints:
+            hub.set_digital_endpoints([keeper, flapper])
+
+    _record_visits(hub, clock, visits, on_visit=flap)
+
+    hub.run(timeout=120)
+
+    # Once on entry, once on its return. Not once in total, which is what a stale deadline gives.
+    assert [name for name, _ in visits].count("flapper") == 2
 
 
 # --- the names that used to hold all of this ----------------------------------------------
