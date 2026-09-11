@@ -69,7 +69,8 @@ class Hub(Node):
                  session_recovery_after=3,
                  control_root=None,
                  control_counter_file=None,
-                 control_actuator=None):
+                 control_actuator=None,
+                 management_source=None):
         super().__init__(connector, config_file,
                          debug_hops=debug_hops,
                          max_sleep_time=max_sleep_time,
@@ -153,6 +154,28 @@ class Hub(Node):
         if control_counter_file:
             self.control_counter_file = control_counter_file
         self._control_counter = self._load_control_counter()
+        # The management plane: what somebody elsewhere wants this Hub to be running. It is
+        # ONE slot holding the newest wish, because this is desired state and not a queue of
+        # events, and it has two fillers: an API thread calls submit_intent from outside the
+        # loop on an SBC, and on a board the loop pumps the boundary itself between visits.
+        # Nothing here crosses the radio; see Management_Source.
+        self._intent = None
+        self.management_source = None
+        # Whether this Hub is polling at all. Desired state like everything else, so it is
+        # remembered: coming back live after a power cut, while somebody has the antenna in
+        # their hand, is the failure the button exists to prevent.
+        self.paused = False
+        # An imperative does not reconcile, so it is not modelled as one. The wish carries a
+        # generation per one-shot and this is what has been acted through, persisted for the
+        # same reason the control counter is: at-most-once that a reboot resets is not
+        # at-most-once. What a one-shot DOES is the deployment's to say, never the library's.
+        self._acted = {}
+        self._one_shot_actions = {}
+        self.management_state_file = self.config.get('management_state_file',
+                                                     'management.state')
+        self._load_management_state()
+        if management_source is not None:
+            self.set_management_source(management_source)
 
     # --- the endpoints this Hub holds -----------------------------------------------------
 
@@ -209,6 +232,15 @@ class Hub(Node):
         # is exactly what you want to read before wondering why one of them is silent.
         for endpoint in self.digital_endpoints:
             self.resolve_endpoint_rf(endpoint)
+        self._refresh_status_map()
+
+    def _refresh_status_map(self):
+        # Rebuild only what subscribers read. Kept apart from registration because losing an
+        # endpoint is the one change to the collection that needs nothing else done: removing
+        # a peer cannot create a session-id clash among the ones left, and it cannot leave an
+        # endpoint's RF unresolved. What it must not do is disturb a survivor's session id,
+        # because every per-sid thing this Hub holds is keyed by it: a queued downlink, a live
+        # secure session, an RF trial part way through.
         self.status["Digital_Endpoints"] = {ep.get_label(): ep.file_reception_info
                                             for ep in self.digital_endpoints}
 
@@ -239,6 +271,10 @@ class Hub(Node):
 
         while end_time is None or ticks_diff(end_time, time()) > 0:
             if not self.digital_endpoints:
+                # A Hub with nothing to poll still has to be able to hear its instructions.
+                # Without this the idle branch spins forever, and a fleet emptied by a disable,
+                # or one whose roster has not arrived yet, could never be told anything again.
+                self._drain_management()
                 sleep(self.NEXT_ACTION_TIME_SLEEP)
                 continue
             pass_start = time()
@@ -248,8 +284,20 @@ class Hub(Node):
                                                              pass_start)):
                 if end_time is not None and ticks_diff(end_time, time()) <= 0:
                     return
+                # The safe boundary, and it is here rather than once a pass on purpose. What
+                # a change waits for is the visit in progress, which is one listening window,
+                # seconds to a few minutes; once a pass would make it wait for every other
+                # endpoint's window too, which on a gateway is the difference between a button
+                # that responds and one that appears not to work. It is never inside a visit,
+                # because there the wait is a whole file and a busy node can hold a partial
+                # one for hours.
+                self._drain_management()
                 label = endpoint.get_label()
-                if ticks_diff(time(), next_visit[label]) >= 0:
+                # Paused stops the polling and nothing else: the drain above still runs, so a
+                # resume is picked up here, and every endpoint is then overdue and polled at
+                # once rather than serving out an interval set before the pause.
+                if not self.paused and ticks_diff(time(), next_visit[label]) >= 0 \
+                        and endpoint in self.digital_endpoints:
                     try:
                         self._visit(endpoint, print_file_content, save_files)
                     except Exception as e:
@@ -325,6 +373,261 @@ class Hub(Node):
                                 print_file=print_file_content, save_file=save_files,
                                 stall_timeout=digital_endpoint.stall_timeout)
         self.update_subscribers(digital_endpoint)
+
+    # --- what this Hub should be running --------------------------------------------------
+    #
+    # Somebody elsewhere holds the wish; this Hub holds what is actually running. It reports
+    # the second and applies the difference, so "applied" is an observation rather than a
+    # message: nothing is delivered, nothing is acknowledged, and a change that gets lost
+    # keeps not matching and goes out again. That is what makes the loop self-healing with no
+    # bookkeeping, and it is the only shape that survives a second editor, because an
+    # acknowledgement belongs to whoever asked.
+    #
+    # None of it crosses the radio. `active`, the four timing values and a node's name are
+    # read by this Hub alone, out of the Nodes.json entry behind each Digital_Endpoint; an
+    # Edge never learns any of them, and nothing about them reaches the air. So this is not
+    # the signed control path and shares nothing with it: not a word, not a table, not a check.
+
+    # What a wish may say about one node, and every one of them is the Hub's own business. The
+    # four timing values are the visit cadence and are set on the endpoint object that is
+    # already there; `active` is not one of them, because it decides whether there is an
+    # endpoint object at all.
+    _TIMING_FIELDS = ("asking_frequency", "listening_time",
+                      "lock_on_file_receive", "stall_timeout")
+    _ROSTER_FIELDS = ("active",) + _TIMING_FIELDS
+
+    def set_management_source(self, source):
+        """Plug in the boundary this Hub learns its desired state from.
+
+        Brought up here, at registration, for the same reason a downlink source is: a connect
+        that must fail should fail at setup, loudly, and not part way through a drive loop.
+        Replaces any previous source, so register before anything is expected to arrive.
+        """
+        source.prepare()
+        self.management_source = source
+
+    def submit_intent(self, intent):
+        """Hand this Hub the newest desired state, from outside the loop.
+
+        The other filler of the same slot: an API thread on an SBC calls this, while on a
+        board with no thread to spare the loop pumps the boundary itself. Latest wins, because
+        this is state and not a queue of events, and nothing expires, because a Hub that comes
+        back after a week should pick up what was decided a month ago.
+        """
+        self._intent = intent
+
+    def register_one_shot(self, name, action):
+        """Say what this box can actually do when the wish asks for it once, by name.
+
+        The library holds the counting and none of the doing. What "reset the adapter" means
+        is a property of the box the Hub runs on, and a table of blessed actions inside AlLoRa
+        would start deciding which deployments are legal, exactly as a table of boundary kinds
+        would. A name nothing is registered for is simply not done, and not recorded as done.
+        """
+        self._one_shot_actions[name] = action
+
+    def management_report(self):
+        """What this Hub is actually running, for whoever holds the wish to compare against.
+
+        Only what is held: an endpoint the roster marks inactive is not an endpoint, and the
+        holder of the wish is the one place that already knows it exists. It is deliberately
+        not the status snapshot, which is an impression of one moment dropped freely every
+        couple of seconds; settings are state, and putting them on that tick would spend
+        payload and heap on values that change once a month.
+        """
+        return {
+            "paused": self.paused,
+            # Held means polled, so `active` is true by construction here. Stated anyway
+            # rather than implied, because the reader is comparing it against a wish that
+            # spells it, and a field that is present in one and absent in the other is a
+            # difference somebody has to write code to ignore.
+            "nodes": {ep.get_label(): {"name": ep.get_name(), "active": True,
+                                       "asking_frequency": ep.asking_frequency,
+                                       "listening_time": ep.listening_time,
+                                       "lock_on_file_receive": ep.lock_on_file_receive,
+                                       "stall_timeout": ep.stall_timeout}
+                      for ep in self.digital_endpoints},
+            "one_shots": dict(self._acted),
+            "config_file": self.config_file,
+            "nodes_file": self.nodes_file,
+        }
+
+    def _drain_management(self):
+        """Read the boundary, take the newest wish, and apply it. Called between visits only.
+
+        The report goes out before the ask, and in the same call, because the two are one
+        exchange: this is what I am running, and the answer is what I should be. A source that
+        had to fetch the report would need a reference back to the node, which is the coupling
+        every other boundary in the library is shaped to avoid.
+        """
+        source = self.management_source
+        if source is not None:
+            source.report(self.management_report())
+            # Never an inline request on a host: a stalled site would otherwise put its whole
+            # timeout between two radio exchanges. The subclass decides; the loop only pumps.
+            source.check()
+            intent = source.take_intent()
+            if intent is not None:
+                self.submit_intent(intent)
+        intent = self._intent
+        self._intent = None
+        if intent is not None:
+            self._apply_intent(intent)
+
+    def _apply_intent(self, intent):
+        # Pause first, so a wish that pauses the Hub and moves the roster in one breath has
+        # stopped the polling before the roster moves under it.
+        if "paused" in intent:
+            self._apply_pause(bool(intent["paused"]))
+        nodes = intent.get("nodes")
+        if nodes:
+            self._apply_roster(nodes)
+        one_shots = intent.get("one_shots")
+        if one_shots:
+            self._run_one_shots(one_shots)
+
+    def _apply_pause(self, paused):
+        if paused == self.paused:
+            return
+        self.paused = paused
+        self._save_management_state()
+        if self.debug:
+            print("Hub: {} by the management plane".format("paused" if paused else "resumed"))
+
+    def _apply_roster(self, nodes):
+        """Bring the roster into line with a wish, keyed by the off-air label.
+
+        The file is written first because it is what the next re-read, and the next boot, will
+        believe; then the endpoints already held are moved to match. Held endpoints are never
+        rebuilt from the file: an endpoint object carries the reassembly in progress and the
+        state machine driving it, and on a slow link a part-received file is hours of airtime.
+        Gaining one runs back through `add_digital_endpoints`, which is idempotent and is
+        already the verb a running Hub gains an endpoint through.
+        """
+        self._overlay_roster(nodes)
+        held = {ep.get_label(): ep for ep in self.digital_endpoints}
+        retired = False
+        for label, wish in nodes.items():
+            endpoint = held.get(label)
+            if endpoint is None:
+                continue
+            for field in Hub._TIMING_FIELDS:
+                if field in wish:
+                    setattr(endpoint, field, wish[field])
+            if wish.get("active") is False:
+                self._retire_endpoint(endpoint)
+                retired = True
+        if retired:
+            self._refresh_status_map()
+        if self.nodes_file and any(wish.get("active") and label not in held
+                                   for label, wish in nodes.items()):
+            self.add_digital_endpoints(self.nodes_file)
+
+    def _retire_endpoint(self, endpoint):
+        # Dropping the object is not enough: a reassembly in flight holds an open writer and a
+        # temp file that nothing else will ever close, and on a board the descriptor table is
+        # tiny. Releasing it also loses the partial, which is correct here and only here: an
+        # operator asked for this node to stop being polled, which a pause deliberately does not.
+        endpoint.set_current_file(None)
+        self.digital_endpoints.remove(endpoint)
+        if self.debug:
+            print("Hub: endpoint {} ({}) disabled by the management plane".format(
+                endpoint.get_name(), endpoint.get_label()))
+
+    def _overlay_roster(self, nodes):
+        """Write the wish into the roster file, one entry at a time, changing nothing else.
+
+        Overlaid and never rebuilt from the live endpoints, the same rule the RF write-back
+        follows and for the same two reasons: an entry carries keys this node does not model,
+        and the inactive entries never become endpoints at all, so a rebuild would delete
+        outright the very records a re-enable has to find again.
+
+        A label the file does not carry is left alone rather than added. One document can
+        describe a whole fleet, and a Hub answers only for the nodes that are its own.
+        """
+        if not self.nodes_file:
+            return          # a roster assembled in code has no file to write the wish into
+        try:
+            with open(self.nodes_file, "r") as f:
+                roster = loads(f.read())
+            changed = False
+            for entry in roster:
+                wish = nodes.get(label_for_config(entry))
+                if not wish:
+                    continue
+                for field in Hub._ROSTER_FIELDS:
+                    if field in wish and entry.get(field) != wish[field]:
+                        entry[field] = wish[field]
+                        changed = True
+            if changed:
+                self._commit_json(self.nodes_file, roster)
+        except Exception as e:
+            # A roster that cannot be read or written leaves the Hub applying the change to
+            # what it holds, which is still correct until the next restart. Losing the poll
+            # loop over a bookkeeping write would be the worse trade.
+            print("Hub: could not write the roster change to {} ({})".format(
+                self.nodes_file, e))
+
+    def _run_one_shots(self, one_shots):
+        """Act on the imperatives in a wish, at most once each, counted by generation.
+
+        The wish says "reset generation 7"; this Hub has acted through 6, so it acts once and
+        records 7. No second concept and no second table: an event that cannot reconcile is
+        still desired state, it just carries a number.
+        """
+        for name, generation in one_shots.items():
+            if not isinstance(generation, int) or generation <= self._acted.get(name, 0):
+                continue
+            action = self._one_shot_actions.get(name)
+            if action is None:
+                # Nothing on this box knows how to do it, so nothing is recorded as done. The
+                # wish then keeps not matching and stays visible, which is the whole value of
+                # reconciling, and it runs by itself the moment something can do it.
+                print("Hub: nothing is registered for the one-shot '{}'".format(name))
+                continue
+            # Recorded BEFORE it runs, which is what makes this at-most-once rather than
+            # at-least-once. Losing power in the window between means the imperative is
+            # skipped and the repair is asking again, one number higher; recording afterwards
+            # would mean a reset repeating on every boot until the write landed, and a reset
+            # is not always harmless to repeat.
+            self._acted[name] = generation
+            self._save_management_state()
+            try:
+                action()
+            except Exception as e:
+                print("Hub: the one-shot '{}' failed ({})".format(name, e))
+
+    def _load_management_state(self):
+        """Read back what this Hub was last told, or leave it live and having done nothing.
+
+        A file that is absent or unreadable is a Hub that comes back live, which is the same
+        answer a Hub that was never told anything gives, and it is the safe direction: the
+        failure this remembers is coming back live while somebody has the antenna in hand, and
+        that only arises for a Hub that was actually paused.
+        """
+        if not self.management_state_file:
+            return
+        try:
+            with open(self.management_state_file, "r") as f:
+                state = loads(f.read())
+        except Exception:
+            return
+        self.paused = bool(state.get("paused", False))
+        acted = state.get("acted")
+        if isinstance(acted, dict):
+            self._acted = {name: n for name, n in acted.items() if isinstance(n, int)}
+
+    def _save_management_state(self):
+        if not self.management_state_file:
+            return
+        try:
+            # Committed through a rename like the config files: a truncated file reads back as
+            # a Hub that was never paused and never acted, so a power cut during the write
+            # would both un-pause a paused Hub and re-run every imperative it had already done.
+            self._commit_json(self.management_state_file,
+                              {"paused": self.paused, "acted": self._acted})
+        except Exception as e:
+            print("Hub: could not persist the management state ({})".format(e))
 
     def set_downlink_source(self, digital_endpoint, datasource):
         """Plug a live input boundary (e.g. an MQTT_DataSource) as this Edge's downlink:
