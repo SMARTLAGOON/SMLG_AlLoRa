@@ -8,7 +8,7 @@ identically, so it is a sibling by construction rather than by analogy.
 **It is not a control boundary, and the distinction is the whole design.** A *command* changes
 what a node is: it crosses the LoRa link, carries a control type, is signed by the control root
 and is checked by the verify gate. A *roster change* changes what a **Hub** does: `active`, the
-four timing values and a node's name are read by the Hub alone, out of the `Nodes.json` entry
+timing values and a node's name are read by the Hub alone, out of the `Nodes.json` entry
 behind each `Digital_Endpoint`, and an Edge never learns any of them. Nothing here reaches the
 air, so none of the trust model applies to it, and a design that treated the two as one concept
 would inherit a downlink requirement it does not have.

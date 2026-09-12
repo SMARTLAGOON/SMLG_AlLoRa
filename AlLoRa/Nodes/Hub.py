@@ -389,12 +389,17 @@ class Hub(Node):
     # the signed control path and shares nothing with it: not a word, not a table, not a check.
 
     # What a wish may say about one node, and every one of them is the Hub's own business. The
-    # four timing values are the visit cadence and are set on the endpoint object that is
-    # already there; `active` is not one of them, because it decides whether there is an
-    # endpoint object at all.
-    _TIMING_FIELDS = ("asking_frequency", "listening_time",
-                      "lock_on_file_receive", "stall_timeout")
-    _ROSTER_FIELDS = ("active",) + _TIMING_FIELDS
+    # timing values are the visit cadence, `max_listen_time_when_locked` among them because it
+    # bounds the extra window `lock_on_file_receive` opens, and a lock that can be switched on
+    # from outside with no say in its length is half a control. `name` is a label for people,
+    # which a node is neither addressed nor filed by (`get_label()` derives that from the
+    # device_id or the MAC), so a rename moves no folder and reaches no transfer in flight. All
+    # of them are set on the endpoint object that is already there. `active` is not one of
+    # them, because it decides whether there is an endpoint object at all.
+    _TIMING_FIELDS = ("asking_frequency", "listening_time", "lock_on_file_receive",
+                      "max_listen_time_when_locked", "stall_timeout")
+    _ENDPOINT_FIELDS = _TIMING_FIELDS + ("name",)
+    _ROSTER_FIELDS = ("active",) + _ENDPOINT_FIELDS
 
     def set_management_source(self, source):
         """Plug in the boundary this Hub learns its desired state from.
@@ -445,6 +450,8 @@ class Hub(Node):
                                        "asking_frequency": ep.asking_frequency,
                                        "listening_time": ep.listening_time,
                                        "lock_on_file_receive": ep.lock_on_file_receive,
+                                       "max_listen_time_when_locked":
+                                           ep.max_listen_time_when_locked,
                                        "stall_timeout": ep.stall_timeout}
                       for ep in self.digital_endpoints},
             "one_shots": dict(self._acted),
@@ -511,7 +518,7 @@ class Hub(Node):
             endpoint = held.get(label)
             if endpoint is None:
                 continue
-            for field in Hub._TIMING_FIELDS:
+            for field in Hub._ENDPOINT_FIELDS:
                 if field in wish:
                     setattr(endpoint, field, wish[field])
             if wish.get("active") is False:

@@ -1,7 +1,7 @@
 """A Hub is told what it should be running, and reports what it is.
 
 The library half of the management plane. Nothing here crosses the LoRa link: `active`, the
-four timing values and a node's name are read by the Hub alone, out of the `Nodes.json` entry
+timing values and a node's name are read by the Hub alone, out of the `Nodes.json` entry
 behind each `Digital_Endpoint`, and an Edge never learns any of them. That is the whole reason
 this feature is not blocked on a downlink, and it is why the boundary exists on a Hub and on
 nothing else.
@@ -294,7 +294,7 @@ def test_a_node_disabled_and_re_enabled_is_registered_once(tmp_path):
     assert [ep.get_name() for ep in hub.digital_endpoints] == ["flapper"]
 
 
-# --- the four timing values -------------------------------------------------------------------
+# --- the timing values -------------------------------------------------------------------
 
 def test_a_new_listening_time_is_used_by_the_very_next_visit(tmp_path, clock):
     hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=1,
@@ -332,10 +332,11 @@ def test_a_timing_change_does_not_rebuild_the_endpoint_that_holds_the_transfer(t
     assert endpoint.asking_frequency == 30
 
 
-def test_all_four_timing_values_are_applied_and_written_down(tmp_path):
+def test_every_timing_value_is_applied_and_written_down(tmp_path):
     hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
     wish = {"asking_frequency": 15, "listening_time": 8,
-            "lock_on_file_receive": True, "stall_timeout": 12}
+            "lock_on_file_receive": True, "stall_timeout": 12,
+            "max_listen_time_when_locked": 240}
 
     hub.submit_intent({"nodes": {"a1a1a1a1": wish}})
     hub._drain_management()
@@ -346,6 +347,67 @@ def test_all_four_timing_values_are_applied_and_written_down(tmp_path):
     entry = _entry(hub, "a1a1a1a1")
     for field, value in wish.items():
         assert entry[field] == value, field
+
+
+def test_the_locked_window_a_wish_sets_is_the_one_the_next_visit_grants(tmp_path, clock):
+    # The field is only worth setting from outside if it bounds the extra window the lock
+    # actually opens. A node left mid-file gets that window on the spot, so a wish that
+    # changed the number and did not reach this call would be a control that says it did.
+    class _PartialFile:
+        def get_missing_chunks(self):
+            return [7]
+
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=1,
+                                     listening_time=3, lock_on_file_receive=True,
+                                     max_listen_time_when_locked=300)])
+    hub.digital_endpoints[0].set_current_file(_PartialFile())
+    visits = []
+    _record_visits(hub, clock, visits)
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"max_listen_time_when_locked": 45}}})
+    hub.run(timeout=10)
+
+    assert visits[0] == ("edge-a", 3), "the ordinary visit is unchanged"
+    assert visits[1] == ("edge-a", 45), "the locked window is the one the wish asked for"
+
+
+def test_a_rename_is_applied_and_written_down(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"name": "mast-north"}}})
+    hub._drain_management()
+
+    assert hub.digital_endpoints[0].get_name() == "mast-north"
+    assert _entry(hub, "a1a1a1a1")["name"] == "mast-north"
+
+
+def test_a_rename_moves_nothing_a_node_is_addressed_or_filed_by(tmp_path):
+    # A name is for people. What the results folder, the MQTT topic and every wish are keyed
+    # by is the label, derived from the device_id or the MAC, so renaming a node cannot orphan
+    # a transfer in flight, move a folder, or make the next wish miss it.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", device_id="1ee385e641d52898")])
+    endpoint = hub.digital_endpoints[0]
+    label_before, session_before = endpoint.get_label(), endpoint.session_id
+
+    hub.submit_intent({"nodes": {label_before: {"name": "mast-north"}}})
+    hub._drain_management()
+
+    assert hub.digital_endpoints[0] is endpoint
+    assert endpoint.get_label() == label_before
+    assert endpoint.session_id == session_before
+    assert hub.management_report()["nodes"][label_before]["name"] == "mast-north"
+
+
+def test_a_rename_of_a_node_this_hub_does_not_hold_is_still_written_down(tmp_path):
+    # An inactive entry is no endpoint at all, and renaming one is the ordinary case of
+    # labelling a node before it is switched on. The file is what the next boot believes.
+    hub = _make_hub(tmp_path, [_node("sleeper", "b1b1b1b1", active=False)])
+
+    hub.submit_intent({"nodes": {"b1b1b1b1": {"name": "mast-south"}}})
+    hub._drain_management()
+
+    assert _entry(hub, "b1b1b1b1")["name"] == "mast-south"
+    assert hub.digital_endpoints == []
 
 
 def test_the_rest_of_a_roster_entry_survives_the_write(tmp_path):
