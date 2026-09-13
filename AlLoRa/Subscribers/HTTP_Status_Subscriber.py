@@ -33,6 +33,13 @@ every minute, so the worker repeats the last snapshot on the interval. That sepa
 questions a page actually has, "is the gateway there" and "is a file moving", instead of
 answering both with one silence.
 
+**It costs the site less every time the site says no.** An attempt is paid for whether or not
+it is delivered, and a run of refusals doubles the wait up to five minutes. This is not
+politeness. A gateway whose refused posts were free once spent a month of a free database's
+allowance in three days, against a site that answered every one of them with an error, while
+the person watching saw nothing at all. A refusal is the one answer that must never be cheaper
+than a success.
+
 Failures are swallowed on purpose, and this is the one place in the library where that is the
 right answer. A node's job is to move files. If the status service is down, or wrong about its
 token, or gone, the transfer must not notice.
@@ -47,6 +54,11 @@ from AlLoRa.utils.time_utils import current_time_ms, sleep_ms, ticks_diff
 # poll at this rate costs less than the radio's own idle sleep.
 _TICK_MS = 200
 
+# The longest a run of refusals may push the next attempt out. Five minutes is long enough
+# that a site down all night costs a few hundred requests instead of a few hundred thousand,
+# and short enough that a gateway does not look dead for hours after the site comes back.
+_MAX_BACKOFF_MS = 300_000
+
 
 class HTTP_Status_Subscriber:
     """Post the node's live status to `url` at most every `interval_ms`.
@@ -57,11 +69,17 @@ class HTTP_Status_Subscriber:
 
     `interval_ms` is a ceiling on ordinary progress, not on everything: a change of file, of
     node, or of state is sent as soon as the worker sees it, because those are the moments a
-    person watching the page is actually waiting for.
+    person watching the page is actually waiting for. The one thing that does not jump the
+    interval is a transition arriving while the site is refusing: a new file does not change
+    the mind of a service that is saying no.
+
+    Thirty seconds by default. Two, which this used to be, is 43,200 posts a day from a single
+    Hub, and a receiver reading a countdown that changes every chunk does not need it that
+    often. A deployment that wants it faster passes a smaller number knowingly.
     """
 
-    def __init__(self, url=None, token=None, interval_ms=2000, timeout=5,
-                 client=None, headers=None, debug=False):
+    def __init__(self, url=None, token=None, interval_ms=30000, timeout=5,
+                 client=None, headers=None, debug=False, now_ms=None):
         # Fail closed at construction, for the same reason HTTP_DataSink does: there is no
         # sensible default for where a deployment's telemetry goes, and a subscriber built
         # without one would tick forever and report nothing.
@@ -76,10 +94,16 @@ class HTTP_Status_Subscriber:
         self.extra_headers = headers or {}
         self.debug = debug
         self._client = client          # injected -> we don't own it; else found on first post
+        # The clock, injectable for the same reason the client is: every rule here is about
+        # how much time has passed, and a test that has to wait five real minutes to check a
+        # five minute backoff is a test nobody runs.
+        self._now = now_ms or current_time_ms
         self._pending = None           # the newest snapshot, or None if the worker took it
         self._last_sent = None         # what went last, re-sent as the heartbeat
         self._last_key = None          # what the last *sent* snapshot was about, for transitions
         self._last_sent_ms = None
+        self._failures = 0             # refusals in a row; zero means the site is answering
+        self._retry_after_ms = None    # what the site asked for, when it asked for anything
         self._running = False
 
     # -- lifecycle -----------------------------------------------------------------------
@@ -150,7 +174,7 @@ class HTTP_Status_Subscriber:
             "freq": status.get("Freq"),
             "corrupted": status.get("CorruptedPackets"),
             "retransmissions": status.get("Retransmission"),
-            "at": current_time_ms(),
+            "at": self._now(),
         }
 
     @staticmethod
@@ -191,25 +215,82 @@ class HTTP_Status_Subscriber:
             # the node's own `at`. What makes it current is the receiver's own clock, which
             # is the only one either end should trust for that.
             if self._last_sent is not None and self._elapsed():
-                self._send(self._last_sent)
-                self._last_sent_ms = current_time_ms()
+                self._attempt(self._last_sent)
             return
         key = self._key(snapshot)
-        if not (key != self._last_key or self._elapsed()):
+        # A transition jumps the interval, because a new file or a finished one is the moment
+        # a person watching the page is waiting for. It does not jump a refusal: while the
+        # site is saying no, nothing here is urgent enough to ask again early.
+        urgent = key != self._last_key and not self._backing_off()
+        if not (urgent or self._elapsed()):
             return
         # Claim it before sending, not after. A snapshot written by the radio loop between
         # these two statements is lost, which is exactly the intended behaviour: the next one
         # is already truer than the one in flight.
         self._pending = None
-        if self._send(snapshot):
+        if self._attempt(snapshot):
+            # Only a delivered snapshot becomes the thing to repeat and the thing later
+            # snapshots are compared against. A refusal is an attempt, not news the site has.
             self._last_key = key
             self._last_sent = snapshot
-            self._last_sent_ms = current_time_ms()
+
+    def _attempt(self, snapshot):
+        """Post it, and pay for the attempt whatever the answer comes back as.
+
+        The clock moves here rather than on success, which is the whole of the fix: leaving it
+        alone after a refusal made every later snapshot the first news about that file again,
+        so the transition shortcut fired on every worker tick for as long as the site refused.
+        """
+        self._last_sent_ms = self._now()
+        if self._send(snapshot):
+            self._failures = 0
+            self._retry_after_ms = None
+            return True
+        # Counted only while counting still changes the answer. Once the wait is at the
+        # ceiling the number has no further use, and a counter climbing all week is just a
+        # bigger integer for a board to hold.
+        if self._wait_ms() < _MAX_BACKOFF_MS:
+            self._failures += 1
+        return False
 
     def _elapsed(self):
         if self._last_sent_ms is None:
             return True
-        return ticks_diff(current_time_ms(), self._last_sent_ms) >= self.interval_ms
+        return ticks_diff(self._now(), self._last_sent_ms) >= self._wait_ms()
+
+    def _backing_off(self):
+        """Whether the site is currently refusing us, by either of the two ways it can.
+
+        Its own question rather than a reading of the failure counter: a site that names a
+        wait long enough to reach the ceiling leaves that counter at zero, and a transition
+        must not read that as a healthy site and jump the queue.
+        """
+        return bool(self._failures or self._retry_after_ms)
+
+    def _wait_ms(self):
+        """How long this owes the site before the next attempt.
+
+        The interval while the site is answering, and twice as long again for every refusal in
+        a row. A site that is down is usually down for a while: asking it at the ordinary
+        interval is still tens of thousands of refused requests a day, which is what emptied a
+        month of database allowance in three days.
+        """
+        # A site that named a number outranks any number of ours: it is the one enforcing the
+        # limit, and it knows when it will lift.
+        if self._retry_after_ms:
+            return self._retry_after_ms
+        if not self._failures:
+            return self.interval_ms
+        # Doubling zero is zero, so a subscriber told to post on every tick backs off from the
+        # tick instead. The rule being kept is that a refusal costs something.
+        wait = self.interval_ms or _TICK_MS
+        failures = self._failures
+        # Stops at the ceiling rather than shifting by the failure count: a gateway refused all
+        # week would otherwise be doubling an integer past anything an ESP32 wants to hold.
+        while failures and wait < _MAX_BACKOFF_MS:
+            wait += wait
+            failures -= 1
+        return _MAX_BACKOFF_MS if wait > _MAX_BACKOFF_MS else wait
 
     def _send(self, snapshot):
         try:
@@ -226,8 +307,11 @@ class HTTP_Status_Subscriber:
             try:
                 status_code = getattr(response, "status_code", None)
                 ok = status_code is not None and 200 <= status_code < 300
-                if not ok and self.debug:
-                    print("[status] {} refused the snapshot: {}".format(self.url, status_code))
+                if not ok:
+                    self._retry_after_ms = self._retry_after(response, status_code)
+                    if self.debug:
+                        print("[status] {} refused the snapshot: {}".format(
+                            self.url, status_code))
                 return ok
             finally:
                 # urequests holds the socket until the response is closed, and this posts far
@@ -239,9 +323,44 @@ class HTTP_Status_Subscriber:
                     except Exception:
                         pass
         except Exception as e:
+            # A site we could not reach has asked for nothing, so anything it asked for
+            # earlier is stale and the backoff takes over again.
+            self._retry_after_ms = None
             if self.debug:
                 print("[status] could not reach {}: {}".format(self.url, e))
             return False
+
+    @staticmethod
+    def _retry_after(response, status_code):
+        """The wait the site asked for, in milliseconds, or None if it asked for nothing.
+
+        Only 429 and 503 are honoured. Those two mean "not now"; a 500 with a Retry-After is a
+        site that is broken rather than busy, and its guess about its own repair is worth less
+        than backing off.
+        """
+        if status_code != 429 and status_code != 503:
+            return None
+        headers = getattr(response, "headers", None)
+        if not headers:
+            return None
+        value = None
+        for name in ("Retry-After", "retry-after"):
+            try:
+                value = headers.get(name)
+            except Exception:
+                value = None
+            if value:
+                break
+        if not value:
+            return None
+        try:
+            seconds = int(str(value).strip())
+        except Exception:
+            # The header is allowed to carry an HTTP date instead of a count of seconds.
+            # Reading one needs a date library the board does not carry, so the backoff
+            # answers for it rather than a crash or a zero.
+            return None
+        return seconds * 1000 if seconds > 0 else None
 
     @staticmethod
     def _find_client():
