@@ -27,7 +27,7 @@ value of this data is entirely in it being current, which is the opposite of the
 contract next door. A missed tick is not an error and is never retried.
 
 **It keeps saying so when nothing is happening.** A node notifies only while it is doing
-something, and a Hub between visits sleeps for its asking_frequency, a minute by default. A
+something, and a Hub between visits rests for its wait_after_visit, a minute by default. A
 receiver that expires a snapshot in thirty seconds would watch the gateway appear and vanish
 every minute, so the worker repeats the last snapshot on the interval. That separates the two
 questions a page actually has, "is the gateway there" and "is a file moving", instead of
@@ -204,7 +204,7 @@ class HTTP_Status_Subscriber:
             # Nothing new, so say the last thing again if the interval has passed.
             #
             # This is the heartbeat, and it is not busywork. A node notifies only while it is
-            # doing something: a Hub between visits sleeps for its asking_frequency, which is
+            # doing something: a Hub between visits rests for its wait_after_visit, which is
             # a minute by default, and a receiver reading a service that expires in thirty
             # seconds would watch the gateway appear and vanish every minute. Repeating the
             # last snapshot separates the two questions a page actually has, "is the gateway

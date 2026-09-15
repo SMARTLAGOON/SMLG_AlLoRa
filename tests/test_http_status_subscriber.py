@@ -291,7 +291,7 @@ def test_a_finished_transfer_is_sent_at_once():
 
 
 def test_the_last_snapshot_is_repeated_while_nothing_happens():
-    """A Hub between visits sleeps for its asking_frequency, a minute by default, and notifies
+    """A Hub between visits sleeps for its wait_after_visit, a minute by default, and notifies
     nothing while it does. Without this the site would expire the gateway every minute and a
     page would show it appearing and vanishing, which says "the Hub is gone" when the truth is
     "the Hub has nothing to say"."""

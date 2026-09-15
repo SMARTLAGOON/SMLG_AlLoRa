@@ -9,6 +9,47 @@ from AlLoRa.utils.debug_utils import print
 NO_ADDRESS = "00000000"
 
 
+# Roster keys that have been renamed, old spelling to current one.
+#
+# `asking_frequency` was never a frequency. It is the rest a node takes after a visit ends,
+# so a node configured with 60 and a 30 second window comes up every 90 seconds at best, and
+# later still once the other endpoints have taken their turns. Read as a frequency it promises
+# a rate the Hub cannot deliver, which is a wrong number on a page and a wrong expectation at
+# an antenna.
+#
+# Both spellings are read, and the old one is never rewritten, because a roster file sitting on
+# a gateway in a lagoon is not edited when the library is updated.
+LEGACY_CONFIG_KEYS = {"asking_frequency": "wait_after_visit"}
+
+
+def with_current_keys(config):
+    """A config entry with every superseded key read under its current name.
+
+    The current spelling wins when an entry somehow carries both, so a file half-migrated by
+    hand still describes one thing rather than two.
+    """
+    out = {}
+    for key, value in config.items():
+        current = LEGACY_CONFIG_KEYS.get(key, key)
+        # An old key alongside its replacement is dropped here rather than overwriting it.
+        if current == key or current not in config:
+            out[current] = value
+    return out
+
+
+def config_key_for(config, field):
+    """The key this entry already spells `field` with, current or superseded.
+
+    A file keeps the spelling it was written with. Rewriting `asking_frequency` as
+    `wait_after_visit` would hand a fielded roster back in a form an older library cannot read,
+    and writing both would leave the next reader two keys to choose between.
+    """
+    for old, current in LEGACY_CONFIG_KEYS.items():
+        if field == current and old in config and current not in config:
+            return old
+    return field
+
+
 def label_for_config(config):
     """The off-air label the endpoint described by a Nodes.json entry would carry.
 
@@ -65,7 +106,7 @@ class Digital_Endpoint:
     CHUNK_REFUSED = "CHUNK_REFUSED"
 
     def __init__(self, config=None, name="N", mac_address=NO_ADDRESS, active=True,
-                 sleep_mesh=True, asking_frequency=60, listening_time=30,
+                 sleep_mesh=True, wait_after_visit=60, listening_time=30,
                  MAX_RETRANSMISSIONS_BEFORE_MESH=10, lock_on_file_receive=False,
                  max_listen_time_when_locked=300, stall_timeout=60,
                  session_id=None,
@@ -80,7 +121,11 @@ class Digital_Endpoint:
         - mac_address: The MAC address of the endpoint.
         - active: Flag indicating whether the endpoint is active.
         - sleep_mesh: Flag indicating whether the endpoint is in sleep mode in mesh network.
-        - asking_frequency: Frequency in seconds at which the gateway should check this endpoint.
+        - wait_after_visit: Seconds this endpoint rests once a visit ends, before the gateway
+          may come back to it. Not a rate: the gateway starts counting when the listening
+          window closes, so the soonest this endpoint comes up again is this plus the window,
+          and later still if the gateway has other endpoints to get through first. Read from
+          `asking_frequency` too, the name it used to carry.
         - listening_time: Time in seconds the gateway should focus on this endpoint when checking.
         - MAX_RETRANSMISSIONS_BEFORE_MESH: Maximum retransmissions before enabling mesh mode.
         - lock_on_file_receive: If True, the gateway locks on this node until a complete file is received or a timeout occurs.
@@ -91,11 +136,12 @@ class Digital_Endpoint:
         holding this endpoint. See `_read_rf`.
         """
         if config:
+            config = with_current_keys(config)
             self.name = config.get('name', name)
             self.mac_address = config.get('mac_address', mac_address)[-8:]
             self.active = config.get('active', active)
             self.sleep_mesh = config.get('sleep_mesh', sleep_mesh)
-            self.asking_frequency = config.get('asking_frequency', asking_frequency)
+            self.wait_after_visit = config.get('wait_after_visit', wait_after_visit)
             self.listening_time = config.get('listening_time', listening_time)
             self.MAX_RETRANSMISSIONS_BEFORE_MESH = config.get('MAX_RETRANSMISSIONS_BEFORE_MESH', MAX_RETRANSMISSIONS_BEFORE_MESH)
             self.lock_on_file_receive = config.get('lock_on_file_receive', lock_on_file_receive)
@@ -112,7 +158,7 @@ class Digital_Endpoint:
             self.mac_address = mac_address[-8:]
             self.active = active
             self.sleep_mesh = sleep_mesh
-            self.asking_frequency = asking_frequency
+            self.wait_after_visit = wait_after_visit
             self.listening_time = listening_time
             self.MAX_RETRANSMISSIONS_BEFORE_MESH = MAX_RETRANSMISSIONS_BEFORE_MESH
             self.lock_on_file_receive = lock_on_file_receive

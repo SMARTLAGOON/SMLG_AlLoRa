@@ -276,12 +276,12 @@ def test_a_re_provision_keeps_what_it_says_nothing_about(tmp_path):
     merge."""
     fleet = _fleet(tmp_path)
     fleet.register(name="S", role="edge", device_id=DEVICE_ID, posture="secure",
-                   mac_address="a1b2c3d4", asking_frequency=900)
+                   mac_address="a1b2c3d4", wait_after_visit=900)
     fleet.register(name="S", role="edge", device_id=OTHER_DEVICE_ID, posture="secure")
     entries = fleet.entries()
     assert len(entries) == 1
     assert entries[0]["mac_address"] == "a1b2c3d4"
-    assert entries[0]["asking_frequency"] == 60
+    assert entries[0]["wait_after_visit"] == 60
 
 
 def test_the_hub_roster_of_a_reflashed_fleet_holds_one_edge(tmp_path):

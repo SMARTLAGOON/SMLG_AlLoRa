@@ -29,6 +29,7 @@ fleet.
 import json
 import os
 
+from AlLoRa.Digital_Endpoint import with_current_keys
 from AlLoRa.Control.Control_Root import Control_Root
 from AlLoRa.Security.ec_p256 import public_key_uncompressed
 from AlLoRa.Security.identity import device_id_from_pubkey
@@ -59,13 +60,13 @@ _STAGING_DIR = "staging"
 # Hub parses: an entry is read by `Digital_Endpoint`, which ignores what it does not know, so a
 # stray key would travel to every deployment unnoticed rather than being rejected.
 _ROSTER_KEYS = ("name", "device_id", "mac_address", "session_id", "active", "sleep_mesh",
-                "asking_frequency", "listening_time", "lock_on_file_receive",
+                "wait_after_visit", "listening_time", "lock_on_file_receive",
                 "max_listen_time_when_locked", "stall_timeout", "connector")
 
 _ROSTER_DEFAULTS = {
     "active": True,
     "sleep_mesh": False,
-    "asking_frequency": 60,
+    "wait_after_visit": 60,
     "listening_time": 30,
     "lock_on_file_receive": False,
     "max_listen_time_when_locked": 300,
@@ -295,14 +296,18 @@ class Fleet:
         entry.update({"name": name, "role": role, "posture": posture})
         if device_id:
             entry["device_id"] = device_id
-        entry.update({k: v for k, v in fields.items() if v is not None})
+        # Read under the current key names on the way in, so a plan or a registry written
+        # before a field was renamed keeps its value. Without this the old spelling survives
+        # as far as the registry and is then dropped by the `_ROSTER_KEYS` filter on the way
+        # out, which loses a setting silently and only on a re-run.
+        entry.update({k: v for k, v in with_current_keys(fields).items() if v is not None})
 
         registry = self.entries()
         index = self._match(registry, name, role, device_id, on_notice)
         if index is None:
             registry.append(entry)
         else:
-            merged = dict(registry[index])
+            merged = with_current_keys(registry[index])
             for key in _ADDRESSING_KEYS:
                 merged.pop(key, None)
             merged.update(entry)

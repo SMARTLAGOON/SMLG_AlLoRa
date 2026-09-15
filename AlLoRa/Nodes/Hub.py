@@ -15,7 +15,7 @@ from os import urandom
 from json import loads, dumps
 from AlLoRa.Nodes.Node import Node
 from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids, \
-    label_for_config, NO_ADDRESS
+    label_for_config, with_current_keys, config_key_for, NO_ADDRESS
 from AlLoRa.DataSources.DataSource import DataSource
 from AlLoRa.Control.control_types import RF_CONFIG, IN_BAND
 from AlLoRa.File import AlLoRa_File
@@ -207,9 +207,9 @@ class Hub(Node):
                     self.digital_endpoints.append(active_node)
                     held.add(active_node.get_label())
                     if self.debug:
-                        print("Node {} ({}) added with frequency {}s and listening time {}s.".format(
+                        print("Node {} ({}) added, listening {}s then resting {}s.".format(
                             active_node.get_name(), active_node.get_label(),
-                            active_node.asking_frequency, active_node.listening_time))
+                            active_node.listening_time, active_node.wait_after_visit))
             self._register_endpoints()
             return len(self.digital_endpoints)
         except Exception as e:
@@ -255,9 +255,10 @@ class Hub(Node):
         """The Hub's main loop: visit each endpoint in turn, the most overdue one first.
 
         A visit is one listening window on that endpoint, extended once when it is locked on
-        a file that still has chunks missing. `asking_frequency` (seconds, set per endpoint
-        in Nodes.json) is how long before it comes up again. `timeout` is in seconds; None
-        runs forever, which is what a deployed main.py wants.
+        a file that still has chunks missing. `wait_after_visit` (seconds, set per endpoint in
+        Nodes.json) is how long that endpoint rests once its visit ends, so its cadence is the
+        window plus the wait, and longer again while the other endpoints take their turns.
+        `timeout` is in seconds; None runs forever, which is what a deployed main.py wants.
         """
         print("Listening to {} endpoints!".format(len(self.digital_endpoints)))
         end_time = None if timeout is None else ticks_add(time(), timeout * 1000)
@@ -266,7 +267,7 @@ class Hub(Node):
         # Keyed by label, never by MAC: device_id-registered endpoints all share the
         # "00000000" MAC default, which collapsed this whole map to ONE entry. Every
         # registered endpoint then shared a single due-time, so visiting any one of them
-        # silenced all the others for a full asking_frequency and the round-robin died.
+        # silenced all the others for a full wait_after_visit and the round-robin died.
         next_visit = {ep.get_label(): time() for ep in self.digital_endpoints}
 
         while end_time is None or ticks_diff(end_time, time()) > 0:
@@ -308,7 +309,9 @@ class Hub(Node):
                         # Reschedule whether the visit worked or threw: an endpoint that
                         # fails every time must not be retried without pause, which would
                         # starve every other endpoint of the channel.
-                        next_visit[label] = ticks_add(time(), endpoint.asking_frequency * 1000)
+                        # Counted from the end of the visit, which is what makes this a rest
+                        # and not a period: the cadence is this plus however long the visit ran.
+                        next_visit[label] = ticks_add(time(), endpoint.wait_after_visit * 1000)
                 sleep(self.NEXT_ACTION_TIME_SLEEP)
 
     def _sync_schedule(self, next_visit, now):
@@ -359,7 +362,7 @@ class Hub(Node):
         self.update_subscribers(digital_endpoint)
 
         # A locked endpoint caught mid-file gets one extra window now, rather than holding
-        # a half-received file for a whole asking_frequency before asking for the rest.
+        # a half-received file for a whole wait_after_visit before asking for the rest.
         if not digital_endpoint.lock_on_file_receive:
             return
         in_flight = digital_endpoint.get_current_file()
@@ -383,7 +386,7 @@ class Hub(Node):
     # bookkeeping, and it is the only shape that survives a second editor, because an
     # acknowledgement belongs to whoever asked.
     #
-    # None of it crosses the radio. `active`, the four timing values and a node's name are
+    # None of it crosses the radio. `active`, the five timing values and a node's name are
     # read by this Hub alone, out of the Nodes.json entry behind each Digital_Endpoint; an
     # Edge never learns any of them, and nothing about them reaches the air. So this is not
     # the signed control path and shares nothing with it: not a word, not a table, not a check.
@@ -396,7 +399,7 @@ class Hub(Node):
     # device_id or the MAC), so a rename moves no folder and reaches no transfer in flight. All
     # of them are set on the endpoint object that is already there. `active` is not one of
     # them, because it decides whether there is an endpoint object at all.
-    _TIMING_FIELDS = ("asking_frequency", "listening_time", "lock_on_file_receive",
+    _TIMING_FIELDS = ("wait_after_visit", "listening_time", "lock_on_file_receive",
                       "max_listen_time_when_locked", "stall_timeout")
     _ENDPOINT_FIELDS = _TIMING_FIELDS + ("name",)
     _ROSTER_FIELDS = ("active",) + _ENDPOINT_FIELDS
@@ -447,7 +450,7 @@ class Hub(Node):
             # spells it, and a field that is present in one and absent in the other is a
             # difference somebody has to write code to ignore.
             "nodes": {ep.get_label(): {"name": ep.get_name(), "active": True,
-                                       "asking_frequency": ep.asking_frequency,
+                                       "wait_after_visit": ep.wait_after_visit,
                                        "listening_time": ep.listening_time,
                                        "lock_on_file_receive": ep.lock_on_file_receive,
                                        "max_listen_time_when_locked":
@@ -510,7 +513,13 @@ class Hub(Node):
         state machine driving it, and on a slow link a part-received file is hours of airtime.
         Gaining one runs back through `add_digital_endpoints`, which is idempotent and is
         already the verb a running Hub gains an endpoint through.
+
+        A wish is read under the current key names before anything is done with it, so a site
+        or a script still spelling a renamed field is applied rather than silently ignored.
+        Ignoring it would be the worst of the three outcomes: the page would keep showing the
+        setting as wanted and never applied, with nothing anywhere saying why.
         """
+        nodes = {label: with_current_keys(wish) for label, wish in nodes.items()}
         self._overlay_roster(nodes)
         held = {ep.get_label(): ep for ep in self.digital_endpoints}
         retired = False
@@ -551,6 +560,10 @@ class Hub(Node):
 
         A label the file does not carry is left alone rather than added. One document can
         describe a whole fleet, and a Hub answers only for the nodes that are its own.
+
+        An entry keeps the key names it already uses, so a roster written before a field was
+        renamed stays readable by the library version that wrote it. The wish arrives spelled
+        the current way and is written back the way the file spells it.
         """
         if not self.nodes_file:
             return          # a roster assembled in code has no file to write the wish into
@@ -563,8 +576,11 @@ class Hub(Node):
                 if not wish:
                     continue
                 for field in Hub._ROSTER_FIELDS:
-                    if field in wish and entry.get(field) != wish[field]:
-                        entry[field] = wish[field]
+                    if field not in wish:
+                        continue
+                    key = config_key_for(entry, field)
+                    if entry.get(key) != wish[field]:
+                        entry[key] = wish[field]
                         changed = True
             if changed:
                 self._commit_json(self.nodes_file, roster)

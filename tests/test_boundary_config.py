@@ -287,7 +287,7 @@ def test_an_open_edge_may_name_a_sink_because_it_has_no_gate_to_lose(tmp_path, m
 
 def _entry(name, mac, **extra):
     entry = {"name": name, "mac_address": mac, "active": True, "sleep_mesh": False,
-             "asking_frequency": 60, "listening_time": 30,
+             "wait_after_visit": 60, "listening_time": 30,
              "lock_on_file_receive": False, "max_listen_time_when_locked": 60}
     entry.update(extra)
     return entry

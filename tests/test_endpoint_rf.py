@@ -51,7 +51,7 @@ def _make_hub(tmp_path, nodes=None, **rf):
 
 def _entry(name, mac, **overrides):
     node = {"name": name, "mac_address": mac, "active": True,
-            "asking_frequency": 60, "listening_time": 30}
+            "wait_after_visit": 60, "listening_time": 30}
     node.update(overrides)
     return node
 

@@ -43,7 +43,7 @@ into its entry, unedited:
     "name": "GPS2",
     "mac_address": "da5ace8c",
     "active": true,
-    "asking_frequency": 300,
+    "wait_after_visit": 300,
     "listening_time": 60,
     "connector": {
         "freq": 868,

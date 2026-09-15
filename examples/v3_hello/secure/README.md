@@ -21,7 +21,7 @@ Paste that value into `secure/hub/Nodes.json`, and set `"active": true`:
     "name": "src",
     "device_id": "<the printed device_id>",
     "active": true,
-    "asking_frequency": 60,
+    "wait_after_visit": 60,
     "listening_time": 30
   }
 ]

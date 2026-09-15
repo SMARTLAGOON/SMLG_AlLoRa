@@ -222,7 +222,7 @@ def _write_hub_config(path):
 
 def _entry(name, mac="a1a1a1a1", **overrides):
     node = {"name": name, "mac_address": mac, "active": True,
-            "asking_frequency": 60, "listening_time": 30}
+            "wait_after_visit": 60, "listening_time": 30}
     node.update(overrides)
     return node
 
@@ -402,7 +402,7 @@ def test_an_entry_written_in_the_legacy_flat_shape_stops_contradicting_itself(tm
     written = _persisted(nodes_file, "edge")
     assert written["connector"]["sf"] == 9
     assert "sf" not in written and "bw" not in written, "the superseded spelling is gone"
-    assert written["asking_frequency"] == 60, "and the keys that are not about RF stay"
+    assert written["wait_after_visit"] == 60, "and the keys that are not about RF stay"
 
 
 def test_the_entry_is_found_by_the_name_the_endpoint_carries_off_the_air(tmp_path):

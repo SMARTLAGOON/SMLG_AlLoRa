@@ -511,7 +511,8 @@ def main():
             "entry, or set \"active\": true on one that is already there.")
     for endpoint in node.digital_endpoints:
         print("  polling", endpoint.get_name(), "as", endpoint.get_label(),
-              "every", endpoint.asking_frequency, "s")
+              "for", endpoint.listening_time, "s, then resting",
+              endpoint.wait_after_visit, "s")
 
     for note in wire_downlink_sources(node):
         print("downlink:", note)

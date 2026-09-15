@@ -33,7 +33,7 @@ def _write_config(path, result_path):
 
 def _write_nodes(path):
     nodes = [{"name": "edge", "mac_address": "a1a1a1a1", "active": True,
-              "asking_frequency": 60, "listening_time": 30, "session_id": 42}]
+              "wait_after_visit": 60, "listening_time": 30, "session_id": 42}]
     with open(path, "w") as f:
         json.dump(nodes, f)
 

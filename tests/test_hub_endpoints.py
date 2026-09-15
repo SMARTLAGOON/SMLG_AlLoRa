@@ -6,7 +6,7 @@ were different classes rather than the same class with one or many peers. These 
 surface on `Hub`, where the loop is now the node's `run()` verb rather than a method named
 after a check.
 
-They also pin the visit cadence, which never worked. The reschedule added `asking_frequency`
+They also pin the visit cadence, which never worked. The reschedule added `wait_after_visit`
 (seconds) to a millisecond clock, so an endpoint configured to be polled every 5 minutes was
 polled 300 ms after its last visit: the knob was off by a factor of 1000 and every fielded
 gateway round-robined continuously. And the deadlines were raw `+` and `>=` on a counter that
@@ -45,7 +45,7 @@ def _write_nodes(path, nodes):
 
 def _node(name, mac, **overrides):
     node = {"name": name, "mac_address": mac, "active": True,
-            "asking_frequency": 60, "listening_time": 30}
+            "wait_after_visit": 60, "listening_time": 30}
     node.update(overrides)
     return node
 
@@ -198,10 +198,10 @@ def test_run_listens_for_the_endpoints_configured_window(tmp_path, clock):
     assert visits[0] == ("edge-a", 7)
 
 
-def test_asking_frequency_paces_the_visits_in_seconds(tmp_path, clock):
-    # The bug this pins: `asking_frequency` was added to a millisecond clock, so a 300 s
+def test_wait_after_visit_paces_the_visits_in_seconds(tmp_path, clock):
+    # The bug this pins: `wait_after_visit` was added to a millisecond clock, so a 300 s
     # endpoint came back up 300 ms later and the knob did nothing at all.
-    hub = _make_hub(tmp_path, [_node("slow", "a1a1a1a1", asking_frequency=300,
+    hub = _make_hub(tmp_path, [_node("slow", "a1a1a1a1", wait_after_visit=300,
                                      listening_time=1)])
     visits = []
     _record_visits(hub, clock, visits)
@@ -212,7 +212,7 @@ def test_asking_frequency_paces_the_visits_in_seconds(tmp_path, clock):
 
 
 def test_a_due_endpoint_is_revisited_within_the_same_run(tmp_path, clock):
-    hub = _make_hub(tmp_path, [_node("fast", "a1a1a1a1", asking_frequency=10,
+    hub = _make_hub(tmp_path, [_node("fast", "a1a1a1a1", wait_after_visit=10,
                                      listening_time=1)])
     visits = []
     _record_visits(hub, clock, visits)
@@ -230,7 +230,7 @@ def test_the_schedule_survives_the_tick_wrap(tmp_path, clock):
     # unvisited for another full period. Start late enough that the first visit ends before
     # the wrap but its reschedule falls after it, which is the window that breaks.
     clock.now = _TICKS_PERIOD - 5000
-    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=10,
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", wait_after_visit=10,
                                      listening_time=1)])
     visits = []
     _record_visits(hub, clock, visits)
@@ -241,7 +241,7 @@ def test_the_schedule_survives_the_tick_wrap(tmp_path, clock):
 
 
 def test_run_returns_when_its_bounded_window_expires(tmp_path, clock):
-    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=1,
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", wait_after_visit=1,
                                      listening_time=1)])
     started = clock.now
     _record_visits(hub, clock, [])
@@ -318,10 +318,10 @@ def test_run_publishes_each_endpoints_reception_info_to_subscribers(tmp_path, cl
 
 def test_an_endpoint_that_arrives_mid_loop_is_visited_rather_than_killing_the_loop(tmp_path,
                                                                                    clock):
-    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=10,
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", wait_after_visit=10,
                                      listening_time=1)])
     visits = []
-    newcomer = Digital_Endpoint(config=_node("edge-b", "b1b1b1b1", asking_frequency=10,
+    newcomer = Digital_Endpoint(config=_node("edge-b", "b1b1b1b1", wait_after_visit=10,
                                              listening_time=1))
 
     def arrive(_endpoint):
@@ -341,9 +341,9 @@ def test_an_endpoint_that_leaves_and_returns_is_due_again_rather_than_on_its_old
     # that outlives the endpoint makes the second button do nothing visible: a node polled every
     # five minutes, disabled for ten seconds and switched back on would sit silent for the rest
     # of its old interval, with the operator watching a page that says it is on.
-    hub = _make_hub(tmp_path, [_node("keeper", "a1a1a1a1", asking_frequency=5,
+    hub = _make_hub(tmp_path, [_node("keeper", "a1a1a1a1", wait_after_visit=5,
                                      listening_time=1),
-                               _node("flapper", "b1b1b1b1", asking_frequency=300,
+                               _node("flapper", "b1b1b1b1", wait_after_visit=300,
                                      listening_time=1)])
     keeper, flapper = hub.digital_endpoints
     visits = []
@@ -397,7 +397,7 @@ def test_both_node_types_run_with_the_same_verb():
 def _registered(name, device_id, **overrides):
     """An endpoint the v3 way: identity, no MAC."""
     node = {"name": name, "device_id": device_id, "active": True,
-            "asking_frequency": 60, "listening_time": 30}
+            "wait_after_visit": 60, "listening_time": 30}
     node.update(overrides)
     return node
 
@@ -440,7 +440,7 @@ def test_the_status_map_holds_one_entry_per_registered_endpoint(tmp_path):
 def test_the_visit_schedule_does_not_collapse_registered_endpoints_onto_one_slot(tmp_path, clock):
     # The sharpest edge of the same bug. `next_visit` was keyed by MAC, so every registered
     # endpoint shared ONE due-time: visiting any one of them pushed that single deadline out
-    # by its asking_frequency and silenced all the others until it expired. A Hub with three
+    # by its wait_after_visit and silenced all the others until it expired. A Hub with three
     # registered Edges polled one per cycle instead of three, and the round-robin the design
     # promises did not happen at all.
     hub = _make_hub(tmp_path, [_registered("edge-a", "1ee385e641d52898", listening_time=1),

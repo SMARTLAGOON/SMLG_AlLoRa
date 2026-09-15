@@ -3,7 +3,7 @@
     "name": "src",
     "device_id": "<paste the device_id the Edge prints on boot>",
     "active": false,
-    "asking_frequency": 60,
+    "wait_after_visit": 60,
     "listening_time": 30
   }
 ]

@@ -50,7 +50,7 @@ def _write_config(path, result_path, **extra):
 
 def _node(name, mac, **overrides):
     node = {"name": name, "mac_address": mac, "active": True,
-            "asking_frequency": 60, "listening_time": 30}
+            "wait_after_visit": 60, "listening_time": 30}
     node.update(overrides)
     return node
 
@@ -153,7 +153,7 @@ def test_a_wish_submitted_mid_visit_is_applied_once_that_visit_ends(tmp_path, cl
     # The boundary the design promises. Waiting means the visit in progress, not the file in
     # progress: one listening window is seconds to a few minutes, while a busy node can hold a
     # partial file for hours, and with several Edges a Hub may be part way through several.
-    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=5,
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", wait_after_visit=5,
                                      listening_time=1)])
     visits = []
 
@@ -204,7 +204,7 @@ def test_a_hub_with_nothing_to_poll_can_still_be_told_something(tmp_path, clock)
 # --- pause ----------------------------------------------------------------------------------
 
 def test_pausing_stops_the_polling_and_resuming_starts_it_again(tmp_path, clock):
-    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=1,
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", wait_after_visit=1,
                                      listening_time=1)])
     visits = []
     _record_visits(hub, clock, visits)
@@ -239,9 +239,9 @@ def test_a_live_hub_comes_back_live(tmp_path):
 # --- enable and disable ----------------------------------------------------------------------
 
 def test_disabling_a_node_takes_it_out_of_the_loop(tmp_path, clock):
-    hub = _make_hub(tmp_path, [_node("keeper", "a1a1a1a1", asking_frequency=1,
+    hub = _make_hub(tmp_path, [_node("keeper", "a1a1a1a1", wait_after_visit=1,
                                      listening_time=1),
-                               _node("goner", "b1b1b1b1", asking_frequency=1,
+                               _node("goner", "b1b1b1b1", wait_after_visit=1,
                                      listening_time=1)])
     visits = []
     _record_visits(hub, clock, visits)
@@ -266,10 +266,10 @@ def test_disabling_a_node_is_written_into_the_roster(tmp_path):
 
 def test_re_enabling_a_node_puts_it_back_in_the_loop(tmp_path, clock):
     # The other half of the pair of buttons, and the one that used to kill the loop.
-    hub = _make_hub(tmp_path, [_node("keeper", "a1a1a1a1", asking_frequency=1,
+    hub = _make_hub(tmp_path, [_node("keeper", "a1a1a1a1", wait_after_visit=1,
                                      listening_time=1),
                                _node("sleeper", "b1b1b1b1", active=False,
-                                     asking_frequency=1, listening_time=1)])
+                                     wait_after_visit=1, listening_time=1)])
     assert [ep.get_name() for ep in hub.digital_endpoints] == ["keeper"]
     visits = []
     _record_visits(hub, clock, visits)
@@ -297,7 +297,7 @@ def test_a_node_disabled_and_re_enabled_is_registered_once(tmp_path):
 # --- the timing values -------------------------------------------------------------------
 
 def test_a_new_listening_time_is_used_by_the_very_next_visit(tmp_path, clock):
-    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=1,
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", wait_after_visit=1,
                                      listening_time=3)])
     visits = []
     _record_visits(hub, clock, visits)
@@ -324,17 +324,17 @@ def test_a_timing_change_does_not_rebuild_the_endpoint_that_holds_the_transfer(t
     in_flight = _PartialFile()
     endpoint.set_current_file(in_flight)
 
-    hub.submit_intent({"nodes": {"a1a1a1a1": {"asking_frequency": 30}}})
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"wait_after_visit": 30}}})
     hub._drain_management()
 
     assert hub.digital_endpoints[0] is endpoint
     assert endpoint.get_current_file() is in_flight
-    assert endpoint.asking_frequency == 30
+    assert endpoint.wait_after_visit == 30
 
 
 def test_every_timing_value_is_applied_and_written_down(tmp_path):
     hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
-    wish = {"asking_frequency": 15, "listening_time": 8,
+    wish = {"wait_after_visit": 15, "listening_time": 8,
             "lock_on_file_receive": True, "stall_timeout": 12,
             "max_listen_time_when_locked": 240}
 
@@ -357,7 +357,7 @@ def test_the_locked_window_a_wish_sets_is_the_one_the_next_visit_grants(tmp_path
         def get_missing_chunks(self):
             return [7]
 
-    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=1,
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", wait_after_visit=1,
                                      listening_time=3, lock_on_file_receive=True,
                                      max_listen_time_when_locked=300)])
     hub.digital_endpoints[0].set_current_file(_PartialFile())
@@ -532,7 +532,7 @@ def test_the_report_says_what_each_endpoint_is_actually_running(tmp_path):
     # Applied is an observation, not a message: the site does not wait for an acknowledgement,
     # it compares this against the wish it holds. That is what makes a lost change self-healing
     # with no bookkeeping, and it is what lets a second editor exist at all.
-    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=15,
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", wait_after_visit=15,
                                      listening_time=8)])
 
     report = hub.management_report()
@@ -541,7 +541,7 @@ def test_the_report_says_what_each_endpoint_is_actually_running(tmp_path):
     running = report["nodes"]["a1a1a1a1"]
     assert running["name"] == "edge-a"
     assert running["active"] is True
-    assert running["asking_frequency"] == 15
+    assert running["wait_after_visit"] == 15
     assert running["listening_time"] == 8
 
 
@@ -581,7 +581,7 @@ def test_the_loop_fills_the_slot_from_the_feed_when_no_thread_does(tmp_path, clo
             if self.polls == 1:
                 self.submit_intent({"nodes": {"a1a1a1a1": {"listening_time": 4}}})
 
-    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", asking_frequency=1,
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", wait_after_visit=1,
                                      listening_time=30)])
     feed = _Feed()
     hub.set_management_source(feed)
@@ -611,3 +611,135 @@ def test_registering_a_source_brings_it_up_at_registration(tmp_path):
     hub.set_management_source(source)
 
     assert source.prepared
+
+
+# ---------------------------------------------------------------------------
+# A roster written before the rename
+# ---------------------------------------------------------------------------
+#
+# `asking_frequency` became `wait_after_visit`, because it was never a frequency: it is the
+# rest a node takes once its visit ends, so a node set to 60 with a 30 second window comes up
+# every 90 seconds at best. What these pin is that renaming it cost nobody a field trip. A
+# roster file sitting on a gateway in a lagoon is not edited when the library is updated, so
+# both spellings are read, and the file keeps the one it already has.
+
+
+def test_a_roster_still_spelling_asking_frequency_is_read(tmp_path):
+    hub = _make_hub(tmp_path, [{"name": "edge-a", "mac_address": "a1a1a1a1", "active": True,
+                                "asking_frequency": 45, "listening_time": 30}])
+
+    assert hub.digital_endpoints[0].wait_after_visit == 45
+
+
+def test_the_current_spelling_wins_when_an_entry_carries_both(tmp_path):
+    # A file half-migrated by hand describes one thing, not two.
+    hub = _make_hub(tmp_path, [{"name": "edge-a", "mac_address": "a1a1a1a1", "active": True,
+                                "asking_frequency": 45, "wait_after_visit": 90,
+                                "listening_time": 30}])
+
+    assert hub.digital_endpoints[0].wait_after_visit == 90
+
+
+def test_a_wish_spelling_asking_frequency_is_applied_not_ignored(tmp_path):
+    # The worst outcome of the three: the page would keep showing the setting as wanted and
+    # never applied, with nothing anywhere saying why.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"asking_frequency": 120}}})
+    hub._drain_management()
+
+    assert hub.digital_endpoints[0].wait_after_visit == 120
+
+
+def test_a_roster_keeps_the_spelling_it_was_written_with(tmp_path):
+    # Written back as `wait_after_visit`, the file would come home in a form the library
+    # version that wrote it cannot read; written as both, the next reader has two keys to
+    # choose between.
+    hub = _make_hub(tmp_path, [{"name": "edge-a", "mac_address": "a1a1a1a1", "active": True,
+                                "asking_frequency": 45, "listening_time": 30}])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"wait_after_visit": 120}}})
+    hub._drain_management()
+
+    entry = _entry(hub, "a1a1a1a1")
+    assert entry["asking_frequency"] == 120
+    assert "wait_after_visit" not in entry
+
+
+def test_a_roster_written_the_new_way_stays_the_new_way(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"wait_after_visit": 120}}})
+    hub._drain_management()
+
+    entry = _entry(hub, "a1a1a1a1")
+    assert entry["wait_after_visit"] == 120
+    assert "asking_frequency" not in entry
+
+
+def test_the_report_states_the_rest_under_its_current_name(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", wait_after_visit=45)])
+
+    node = hub.management_report()["nodes"]["a1a1a1a1"]
+
+    assert node["wait_after_visit"] == 45
+    assert "asking_frequency" not in node
+
+
+# ---------------------------------------------------------------------------
+# A stall somebody switched off
+# ---------------------------------------------------------------------------
+#
+# `stall_timeout` is the one timing value with a real off, because it is the one
+# that ends a visit rather than bounding it. Null arms no deadline, so the
+# listening window is left as the only thing that closes the visit. The site
+# offers this as a switch and needs somewhere to put the off; null is what the
+# file can already hold, so no key is invented to carry it.
+
+
+def test_a_null_stall_timeout_arms_no_deadline(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", stall_timeout=None)])
+
+    assert hub.digital_endpoints[0].stall_timeout is None
+
+
+def test_a_wish_can_switch_the_stall_off(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", stall_timeout=60)])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"stall_timeout": None}}})
+    hub._drain_management()
+
+    assert hub.digital_endpoints[0].stall_timeout is None
+    # And it outlives the process: the next boot reads the file, not the object.
+    assert _entry(hub, "a1a1a1a1")["stall_timeout"] is None
+
+
+def test_a_wish_can_switch_the_stall_back_on(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", stall_timeout=None)])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"stall_timeout": 20}}})
+    hub._drain_management()
+
+    assert hub.digital_endpoints[0].stall_timeout == 20
+    assert _entry(hub, "a1a1a1a1")["stall_timeout"] == 20
+
+
+def test_a_visit_with_no_stall_runs_to_the_window(tmp_path):
+    # The whole point of the off. With a deadline armed, a peer that never
+    # advances the chunk index ends the visit early; with none, only the
+    # listening window does.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", stall_timeout=None)])
+    endpoint = hub.digital_endpoints[0]
+
+    seen = {}
+
+    def _listen(ep, listening_time=None, **kwargs):
+        seen["listening_time"] = listening_time
+        seen["stall_timeout"] = kwargs.get("stall_timeout")
+        return True
+
+    hub.listen_to_endpoint = _listen
+    hub._visit(endpoint, False, False)
+
+    assert seen["listening_time"] == 30
+    assert seen["stall_timeout"] is None
