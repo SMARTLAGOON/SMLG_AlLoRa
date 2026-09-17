@@ -399,9 +399,17 @@ class Hub(Node):
     # device_id or the MAC), so a rename moves no folder and reaches no transfer in flight. All
     # of them are set on the endpoint object that is already there. `active` is not one of
     # them, because it decides whether there is an endpoint object at all.
+    #
+    # `extras` is the one field here this library never reads. A Hub is run by a program, and
+    # that program has settings of its own that are per node: which topic a node's files are
+    # published on is the case this exists for. Letting a wish write any key it likes into the
+    # entry would put those settings in the same namespace as the library's own, where a
+    # misspelling is indistinguishable from a field a later version models, and where the Hub
+    # could not say which keys to hand back in its report. One named block keeps them apart:
+    # carried, written, reported, never inspected.
     _TIMING_FIELDS = ("wait_after_visit", "listening_time", "lock_on_file_receive",
                       "max_listen_time_when_locked", "stall_timeout")
-    _ENDPOINT_FIELDS = _TIMING_FIELDS + ("name",)
+    _ENDPOINT_FIELDS = _TIMING_FIELDS + ("name", "extras")
     _ROSTER_FIELDS = ("active",) + _ENDPOINT_FIELDS
 
     def set_management_source(self, source):
@@ -455,7 +463,13 @@ class Hub(Node):
                                        "lock_on_file_receive": ep.lock_on_file_receive,
                                        "max_listen_time_when_locked":
                                            ep.max_listen_time_when_locked,
-                                       "stall_timeout": ep.stall_timeout}
+                                       "stall_timeout": ep.stall_timeout,
+                                       # Handed back unread, and always present even when
+                                       # empty. Without it the holder of the wish can show
+                                       # every other field as wanted-versus-running and this
+                                       # one as wanted only, which is the state a person
+                                       # cannot tell from a change that never arrived.
+                                       "extras": ep.extras}
                       for ep in self.digital_endpoints},
             "one_shots": dict(self._acted),
             "config_file": self.config_file,
@@ -520,6 +534,16 @@ class Hub(Node):
         setting as wanted and never applied, with nothing anywhere saying why.
         """
         nodes = {label: with_current_keys(wish) for label, wish in nodes.items()}
+        for label, wish in nodes.items():
+            extras = wish.get("extras")
+            if extras is not None and not isinstance(extras, dict):
+                # Dropped rather than written, and said out loud. Whatever reads that block
+                # goes looking for keys in it, so a string or a number in its place is a wish
+                # nothing can act on, and writing it would leave the next program reading the
+                # roster to fail on a value this Hub had already seen and passed along.
+                print("Hub: the extras for node {} are a {}, not a block of keys; ignored"
+                      .format(label, type(extras).__name__))
+                del wish["extras"]
         self._overlay_roster(nodes)
         held = {ep.get_label(): ep for ep in self.digital_endpoints}
         retired = False
@@ -560,6 +584,10 @@ class Hub(Node):
 
         A label the file does not carry is left alone rather than added. One document can
         describe a whole fleet, and a Hub answers only for the nodes that are its own.
+
+        `extras` is written whole rather than merged into what is there. It is desired state
+        like every other field, so the newest wish is the answer and removing a key means
+        asking without it; a merge would leave a key nobody could ever take back out.
 
         An entry keeps the key names it already uses, so a roster written before a field was
         renamed stays readable by the library version that wrote it. The wish arrives spelled

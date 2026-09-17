@@ -743,3 +743,140 @@ def test_a_visit_with_no_stall_runs_to_the_window(tmp_path):
 
     assert seen["listening_time"] == 30
     assert seen["stall_timeout"] is None
+
+
+# ---------------------------------------------------------------------------
+# One named block for keys this library does not model
+# ---------------------------------------------------------------------------
+#
+# A Hub is run by a program, and that program has per-node settings of its own:
+# which topic a node's files are published on is the case this exists for. The
+# library has no business knowing what any of them mean, so `extras` is carried,
+# written and reported back without ever being looked inside.
+#
+# One named block rather than any key a wish cares to send. An entry's own keys
+# are the library's: a wish writing into that namespace could not be told from a
+# field a later version models, a misspelling would sit in the file forever, and
+# the report would have no way to say which keys it was meant to hand back.
+
+
+def test_a_wish_can_set_a_block_this_library_never_reads(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {
+        "extras": {"mqtt": {"publish": True, "topic": "albufera/boat-camera"}}}}})
+    hub._drain_management()
+
+    assert hub.digital_endpoints[0].extras == {
+        "mqtt": {"publish": True, "topic": "albufera/boat-camera"}}
+    # And it outlives the process, which is the half that matters: the program that
+    # reads the block reads it out of the file, not off the endpoint object.
+    assert _entry(hub, "a1a1a1a1")["extras"] == {
+        "mqtt": {"publish": True, "topic": "albufera/boat-camera"}}
+
+
+def test_the_block_is_handed_back_in_the_report(tmp_path):
+    # Without this the holder of the wish shows every other field as wanted against
+    # running, and this one as wanted alone, which reads the same as a change that
+    # never arrived.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1",
+                                     extras={"mqtt": {"topic": "albufera/gnss"}})])
+
+    running = hub.management_report()["nodes"]["a1a1a1a1"]
+
+    assert running["extras"] == {"mqtt": {"topic": "albufera/gnss"}}
+
+
+def test_the_report_carries_the_block_even_when_there_is_none(tmp_path):
+    # Present and empty, like `active`. A field in the wish and absent from the
+    # report is a difference somebody has to write code to ignore.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    assert hub.management_report()["nodes"]["a1a1a1a1"]["extras"] == {}
+
+
+def test_nothing_in_the_block_is_inspected(tmp_path):
+    # The library holds no table of what a block may say. A program that reads
+    # `mqtt` today and something nobody has written yet tomorrow needs no library
+    # release in between, which is the whole reason the block is opaque.
+    nonsense = {"whatever": [1, 2, {"deep": None}], "another": "thing"}
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"extras": nonsense}}})
+    hub._drain_management()
+
+    assert _entry(hub, "a1a1a1a1")["extras"] == nonsense
+    assert hub.management_report()["nodes"]["a1a1a1a1"]["extras"] == nonsense
+
+
+def test_a_new_block_replaces_the_old_one_whole(tmp_path):
+    # Desired state, not a patch. Merging would leave a key nobody could take back
+    # out: asking without it would be read as not mentioning it.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1",
+                                     extras={"mqtt": {"publish": True,
+                                                      "topic": "albufera/old"}})])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"extras": {"mqtt": {"publish": True}}}}})
+    hub._drain_management()
+
+    assert _entry(hub, "a1a1a1a1")["extras"] == {"mqtt": {"publish": True}}
+
+
+def test_an_empty_block_clears_what_was_there(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1",
+                                     extras={"mqtt": {"topic": "albufera/old"}})])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"extras": {}}}})
+    hub._drain_management()
+
+    assert _entry(hub, "a1a1a1a1")["extras"] == {}
+    assert hub.digital_endpoints[0].extras == {}
+
+
+def test_a_wish_that_says_nothing_about_the_block_leaves_it_alone(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1",
+                                     extras={"mqtt": {"topic": "albufera/gnss"}})])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"listening_time": 5}}})
+    hub._drain_management()
+
+    assert _entry(hub, "a1a1a1a1")["extras"] == {"mqtt": {"topic": "albufera/gnss"}}
+
+
+def test_a_block_for_a_node_this_hub_does_not_hold_is_still_written_down(tmp_path):
+    # An inactive entry is no endpoint at all, and naming a node's topic before it is
+    # switched on is the ordinary case. The file is what the next boot believes.
+    hub = _make_hub(tmp_path, [_node("sleeper", "b1b1b1b1", active=False)])
+
+    hub.submit_intent({"nodes": {"b1b1b1b1": {"extras": {"mqtt": {"topic": "a/b"}}}}})
+    hub._drain_management()
+
+    assert _entry(hub, "b1b1b1b1")["extras"] == {"mqtt": {"topic": "a/b"}}
+    assert hub.digital_endpoints == []
+
+
+def test_a_re_enabled_node_comes_back_with_the_block_the_file_holds(tmp_path):
+    # The round trip the one above sets up: written while the node was off, read when
+    # it is switched on, because a re-enable is registration from the file.
+    hub = _make_hub(tmp_path, [_node("sleeper", "b1b1b1b1", active=False)])
+
+    hub.submit_intent({"nodes": {"b1b1b1b1": {"extras": {"mqtt": {"topic": "a/b"}},
+                                              "active": True}}})
+    hub._drain_management()
+
+    assert hub.digital_endpoints[0].extras == {"mqtt": {"topic": "a/b"}}
+
+
+def test_a_block_that_is_not_a_block_is_refused_and_the_rest_still_applies(tmp_path):
+    # Whatever reads it goes looking for keys in it, so a bare string is a wish
+    # nothing can act on. Writing it would hand the next program a value to fail on
+    # that this Hub had already seen and passed along.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", listening_time=30)])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"extras": "albufera/boat-camera",
+                                              "listening_time": 5}}})
+    hub._drain_management()
+
+    assert "extras" not in _entry(hub, "a1a1a1a1")
+    assert hub.digital_endpoints[0].extras == {}
+    assert hub.digital_endpoints[0].listening_time == 5, "the rest of the wish stands"

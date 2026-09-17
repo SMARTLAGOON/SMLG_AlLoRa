@@ -111,6 +111,7 @@ class Digital_Endpoint:
                  max_listen_time_when_locked=300, stall_timeout=60,
                  session_id=None,
                  device_id=None,
+                 extras=None,
                  debug=False):
         """
         Initializes a new Digital Endpoint with detailed control over its operational parameters.
@@ -129,6 +130,13 @@ class Digital_Endpoint:
         - listening_time: Time in seconds the gateway should focus on this endpoint when checking.
         - MAX_RETRANSMISSIONS_BEFORE_MESH: Maximum retransmissions before enabling mesh mode.
         - lock_on_file_receive: If True, the gateway locks on this node until a complete file is received or a timeout occurs.
+
+        - extras: A block of keys this library carries and never reads, for whatever program
+          runs the Hub. An entry's own keys are the library's, so a program putting its
+          settings there would eventually collide with a field a later version models, and
+          the Hub could not tell the two apart. One named block keeps them separable: the
+          Hub writes it when a wish carries it, hands it back in its report, and never looks
+          inside. A misspelling in there is visible on both sides rather than lost.
 
         RF settings are optional. State them in a `connector` block inside `config`, spelled as
         in the config (`freq`, `sf`, `bandwidth`, `coding_rate`, `tx_power`), so the peer's own
@@ -150,6 +158,7 @@ class Digital_Endpoint:
             # stops driving. The two above are ceilings on a whole visit; this one is the only
             # limit that can tell a transfer that stopped from one that is merely long.
             self.stall_timeout = config.get('stall_timeout', stall_timeout)
+            self.extras = config.get('extras', extras) or {}
             self._read_rf(config)
             explicit_sid = config.get('session_id', session_id)
             raw_device_id = config.get('device_id', device_id)
@@ -164,6 +173,7 @@ class Digital_Endpoint:
             self.lock_on_file_receive = lock_on_file_receive
             self.max_listen_time_when_locked = max_listen_time_when_locked
             self.stall_timeout = stall_timeout
+            self.extras = extras or {}
             self._read_rf(None)
             explicit_sid = session_id
             raw_device_id = device_id

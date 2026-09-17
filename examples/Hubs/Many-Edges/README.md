@@ -91,3 +91,34 @@ Three things follow, all of them visible in the file:
 
 A Hub built in code rather than from a file writes nothing. `Hub(connector, nodes_file="Nodes.json")`
 is what opts in, and it is the default.
+
+## Settings of your own go in `extras`
+
+A Hub is run by a program, and that program usually has per-node settings the library knows
+nothing about. Which topic an Edge's files get published on is the usual one. Put them in an
+`extras` block on the entry:
+
+```json
+{
+  "name": "C",
+  "device_id": "6c4f8894cddcd7f2",
+  "active": true,
+  "listening_time": 60,
+  "extras": { "mqtt": { "publish": true, "topic": "albufera/boat-camera" } }
+}
+```
+
+AlLoRa never looks inside it. It carries the block, writes it when something asks for a new
+one, and hands it back when asked what this Hub is running. What the keys mean is entirely
+between you and whatever reads them.
+
+**Use the block rather than a key at the top of the entry**, even though a stray top-level key
+is preserved too. Two reasons, and both only bite later. The entry's own keys belong to the
+library, so a name you pick today can become a setting a later version reads, and neither you
+nor the Hub would be able to tell the two apart. And a Hub reporting what it runs can hand back
+a named block, while a loose key is indistinguishable from a typo in one of the library's own,
+so it cannot be reported and a program that never received it has no way to say so.
+
+A block set from outside replaces the old one whole rather than merging into it, so asking
+without a key is how you remove it. A value that is not a block is refused and the Hub says so,
+because whatever reads it goes looking for keys inside.
