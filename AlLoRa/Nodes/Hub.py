@@ -171,10 +171,17 @@ class Hub(Node):
         # at-most-once. What a one-shot DOES is the deployment's to say, never the library's.
         self._acted = {}
         self._one_shot_actions = {}
-        # What on this box wants telling when the roster moves, and what each of them adds to
-        # the report. Both are registrations rather than knowledge: the library notices the
-        # change and describes nothing, exactly as the one-shot table counts and does nothing.
+        # Settings that belong to this Hub rather than to any one node, carried and never read,
+        # the same rule a node's own block follows. A gateway has values of its own (where it
+        # publishes, what it calls this site) that live nowhere the roster can hold them, and
+        # without this they can only be edited by hand on the box.
+        self._extras = {}
+        # What on this box wants telling when the roster moves, what wants telling when this
+        # Hub's own settings move, and what each of them adds to the report. All three are
+        # registrations rather than knowledge: the library notices the change and describes
+        # nothing, exactly as the one-shot table counts and does nothing.
         self._roster_listeners = []
+        self._settings_listeners = []
         self._report_providers = {}
         self.management_state_file = self.config.get('management_state_file',
                                                      'management.state')
@@ -467,6 +474,31 @@ class Hub(Node):
         """
         self._roster_listeners.append(listener)
 
+    def register_settings_listener(self, listener):
+        """Say what on this box wants telling when this Hub's own settings have moved.
+
+        Separate from the roster listener rather than folded into it, because the two ask for
+        different work. A roster change moves where a node's files go, which whatever is doing
+        the publishing can usually absorb in place. A change to this Hub's own block can move
+        the far end itself, and answering that may mean tearing down and rebuilding something
+        the roster listener would never touch. One callback for both would make every cheap
+        change pay the expensive one's price, on every management interval that moved anything.
+
+        Called between visits and only when the block actually differs, for the same reason the
+        roster listener is: the site sends its whole wish every time. A listener that raises is
+        reported and does not stop the poll loop.
+        """
+        self._settings_listeners.append(listener)
+
+    def get_extras(self):
+        """This Hub's own settings block, as last told, or an empty one.
+
+        A copy, because the library promises only to carry this and never to read it, and a
+        caller that could reach in and edit the held block would be editing state the report is
+        about to describe as running.
+        """
+        return dict(self._extras)
+
     def register_report_provider(self, name, provider):
         """Say what else this box should state about itself, under `name`, in every report.
 
@@ -522,6 +554,11 @@ class Hub(Node):
                                        "extras": ep.extras}
                       for ep in self.digital_endpoints},
             "one_shots": dict(self._acted),
+            # This Hub's own block, handed back unread and always present even when empty, for
+            # the same reason a node's is: absent and empty are different claims, and a holder
+            # of the wish that cannot tell them apart shows a setting as wanted-only when it is
+            # in fact running.
+            "extras": dict(self._extras),
             "config_file": self.config_file,
             "nodes_file": self.nodes_file,
         }
@@ -566,9 +603,38 @@ class Hub(Node):
         nodes = intent.get("nodes")
         if nodes and self._apply_roster(nodes):
             self._announce_roster_change()
+        # After the roster and before the one-shots. A wish that moves both a node's block and
+        # this Hub's own is one wish, and the node half is the cheaper of the two to apply, so
+        # whatever the settings listener rebuilds is rebuilt once, already knowing the roster.
+        if "extras" in intent and self._apply_extras(intent["extras"]):
+            self._announce_settings_change()
         one_shots = intent.get("one_shots")
         if one_shots:
             self._run_one_shots(one_shots)
+
+    def _apply_extras(self, extras):
+        """Take this Hub's own settings block from a wish, and say whether it moved.
+
+        Written whole rather than merged, the same rule a node's block follows: it is desired
+        state, so the newest wish is the answer, and asking without a key is how a key is
+        removed. A merge would leave a setting nobody could ever take back out.
+
+        A block that is not a block of keys is dropped and said out loud rather than stored.
+        Whatever reads it goes looking for keys, so a string or a number in its place is a wish
+        nothing can act on, and keeping it would hand the next reader a value this Hub had
+        already seen and passed along.
+        """
+        if extras is None:
+            extras = {}
+        if not isinstance(extras, dict):
+            print("Hub: the extras for this Hub are a {}, not a block of keys; ignored"
+                  .format(type(extras).__name__))
+            return False
+        if extras == self._extras:
+            return False
+        self._extras = dict(extras)
+        self._save_management_state()
+        return True
 
     def _announce_roster_change(self):
         """Tell whoever asked that the roster has moved, once, after it has finished moving.
@@ -584,6 +650,19 @@ class Hub(Node):
                 # applying stays unapplied and keeps not matching, which is visible; losing
                 # the poll loop over it would not be.
                 print("Hub: a roster listener failed ({})".format(e))
+
+    def _announce_settings_change(self):
+        """Tell whoever asked that this Hub's own block has moved, once, after it is stored.
+
+        After and not during, and after the save, for the same reason the roster announcement
+        comes after the file is written: a listener re-reads to find out what this Hub now
+        says, and it should never read a block this Hub would forget at the next boot.
+        """
+        for listener in self._settings_listeners:
+            try:
+                listener()
+            except Exception as e:
+                print("Hub: a settings listener failed ({})".format(e))
 
     def _apply_pause(self, paused):
         if paused == self.paused:
@@ -762,6 +841,13 @@ class Hub(Node):
         acted = state.get("acted")
         if isinstance(acted, dict):
             self._acted = {name: n for name, n in acted.items() if isinstance(n, int)}
+        extras = state.get("extras")
+        if isinstance(extras, dict):
+            # Remembered rather than re-asked, because the gap costs real messages. A Hub that
+            # came back empty would publish to whatever its boot config names until the first
+            # management exchange, up to a whole interval later, and those messages would go to
+            # the broker somebody had already moved this deployment off.
+            self._extras = extras
 
     def _save_management_state(self):
         if not self.management_state_file:
@@ -771,7 +857,8 @@ class Hub(Node):
             # a Hub that was never paused and never acted, so a power cut during the write
             # would both un-pause a paused Hub and re-run every imperative it had already done.
             self._commit_json(self.management_state_file,
-                              {"paused": self.paused, "acted": self._acted})
+                              {"paused": self.paused, "acted": self._acted,
+                               "extras": self._extras})
         except Exception as e:
             print("Hub: could not persist the management state ({})".format(e))
 

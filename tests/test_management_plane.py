@@ -1026,3 +1026,176 @@ def test_a_provider_that_cannot_answer_says_so_under_its_own_name(tmp_path):
 
     assert report["publisher"] == {"error": "no publisher yet"}
     assert "nodes" in report, "and the rest of the report still goes out"
+
+
+# --- the settings that belong to the Hub itself, not to any node -----------------------------
+#
+# A node's block reaches the box from a page. A gateway's own values did not: where it
+# publishes and what it calls this site lived in an environment file, editable only over ssh.
+# Same rule one level up: carried, never read, and written whole.
+
+
+def test_a_wish_can_set_a_block_of_this_hubs_own(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    hub.submit_intent({"extras": {"mqtt": {"host": "10.0.0.5", "port": 1883}}})
+    hub._drain_management()
+
+    assert hub.get_extras() == {"mqtt": {"host": "10.0.0.5", "port": 1883}}
+
+
+def test_the_hubs_own_block_is_handed_back_in_the_report(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    hub.submit_intent({"extras": {"site": "Albufera"}})
+    hub._drain_management()
+
+    assert hub.management_report()["extras"] == {"site": "Albufera"}
+
+
+def test_the_report_carries_the_hubs_block_even_when_there_is_none(tmp_path):
+    # Present and empty, for the same reason a node's is: absent and empty are
+    # different claims, and a page that cannot tell them apart shows a setting as
+    # wanted-only when it is in fact running.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    assert hub.management_report()["extras"] == {}
+
+
+def test_the_held_block_cannot_be_edited_through_what_the_report_hands_out(tmp_path):
+    # The library promises to carry this and never read it. A caller editing the held
+    # block would be editing the state the next report describes as running.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    hub.submit_intent({"extras": {"site": "Albufera"}})
+    hub._drain_management()
+
+    hub.get_extras()["site"] = "somewhere else"
+    hub.management_report()["extras"]["site"] = "somewhere else again"
+
+    assert hub.get_extras() == {"site": "Albufera"}
+
+
+def test_a_new_block_replaces_the_hubs_old_one_whole(tmp_path):
+    # Desired state, so the newest wish is the answer and asking without a key is how a
+    # key is removed. A merge would leave a setting nobody could ever take back out.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    hub.submit_intent({"extras": {"mqtt": {"host": "10.0.0.5"}, "site": "Albufera"}})
+    hub._drain_management()
+
+    hub.submit_intent({"extras": {"mqtt": {"host": "10.0.0.9"}}})
+    hub._drain_management()
+
+    assert hub.get_extras() == {"mqtt": {"host": "10.0.0.9"}}
+
+
+def test_a_wish_saying_nothing_about_the_hubs_block_leaves_it_alone(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    hub.submit_intent({"extras": {"site": "Albufera"}})
+    hub._drain_management()
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"listening_time": 5}}})
+    hub._drain_management()
+
+    assert hub.get_extras() == {"site": "Albufera"}
+
+
+def test_a_hub_comes_back_with_the_block_it_was_last_told(tmp_path):
+    # The gap costs real messages. A Hub that came back empty would publish to whatever
+    # its boot config names until the first management exchange, up to a whole interval
+    # later, and to the broker somebody had already moved this deployment off.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    hub.submit_intent({"extras": {"mqtt": {"host": "10.0.0.5"}}})
+    hub._drain_management()
+
+    again = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    assert again.get_extras() == {"mqtt": {"host": "10.0.0.5"}}
+
+
+def test_a_hubs_block_that_is_not_a_block_of_keys_is_ignored(tmp_path):
+    # Whatever reads it goes looking for keys, so a string in its place is a wish nothing
+    # can act on, and storing it would hand the next reader a value this Hub passed along.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    hub.submit_intent({"extras": {"site": "Albufera"}})
+    hub._drain_management()
+
+    hub.submit_intent({"extras": "albufera/water-quality"})
+    hub._drain_management()
+
+    assert hub.get_extras() == {"site": "Albufera"}, "the block that worked is still there"
+
+
+def test_the_settings_listener_is_told_when_the_hubs_block_moves(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    told = []
+    hub.register_settings_listener(lambda: told.append(hub.get_extras()))
+
+    hub.submit_intent({"extras": {"mqtt": {"host": "10.0.0.5"}}})
+    hub._drain_management()
+
+    assert told == [{"mqtt": {"host": "10.0.0.5"}}]
+
+
+def test_a_wish_repeating_the_hubs_block_tells_nobody(tmp_path):
+    # The site sends its whole wish on every exchange. Without this a listener that
+    # reconnects to a broker would reconnect every management interval, for the life of
+    # the deployment.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    told = []
+    hub.register_settings_listener(lambda: told.append(True))
+
+    hub.submit_intent({"extras": {"mqtt": {"host": "10.0.0.5"}}})
+    hub._drain_management()
+    hub.submit_intent({"extras": {"mqtt": {"host": "10.0.0.5"}}})
+    hub._drain_management()
+
+    assert told == [True], "told once, for the change that actually happened"
+
+
+def test_a_roster_change_does_not_wake_the_settings_listener(tmp_path):
+    # The two are separate registrations because the work differs: a roster change can be
+    # absorbed in place, and a settings change can move the far end itself.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    settings, roster = [], []
+    hub.register_settings_listener(lambda: settings.append(True))
+    hub.register_roster_listener(lambda: roster.append(True))
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"listening_time": 5}}})
+    hub._drain_management()
+
+    assert roster == [True]
+    assert settings == []
+
+
+def test_a_settings_listener_that_fails_does_not_stop_the_loop(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    after = []
+
+    def boom():
+        raise RuntimeError("that broker does not answer")
+
+    hub.register_settings_listener(boom)
+    hub.register_settings_listener(lambda: after.append(True))
+
+    hub.submit_intent({"extras": {"mqtt": {"host": "10.0.0.5"}}})
+    hub._drain_management()
+
+    assert hub.get_extras() == {"mqtt": {"host": "10.0.0.5"}}, "the wish still applied"
+    assert after == [True], "and the next listener still ran"
+
+
+def test_one_wish_can_move_a_node_and_this_hub_together(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    order = []
+    hub.register_roster_listener(lambda: order.append("roster"))
+    hub.register_settings_listener(lambda: order.append("settings"))
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"extras": {"mqtt": {"topic": "albufera/a"}}}},
+                       "extras": {"mqtt": {"host": "10.0.0.5"}}})
+    hub._drain_management()
+
+    assert hub.digital_endpoints[0].extras == {"mqtt": {"topic": "albufera/a"}}
+    assert hub.get_extras() == {"mqtt": {"host": "10.0.0.5"}}
+    # The roster first: it is the cheaper half to apply, so whatever the settings listener
+    # rebuilds is rebuilt once, already knowing where each node's files go.
+    assert order == ["roster", "settings"]
