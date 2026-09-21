@@ -880,3 +880,149 @@ def test_a_block_that_is_not_a_block_is_refused_and_the_rest_still_applies(tmp_p
     assert "extras" not in _entry(hub, "a1a1a1a1")
     assert hub.digital_endpoints[0].extras == {}
     assert hub.digital_endpoints[0].listening_time == 5, "the rest of the wish stands"
+
+
+# --- a setting that means nothing to this library still has to reach whatever runs it --------
+#
+# `extras` lets a wish carry a setting the library will never model, and the file it lands in
+# is read by the program the Hub runs inside. That program reads it once, when it starts. So
+# until now a setting could reach the roster and change nothing at all until somebody restarted
+# the process, which from a website looks like a change that was applied and did not work.
+#
+# The library learns nothing here. It notices that the roster moved and says so; what a roster
+# change means is the deployment's business, exactly as what a one-shot does is.
+
+
+def test_a_listener_is_told_when_the_roster_has_moved(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    told = []
+    hub.register_roster_listener(lambda: told.append(hub.management_report()))
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {
+        "extras": {"mqtt": {"publish": True, "topic": "albufera/boat-camera"}}}}})
+    hub._drain_management()
+
+    assert len(told) == 1
+
+
+def test_a_listener_reads_a_roster_that_has_finished_moving(tmp_path):
+    # After, never during. A listener re-reads the file to find out what it now says, and half
+    # an applied wish is a state this Hub is never in as far as anything outside it is
+    # concerned.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    seen = []
+    hub.register_roster_listener(lambda: seen.append(_entry(hub, "a1a1a1a1").get("extras")))
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"extras": {"mqtt": {"topic": "albufera/new"}}}}})
+    hub._drain_management()
+
+    assert seen == [{"mqtt": {"topic": "albufera/new"}}]
+
+
+def test_a_wish_that_repeats_what_is_running_tells_nobody(tmp_path):
+    # The site sends its whole wish on every exchange. Without this, a listener that rebuilds
+    # something expensive rebuilds it every management interval for the life of the deployment.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1", listening_time=30,
+                                     extras={"mqtt": {"topic": "albufera/gnss"}})])
+    told = []
+    hub.register_roster_listener(lambda: told.append(True))
+
+    wish = {"nodes": {"a1a1a1a1": {"listening_time": 30,
+                                   "extras": {"mqtt": {"topic": "albufera/gnss"}}}}}
+    for _ in range(3):
+        hub.submit_intent(wish)
+        hub._drain_management()
+
+    assert told == []
+
+
+def test_a_listener_is_told_once_however_many_fields_moved(tmp_path):
+    # One roster change, not one per field. A listener rebuilds from the whole file.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1"), _node("edge-b", "b1b1b1b1")])
+    told = []
+    hub.register_roster_listener(lambda: told.append(True))
+
+    hub.submit_intent({"nodes": {
+        "a1a1a1a1": {"listening_time": 5, "extras": {"mqtt": {"topic": "one"}}},
+        "b1b1b1b1": {"listening_time": 7, "extras": {"mqtt": {"topic": "two"}}}}})
+    hub._drain_management()
+
+    assert told == [True]
+
+
+def test_a_node_leaving_the_roster_is_a_change_worth_telling(tmp_path):
+    # A node that stops being polled stops producing files, so whatever publishes them has a
+    # map with an entry that can never fire again.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1"), _node("edge-b", "b1b1b1b1")])
+    told = []
+    hub.register_roster_listener(lambda: told.append(True))
+
+    hub.submit_intent({"nodes": {"b1b1b1b1": {"active": False}}})
+    hub._drain_management()
+
+    assert told == [True]
+
+
+def test_a_listener_that_fails_does_not_stop_the_hub(tmp_path):
+    # The same posture as a one-shot that fails. Whatever it was applying stays unapplied and
+    # keeps not matching, which somebody can see; losing the poll loop over it would not be.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    after = []
+
+    def boom():
+        raise RuntimeError("the broker is not there")
+
+    hub.register_roster_listener(boom)
+    hub.register_roster_listener(lambda: after.append(True))
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"listening_time": 5}}})
+    hub._drain_management()
+
+    assert hub.digital_endpoints[0].listening_time == 5, "the wish still applied"
+    assert after == [True], "and the next listener still ran"
+
+
+# --- what a Hub says it is running, for the parts of itself the library does not model -------
+#
+# The defect this closes: the report was built from the roster the Hub had just written, so it
+# stated the wish back as though it were the running state. Observed twice in the field, in
+# both directions, on 2026-09-18 and 2026-09-21. Whoever is doing the work is the only thing
+# that can answer honestly, so it is asked.
+
+
+def test_the_report_carries_what_a_provider_says_is_running(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    hub.register_report_provider("publisher", lambda: {"exists": True, "broker": "reachable"})
+
+    assert hub.management_report()["publisher"] == {"exists": True, "broker": "reachable"}
+
+
+def test_a_provider_is_asked_every_time_rather_than_remembered(tmp_path):
+    # Read at report time and never pushed in. A value pushed is a value somebody has to
+    # remember to push again, and a report quietly repeating the last one it was given is the
+    # exact defect this exists to fix.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    state = {"topic": "albufera/old"}
+    hub.register_report_provider("publisher", lambda: dict(state))
+
+    first = hub.management_report()["publisher"]
+    state["topic"] = "albufera/new"
+    second = hub.management_report()["publisher"]
+
+    assert first == {"topic": "albufera/old"}
+    assert second == {"topic": "albufera/new"}
+
+
+def test_a_provider_that_cannot_answer_says_so_under_its_own_name(tmp_path):
+    # Omitting the block would read, at the far end, as a box that does not have the thing at
+    # all, which is a different and more reassuring claim than the truth.
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    def boom():
+        raise RuntimeError("no publisher yet")
+
+    hub.register_report_provider("publisher", boom)
+    report = hub.management_report()
+
+    assert report["publisher"] == {"error": "no publisher yet"}
+    assert "nodes" in report, "and the rest of the report still goes out"

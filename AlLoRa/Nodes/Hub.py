@@ -171,6 +171,11 @@ class Hub(Node):
         # at-most-once. What a one-shot DOES is the deployment's to say, never the library's.
         self._acted = {}
         self._one_shot_actions = {}
+        # What on this box wants telling when the roster moves, and what each of them adds to
+        # the report. Both are registrations rather than knowledge: the library notices the
+        # change and describes nothing, exactly as the one-shot table counts and does nothing.
+        self._roster_listeners = []
+        self._report_providers = {}
         self.management_state_file = self.config.get('management_state_file',
                                                      'management.state')
         self._load_management_state()
@@ -442,6 +447,47 @@ class Hub(Node):
         """
         self._one_shot_actions[name] = action
 
+    def register_roster_listener(self, listener):
+        """Say what on this box wants telling when the roster has moved.
+
+        The mirror of `register_one_shot`, and for the same reason: the library holds the
+        noticing and none of the doing. A roster entry can carry settings this library will
+        never model, because `extras` exists precisely so it can, and the program the Hub runs
+        inside is the only thing that knows what they mean. Without this, such a setting reaches
+        the file and changes nothing until somebody restarts the process, which looks broken
+        rather than slow.
+
+        Called between visits, never inside one, and only when something actually moved: a wish
+        that repeats what is already running fires nothing, or a listener rebuilding something
+        expensive would rebuild it on every management interval forever.
+
+        A listener that raises is reported and does not stop the poll loop. Whatever it was
+        applying stays unapplied, which is the same visible mismatch as a change that never
+        arrived, and the next wish carrying it tries again.
+        """
+        self._roster_listeners.append(listener)
+
+    def register_report_provider(self, name, provider):
+        """Say what else this box should state about itself, under `name`, in every report.
+
+        The report says what this Hub is running so that whoever holds the wish can show it
+        against what was asked for. For anything the library models that is a field it already
+        has. For anything it does not, the honest answer can only come from whatever is doing
+        the work, and this is how that reaches the report without the library learning what the
+        work is.
+
+        `provider` is called on every exchange and must answer from what it already knows.
+        Nothing here may touch a network or a disk: this runs between two radio visits, and an
+        answer worth waiting for is worth less than the visit it delays. A provider that wants
+        to report whether something far away is reachable reports the result of its last
+        attempt, which is a fact it holds, rather than making a fresh one here.
+
+        Read at report time rather than pushed in when it changes, on purpose. A value pushed
+        is a value somebody has to remember to push again, and a report that silently keeps the
+        last one it was given is exactly the defect this is being added to fix.
+        """
+        self._report_providers[name] = provider
+
     def management_report(self):
         """What this Hub is actually running, for whoever holds the wish to compare against.
 
@@ -450,8 +496,12 @@ class Hub(Node):
         not the status snapshot, which is an impression of one moment dropped freely every
         couple of seconds; settings are state, and putting them on that tick would spend
         payload and heap on values that change once a month.
+
+        What the library models, it answers from the endpoints it holds. What it does not, it
+        asks whoever registered a provider for, because a report assembled only from the wish
+        this Hub wrote down can state a setting as running that nothing is running.
         """
-        return {
+        report = {
             "paused": self.paused,
             # Held means polled, so `active` is true by construction here. Stated anyway
             # rather than implied, because the reader is comparing it against a wish that
@@ -475,6 +525,16 @@ class Hub(Node):
             "config_file": self.config_file,
             "nodes_file": self.nodes_file,
         }
+        for name, provider in self._report_providers.items():
+            try:
+                report[name] = provider()
+            except Exception as e:
+                # A block that cannot describe itself says so under its own name. Omitting it
+                # would read, at the far end, as a box that does not have the thing at all,
+                # which is a different and more reassuring claim than the truth.
+                print("Hub: the report provider '{}' failed ({})".format(name, e))
+                report[name] = {"error": str(e)}
+        return report
 
     def _drain_management(self):
         """Read the boundary, take the newest wish, and apply it. Called between visits only.
@@ -504,11 +564,26 @@ class Hub(Node):
         if "paused" in intent:
             self._apply_pause(bool(intent["paused"]))
         nodes = intent.get("nodes")
-        if nodes:
-            self._apply_roster(nodes)
+        if nodes and self._apply_roster(nodes):
+            self._announce_roster_change()
         one_shots = intent.get("one_shots")
         if one_shots:
             self._run_one_shots(one_shots)
+
+    def _announce_roster_change(self):
+        """Tell whoever asked that the roster has moved, once, after it has finished moving.
+
+        After and not during: a listener re-reads the roster to find out what it now says, and
+        half an applied wish is a state this Hub is never in from the outside.
+        """
+        for listener in self._roster_listeners:
+            try:
+                listener()
+            except Exception as e:
+                # The same posture as a one-shot that fails. Whatever this listener was
+                # applying stays unapplied and keeps not matching, which is visible; losing
+                # the poll loop over it would not be.
+                print("Hub: a roster listener failed ({})".format(e))
 
     def _apply_pause(self, paused):
         if paused == self.paused:
@@ -532,6 +607,12 @@ class Hub(Node):
         or a script still spelling a renamed field is applied rather than silently ignored.
         Ignoring it would be the worst of the three outcomes: the page would keep showing the
         setting as wanted and never applied, with nothing anywhere saying why.
+
+        Returns whether anything actually moved: a field on a held endpoint, the roster file,
+        the set of endpoints held. A wish that merely repeats what is already running moves
+        nothing and returns False. The site sends its whole wish on every exchange, so without
+        that distinction a listener would fire every management interval for the rest of the
+        deployment's life.
         """
         nodes = {label: with_current_keys(wish) for label, wish in nodes.items()}
         for label, wish in nodes.items():
@@ -544,7 +625,7 @@ class Hub(Node):
                 print("Hub: the extras for node {} are a {}, not a block of keys; ignored"
                       .format(label, type(extras).__name__))
                 del wish["extras"]
-        self._overlay_roster(nodes)
+        changed = self._overlay_roster(nodes)
         held = {ep.get_label(): ep for ep in self.digital_endpoints}
         retired = False
         for label, wish in nodes.items():
@@ -552,16 +633,20 @@ class Hub(Node):
             if endpoint is None:
                 continue
             for field in Hub._ENDPOINT_FIELDS:
-                if field in wish:
+                if field in wish and getattr(endpoint, field, None) != wish[field]:
                     setattr(endpoint, field, wish[field])
+                    changed = True
             if wish.get("active") is False:
                 self._retire_endpoint(endpoint)
                 retired = True
         if retired:
             self._refresh_status_map()
+            changed = True
         if self.nodes_file and any(wish.get("active") and label not in held
                                    for label, wish in nodes.items()):
             self.add_digital_endpoints(self.nodes_file)
+            changed = True
+        return changed
 
     def _retire_endpoint(self, endpoint):
         # Dropping the object is not enough: a reassembly in flight holds an open writer and a
@@ -592,9 +677,13 @@ class Hub(Node):
         An entry keeps the key names it already uses, so a roster written before a field was
         renamed stays readable by the library version that wrote it. The wish arrives spelled
         the current way and is written back the way the file spells it.
+
+        Returns whether the file was rewritten. Whoever re-reads this file to find out what it
+        now says needs to know that, and it is already computed here: the write is skipped when
+        nothing differs, which is the same question.
         """
         if not self.nodes_file:
-            return          # a roster assembled in code has no file to write the wish into
+            return False    # a roster assembled in code has no file to write the wish into
         try:
             with open(self.nodes_file, "r") as f:
                 roster = loads(f.read())
@@ -612,12 +701,18 @@ class Hub(Node):
                         changed = True
             if changed:
                 self._commit_json(self.nodes_file, roster)
+            return changed
         except Exception as e:
             # A roster that cannot be read or written leaves the Hub applying the change to
             # what it holds, which is still correct until the next restart. Losing the poll
             # loop over a bookkeeping write would be the worse trade.
             print("Hub: could not write the roster change to {} ({})".format(
                 self.nodes_file, e))
+            # Said to be unchanged, because a listener's job is to re-read this file and the
+            # file is not what the wish asked for. The endpoints held still move, so the Hub
+            # itself is correct; what depends on the file stays as it was and keeps not
+            # matching, which is the visible failure rather than the silent one.
+            return False
 
     def _run_one_shots(self, one_shots):
         """Act on the imperatives in a wish, at most once each, counted by generation.
