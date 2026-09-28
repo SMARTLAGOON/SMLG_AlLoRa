@@ -48,6 +48,8 @@ _ON_DEVICE_SECURE = [
     "AlLoRa/DataSources/Loop_guard.py",
     "AlLoRa/DataSinks/DataSink.py",
     "AlLoRa/DataSinks/MQTT_DataSink.py",
+    # Turns a finished file into the message a sink sends; any sink may use it, an Edge's too.
+    "AlLoRa/message_template.py",
     # The all-or-nothing write itself, now on the send path too: a queued payload is
     # committed through it before the node will serve the file.
     "AlLoRa/utils/file_utils.py",
