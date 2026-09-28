@@ -157,16 +157,30 @@ class Template:
         self.message = message
         self._parsed = self._parse(message)
 
+    def value_keys(self):
+        """The paths of this shape's fixed values ("location.lat"), in the order written.
+        These are the keys a node may fill in; a key filled from the file is not one."""
+        keys = []
+        self._collect_values(self._parsed, "", keys)
+        return keys
+
+    def _collect_values(self, node, prefix, keys):
+        for key, item in node.items():
+            if isinstance(item, dict):
+                self._collect_values(item, prefix + key + ".", keys)
+            elif not _holds_placeholder(item):
+                keys.append(prefix + key)
+
     def check_values(self, values):
-        """Refuse a node's value for a key this shape doesn't have. Every message in one
-        shape has the same keys, so a node may change a value but never add a key."""
+        """Refuse a node's value for anything but one of this shape's fixed values. Every
+        message in one shape has the same keys, so a node may change a value but never add a
+        key, replace a group, or overwrite what the file fills in."""
+        allowed = self.value_keys()
         for path in values or {}:
-            here = self.message
-            for key in path.split("."):
-                if not isinstance(here, dict) or key not in here:
-                    raise ValueError("template {}: a node sets {}, which the shape does "
-                                     "not have".format(self.name, path))
-                here = here[key]
+            if path not in allowed:
+                raise ValueError("template {}: a node sets {}, which is not one of the "
+                                 "shape's fixed values ({})".format(
+                                     self.name, path, ", ".join(allowed)))
 
     def render(self, file, reception, hub, values=None):
         """The message for one finished file, as UTF-8 JSON bytes.
@@ -216,6 +230,16 @@ class Template:
         if isinstance(value, list):
             return [self._parse(item) for item in value]
         return value
+
+
+def _holds_placeholder(parsed):
+    if isinstance(parsed, _Text):
+        return True
+    if isinstance(parsed, list):
+        return any(_holds_placeholder(item) for item in parsed)
+    if isinstance(parsed, dict):
+        return any(_holds_placeholder(item) for item in parsed.values())
+    return False
 
 
 class _Text:

@@ -105,6 +105,24 @@ def test_a_node_cannot_add_a_key_the_shape_does_not_have():
         template.check_values({"location.alt": 3})
 
 
+def test_a_node_cannot_overwrite_what_the_file_fills_in_or_a_whole_group():
+    # A hand-set timestamp would read as the file's own. A group set to one value would change
+    # the keys a consumer receives, which a shape exists to keep the same.
+    template = Template("pedro_v1", PEDRO_V1)
+    for path, value in (("timestamp", "2020-01-01T00:00:00Z"), ("location", 3)):
+        with pytest.raises(ValueError) as refused:
+            template.check_values({path: value})
+        assert path in str(refused.value)
+
+
+def test_a_shape_names_the_keys_a_node_may_fill_in():
+    # The fixed values, by path: what a website row offers for a node in this shape. Keys
+    # filled from the file are not in it, and neither is a group, only what is inside it.
+    template = Template("pedro_v1", PEDRO_V1)
+    assert template.value_keys() == ["tenant", "device_id", "location.lat", "location.lon",
+                                     "attachments"]
+
+
 def test_every_placeholder_resolves():
     file = AlLoRa_File(name="mq!836!1758621600123!emeteo%2Fobs", content=b"hi")
     reception = Reception(source="a1b2", session_id=7, device_id=b"\xa1\xb2\xc3\xd4",
