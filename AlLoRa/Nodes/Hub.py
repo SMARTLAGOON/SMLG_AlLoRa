@@ -422,7 +422,10 @@ class Hub(Node):
     _TIMING_FIELDS = ("wait_after_visit", "listening_time", "lock_on_file_receive",
                       "max_listen_time_when_locked", "stall_timeout")
     _ENDPOINT_FIELDS = _TIMING_FIELDS + ("name", "extras")
-    _ROSTER_FIELDS = ("active",) + _ENDPOINT_FIELDS
+    # `position` ({lat, lng, source}, as placed on the site's map) is written into the entry and
+    # never read here: whatever publishes a node's files reads it to say where they came from.
+    # Optional, like everything a wish may leave out.
+    _ROSTER_FIELDS = ("active", "position") + _ENDPOINT_FIELDS
 
     def set_management_source(self, source):
         """Plug in the boundary this Hub learns its desired state from.

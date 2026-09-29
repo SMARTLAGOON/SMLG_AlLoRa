@@ -18,9 +18,10 @@ from AlLoRa.utils.json_utils import json
 
 # The closed vocabulary. Each name describes one file's arrival: nothing plural or historical.
 PLACEHOLDERS = (
-    "@node.label", "@node.device_id", "@node.session_id", "@node.mode",
+    "@node.label", "@node.device_id", "@node.session_id", "@node.mode", "@node.lat", "@node.lng",
     "@file.name", "@file.size", "@file.chunks_total", "@file.arrival",
-    "@file.content", "@file.content.text", "@file.content.base64", "@file.content.encoding",
+    "@file.content", "@file.content.text", "@file.content.base64", "@file.content.json",
+    "@file.content.encoding",
     "@file.stats.rssi", "@file.stats.snr",
     "@file.origin.topic", "@file.origin.artifact", "@file.origin.observed",
     "@hub.site", "@hub.published",
@@ -31,7 +32,11 @@ _NAME_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_."
 # The placeholders that carry the file itself, and the encoding each one writes it in.
 # `@file.content` picks per file, so it has no fixed entry.
 _CONTENT = {"@file.content": None, "@file.content.text": "text",
-            "@file.content.base64": "base64"}
+            "@file.content.base64": "base64", "@file.content.json": "json"}
+
+# Names whose file holds one JSON value per line. Decided by the name, not the content: an
+# hourly file with one reading is also valid JSON, and it must still arrive as a list.
+_LINES = (".ndjson", ".jsonl")
 
 
 class Unpublishable(Exception):
@@ -85,10 +90,11 @@ def _iso_ms(ms):
 class _Arrival:
     """What the placeholders read for one file. The content is read at most once."""
 
-    def __init__(self, file, reception, hub, content_name=None):
+    def __init__(self, file, reception, hub, content_name=None, node=None):
         self.file = file
         self.reception = reception
         self.hub = hub or {}
+        self.node = node or {}
         self.content_name = content_name    # the message's one content placeholder, if any
         self._content = None
 
@@ -130,6 +136,17 @@ class _Arrival:
         except UnicodeError:
             return self.base64()
 
+    def parsed(self):
+        """The file as a JSON value, or as a list of them for a one-value-per-line file."""
+        text = self.text()
+        name = self.file.get_name()
+        try:
+            if any(name.endswith(end) for end in _LINES):
+                return [json.loads(line) for line in text.split("\n") if line.strip()]
+            return json.loads(text)
+        except ValueError:
+            raise Unpublishable("{} is not JSON".format(name))
+
     def base64(self):
         return binascii.b2a_base64(self.content()).strip().decode("ascii")
 
@@ -140,6 +157,11 @@ class _Arrival:
         if fixed is not None:
             return fixed
         return "text" if self.is_text() else "base64"
+
+    def position(self, axis):
+        """The node's position as placed on the site, or None for a node never placed."""
+        position = self.node.get("position")
+        return position.get(axis) if isinstance(position, dict) else None
 
     def published(self):
         ms = self.hub.get("published_ms")
@@ -167,6 +189,8 @@ _READERS = {
     "@node.device_id": _Arrival.device_id,
     "@node.session_id": lambda a: a.reception.session_id,
     "@node.mode": lambda a: "secure" if a.reception.device_id is not None else "open",
+    "@node.lat": lambda a: a.position("lat"),
+    "@node.lng": lambda a: a.position("lng"),
     "@file.name": lambda a: a.file.get_name(),
     "@file.size": lambda a: len(a.content()),
     "@file.chunks_total": lambda a: a.reception.total_chunks,
@@ -174,6 +198,7 @@ _READERS = {
     "@file.content": _Arrival.either,
     "@file.content.text": _Arrival.text,
     "@file.content.base64": _Arrival.base64,
+    "@file.content.json": _Arrival.parsed,
     "@file.content.encoding": _Arrival.encoding,
     "@file.stats.rssi": lambda a: a.reception.rssi,
     "@file.stats.snr": lambda a: a.reception.snr,
@@ -259,10 +284,11 @@ class Template:
                              "keys a node may set ({})".format(
                                  self.name, path, ", ".join(fixed + fills)))
 
-    def render(self, file, reception, hub, values=None):
+    def render(self, file, reception, hub, values=None, node=None):
         """The message for one finished file, as UTF-8 JSON bytes.
 
-        `hub` holds `site` and, for a fixed publish time, `published_ms`. `values` are the
+        `hub` holds `site` and, for a fixed publish time, `published_ms`. `node` is the node's
+        roster entry, read for its `position` ({lat, lng}). `values` are the
         node's own values by path ("location.lat"). A fixed value is copied in as it is, never
         read for placeholders; a key the file fills takes the node's placeholder instead of the
         shape's. A known placeholder with no value for this file becomes null. Raises
@@ -275,7 +301,7 @@ class Template:
         if self._content_key is not None:
             path, name = self._content_key
             content_name = values[path] if path in switched else name
-        arrival = _Arrival(file, reception, hub, content_name)
+        arrival = _Arrival(file, reception, hub, content_name, node)
         message = self._fill(self._parsed, arrival, switched, "")
         for path, value in (values or {}).items():
             if path in switched:
@@ -370,7 +396,7 @@ class _Text:
                 value = arrival.value(piece[0])
                 if value is None:
                     return None     # a missing value inside text makes the whole field null
-                out.append(str(value))
+                out.append(json.dumps(value) if isinstance(value, (dict, list)) else str(value))
             else:
                 out.append(piece)
         return "".join(out)

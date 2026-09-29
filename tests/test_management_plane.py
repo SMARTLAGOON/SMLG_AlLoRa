@@ -833,6 +833,42 @@ def test_an_empty_block_clears_what_was_there(tmp_path):
     assert hub.digital_endpoints[0].extras == {}
 
 
+# A node's position, as placed on the site's map, is written into its roster entry so whatever
+# publishes its files can say where they came from. The Hub never reads it.
+
+
+def test_a_nodes_position_is_written_into_the_roster(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+    moved = []
+    hub.register_roster_listener(lambda: moved.append(True))
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {
+        "position": {"lat": 39.33, "lng": -0.35, "source": "dragged"}}}})
+    hub._drain_management()
+
+    assert _entry(hub, "a1a1a1a1")["position"] == {"lat": 39.33, "lng": -0.35,
+                                                   "source": "dragged"}
+    # A moved pin is a roster change, so the publisher re-reads the file.
+    assert moved == [True]
+
+
+def test_a_node_without_a_position_is_left_without_one(tmp_path):
+    hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1")])
+
+    hub.submit_intent({"nodes": {"a1a1a1a1": {"name": "edge-a"}}})
+    hub._drain_management()
+
+    assert "position" not in _entry(hub, "a1a1a1a1")
+
+
+def test_a_hub_boots_on_a_roster_that_carries_positions(tmp_path):
+    placed = _node("edge-a", "a1a1a1a1", position={"lat": 39.33, "lng": -0.35,
+                                                   "source": "typed"})
+    hub = _make_hub(tmp_path, [placed])
+
+    assert [ep.get_label() for ep in hub.digital_endpoints] == ["a1a1a1a1"]
+
+
 def test_a_wish_that_says_nothing_about_the_block_leaves_it_alone(tmp_path):
     hub = _make_hub(tmp_path, [_node("edge-a", "a1a1a1a1",
                                      extras={"mqtt": {"topic": "albufera/gnss"}})])

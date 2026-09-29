@@ -175,15 +175,20 @@ def test_every_placeholder_resolves():
     file = AlLoRa_File(name="mq!836!1758621600123!emeteo%2Fobs", content=b"hi")
     reception = Reception(source="a1b2", session_id=7, device_id=b"\xa1\xb2\xc3\xd4",
                           rssi=-97, snr=8.5, total_chunks=3, timestamp_ms=ARRIVAL_MS)
-    # "node.label": "@node.label". The encoding needs a single content key, so it has its own.
-    shape = {name[1:]: name for name in PLACEHOLDERS if name != "@file.content.encoding"}
+    # "node.label": "@node.label". The encoding needs a single content key, and JSON content
+    # needs a JSON file, so each has its own tests.
+    shape = {name[1:]: name for name in PLACEHOLDERS
+             if name not in ("@file.content.encoding", "@file.content.json")}
     out = Template("all", shape).render(
-        file, reception, hub={"site": "albufera", "published_ms": ARRIVAL_MS + 2000})
+        file, reception, hub={"site": "albufera", "published_ms": ARRIVAL_MS + 2000},
+        node={"position": {"lat": 39.33, "lng": -0.35, "source": "dragged"}})
     assert json.loads(out) == {
         "node.label": "a1b2",
         "node.device_id": "a1b2c3d4",
         "node.session_id": 7,
         "node.mode": "secure",
+        "node.lat": 39.33,
+        "node.lng": -0.35,
         "file.name": "mq!836!1758621600123!emeteo%2Fobs",
         "file.size": 2,
         "file.chunks_total": 3,
@@ -199,6 +204,26 @@ def test_every_placeholder_resolves():
         "hub.site": "albufera",
         "hub.published": "2026-09-28T10:00:05Z",
     }
+
+
+PLACED = {"location": {"lat": "@node.lat", "lon": "@node.lng"}}
+
+
+def test_a_node_sends_its_position_on_the_map():
+    file, reception = _water_reading()
+    out = Template("t", PLACED).render(file, reception, hub={},
+                                       node={"position": {"lat": 39.33, "lng": -0.35,
+                                                          "source": "typed"}})
+    assert json.loads(out) == {"location": {"lat": 39.33, "lon": -0.35}}
+
+
+def test_a_node_never_placed_has_a_null_position():
+    # No fallback: a made-up position reads as a real one.
+    file, reception = _water_reading()
+    # A position mangled by hand in Nodes.json reads as none, not as a node that stops publishing.
+    for node in (None, {}, {"position": None}, {"position": [39.33, -0.35]}):
+        out = Template("t", PLACED).render(file, reception, hub={}, node=node)
+        assert json.loads(out) == {"location": {"lat": None, "lon": None}}
 
 
 def test_an_open_node_has_no_device_id():
@@ -259,6 +284,62 @@ def test_an_encoding_with_no_single_content_key_is_refused_when_loaded():
         with pytest.raises(ValueError) as refused:
             Template("t", shape)
         assert "@file.content.encoding" in str(refused.value)
+
+
+AS_JSON = {"data": "@file.content.json", "encoding": "@file.content.encoding"}
+
+
+def test_a_json_file_arrives_as_an_object_a_consumer_can_query():
+    file = AlLoRa_File(name="boat_0042.json",
+                       content=b'{"boats": 2, "image": "/9j/4A==", "centroids": [[3, 4]]}')
+    reception = Reception(source="c4m1", timestamp_ms=ARRIVAL_MS)
+    out = Template("t", AS_JSON).render(file, reception, hub={})
+    assert json.loads(out) == {"data": {"boats": 2, "image": "/9j/4A==",
+                                        "centroids": [[3, 4]]},
+                               "encoding": "json"}
+
+
+def test_an_ndjson_file_arrives_as_a_list_of_readings():
+    file = AlLoRa_File(name="uptime_hour_0000.ndjson",
+                       content=b'{"t": 21.4}\n{"t": 21.6}\n\n{"t": 21.9}\n')
+    reception = Reception(source="a1b2", timestamp_ms=ARRIVAL_MS)
+    out = Template("t", AS_JSON).render(file, reception, hub={})
+    assert json.loads(out)["data"] == [{"t": 21.4}, {"t": 21.6}, {"t": 21.9}]
+
+
+def test_an_ndjson_file_with_one_reading_is_still_a_list():
+    # The name decides, not the content: one line is also valid JSON, and a consumer must not
+    # get an object one hour and a list the next.
+    for name in ("uptime_hour_0001.ndjson", "log.jsonl"):
+        file = AlLoRa_File(name=name, content=b'{"t": 21.4}\n')
+        reception = Reception(source="a1b2", timestamp_ms=ARRIVAL_MS)
+        out = Template("t", AS_JSON).render(file, reception, hub={})
+        assert json.loads(out)["data"] == [{"t": 21.4}]
+
+
+def test_a_file_that_is_not_json_is_not_published():
+    reception = Reception(source="a1b2", timestamp_ms=ARRIVAL_MS)
+    for name, content in (("cam.jpg", b"\xff\xd8\xff\xe0"),
+                          ("notes.txt", b"t=21.4"),
+                          ("readings.json", b'{"t": 21.4}\n{"t": 21.6}\n'),
+                          ("broken.ndjson", b'{"t": 21.4}\nnot json\n')):
+        with pytest.raises(Unpublishable) as refused:
+            Template("t", AS_JSON).render(AlLoRa_File(name=name, content=content),
+                                          reception, hub={})
+        assert name in str(refused.value)
+
+
+def test_a_node_switches_its_content_to_json_and_the_encoding_says_so():
+    file, reception = _water_reading()
+    out = Template("t", SAYS_HOW).render(file, reception, hub={},
+                                         values={"data": "@file.content.json"})
+    assert json.loads(out) == {"data": {"t": 21.4, "h": 68.2}, "encoding": "json"}
+
+
+def test_json_content_inside_text_is_written_as_json_text():
+    file, reception = _water_reading()
+    out = Template("t", {"note": "got @file.content.json"}).render(file, reception, hub={})
+    assert json.loads(json.loads(out)["note"][4:]) == {"t": 21.4, "h": 68.2}
 
 
 def test_a_plain_file_has_the_same_keys_with_null_origin():
