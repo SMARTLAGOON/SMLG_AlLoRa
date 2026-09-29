@@ -20,13 +20,18 @@ from AlLoRa.utils.json_utils import json
 PLACEHOLDERS = (
     "@node.label", "@node.device_id", "@node.session_id", "@node.mode",
     "@file.name", "@file.size", "@file.chunks_total", "@file.arrival",
-    "@file.content.text", "@file.content.base64",
+    "@file.content", "@file.content.text", "@file.content.base64", "@file.content.encoding",
     "@file.stats.rssi", "@file.stats.snr",
     "@file.origin.topic", "@file.origin.artifact", "@file.origin.observed",
     "@hub.site", "@hub.published",
 )
 
 _NAME_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_."
+
+# The placeholders that carry the file itself, and the encoding each one writes it in.
+# `@file.content` picks per file, so it has no fixed entry.
+_CONTENT = {"@file.content": None, "@file.content.text": "text",
+            "@file.content.base64": "base64"}
 
 
 class Unpublishable(Exception):
@@ -80,10 +85,11 @@ def _iso_ms(ms):
 class _Arrival:
     """What the placeholders read for one file. The content is read at most once."""
 
-    def __init__(self, file, reception, hub):
+    def __init__(self, file, reception, hub, content_name=None):
         self.file = file
         self.reception = reception
         self.hub = hub or {}
+        self.content_name = content_name    # the message's one content placeholder, if any
         self._content = None
 
     def content(self):
@@ -109,6 +115,31 @@ class _Arrival:
             return self.content().decode("utf-8")
         except UnicodeError:
             raise Unpublishable("{} is not text".format(self.file.get_name()))
+
+    def is_text(self):
+        try:
+            self.content().decode("utf-8")
+            return True
+        except UnicodeError:
+            return False
+
+    def either(self):
+        """Text when the bytes are text, base64 otherwise: the envelope's own choice."""
+        try:
+            return self.content().decode("utf-8")
+        except UnicodeError:
+            return self.base64()
+
+    def base64(self):
+        return binascii.b2a_base64(self.content()).strip().decode("ascii")
+
+    def encoding(self):
+        """How this message wrote the file: the fixed encoding of its content placeholder,
+        or, for `@file.content`, the one it picked."""
+        fixed = _CONTENT[self.content_name]
+        if fixed is not None:
+            return fixed
+        return "text" if self.is_text() else "base64"
 
     def published(self):
         ms = self.hub.get("published_ms")
@@ -140,8 +171,10 @@ _READERS = {
     "@file.size": lambda a: len(a.content()),
     "@file.chunks_total": lambda a: a.reception.total_chunks,
     "@file.arrival": _Arrival.arrival,
+    "@file.content": _Arrival.either,
     "@file.content.text": _Arrival.text,
-    "@file.content.base64": lambda a: binascii.b2a_base64(a.content()).strip().decode("ascii"),
+    "@file.content.base64": _Arrival.base64,
+    "@file.content.encoding": _Arrival.encoding,
     "@file.stats.rssi": lambda a: a.reception.rssi,
     "@file.stats.snr": lambda a: a.reception.snr,
     "@hub.site": lambda a: a.hub.get("site"),
@@ -156,6 +189,22 @@ class Template:
         self.name = name
         self.message = message
         self._parsed = self._parse(message)
+        self._content_key = self._find_content_key()
+
+    def _find_content_key(self):
+        """The (path, placeholder) of the one content key `@file.content.encoding` describes,
+        or None when the shape has no encoding. Refused unless there is exactly one content
+        placeholder and it fills a whole key: otherwise the hint describes nothing clear."""
+        uses = []
+        _content_uses(self._parsed, "", uses)
+        if not any(name == "@file.content.encoding" for _, name, _ in uses):
+            return None
+        content = [(path, name, exact) for path, name, exact in uses if name in _CONTENT]
+        if len(content) != 1 or not content[0][2] or content[0][0] is None:
+            raise ValueError("template {}: @file.content.encoding needs exactly one content "
+                             "placeholder ({}) filling a whole key, and this shape has {}".format(
+                                 self.name, ", ".join(_CONTENT), len(content)))
+        return content[0][0], content[0][1]
 
     def value_keys(self):
         """The paths of this shape's fixed values ("location.lat"), in the order written.
@@ -171,27 +220,66 @@ class Template:
             elif not _holds_placeholder(item):
                 keys.append(prefix + key)
 
+    def fill_keys(self):
+        """The paths of keys whose whole value is one placeholder, in the order written. A node
+        may switch these to another placeholder (a camera: `data` as base64), never to a fixed
+        value, which would read as the file's own."""
+        keys = []
+        self._collect_fills(self._parsed, "", keys)
+        return keys
+
+    def _collect_fills(self, node, prefix, keys):
+        for key, item in node.items():
+            if isinstance(item, dict):
+                self._collect_fills(item, prefix + key + ".", keys)
+            elif isinstance(item, _Text) and item.exact():
+                keys.append(prefix + key)
+
     def check_values(self, values):
-        """Refuse a node's value for anything but one of this shape's fixed values. Every
-        message in one shape has the same keys, so a node may change a value but never add a
-        key, replace a group, or overwrite what the file fills in."""
-        allowed = self.value_keys()
-        for path in values or {}:
-            if path not in allowed:
-                raise ValueError("template {}: a node sets {}, which is not one of the "
-                                 "shape's fixed values ({})".format(
-                                     self.name, path, ", ".join(allowed)))
+        """Refuse a node's value unless it sets one of this shape's fixed values, or switches a
+        key the file fills to another known placeholder. Every message in one shape has the
+        same keys, so a node may never add a key or replace a group."""
+        fixed = self.value_keys()
+        fills = self.fill_keys()
+        for path, value in (values or {}).items():
+            if path in fixed:
+                continue
+            if path in fills:
+                if not (isinstance(value, str) and value in PLACEHOLDERS):
+                    raise ValueError("template {}: {} is filled by the file, so a node may "
+                                     "only switch it to another placeholder, not {!r}".format(
+                                         self.name, path, value))
+                if self._content_key is not None and path == self._content_key[0] \
+                        and value not in _CONTENT:
+                    raise ValueError("template {}: {} is the content @file.content.encoding "
+                                     "describes, so it switches only to {}".format(
+                                         self.name, path, ", ".join(_CONTENT)))
+                continue
+            raise ValueError("template {}: a node sets {}, which is not one of the shape's "
+                             "keys a node may set ({})".format(
+                                 self.name, path, ", ".join(fixed + fills)))
 
     def render(self, file, reception, hub, values=None):
         """The message for one finished file, as UTF-8 JSON bytes.
 
         `hub` holds `site` and, for a fixed publish time, `published_ms`. `values` are the
-        node's own values for the shape's keys, by path ("location.lat"). They are copied in
-        as they are, never read for placeholders. A known placeholder with no value for this
-        file becomes null. Raises Unpublishable when the file can't take this shape."""
+        node's own values by path ("location.lat"). A fixed value is copied in as it is, never
+        read for placeholders; a key the file fills takes the node's placeholder instead of the
+        shape's. A known placeholder with no value for this file becomes null. Raises
+        Unpublishable when the file can't take this shape."""
         self.check_values(values)
-        message = self._fill(self._parsed, _Arrival(file, reception, hub))
+        fills = self.fill_keys()
+        switched = {path: _Text([(value,)]) for path, value in (values or {}).items()
+                    if path in fills}
+        content_name = None
+        if self._content_key is not None:
+            path, name = self._content_key
+            content_name = values[path] if path in switched else name
+        arrival = _Arrival(file, reception, hub, content_name)
+        message = self._fill(self._parsed, arrival, switched, "")
         for path, value in (values or {}).items():
+            if path in switched:
+                continue
             keys = path.split(".")
             here = message
             for key in keys[:-1]:
@@ -199,13 +287,18 @@ class Template:
             here[keys[-1]] = value
         return json.dumps(message).encode("utf-8")
 
-    def _fill(self, node, arrival):
+    def _fill(self, node, arrival, switched, path):
+        # Switched before filling, so the shape's own placeholder is never read: a JPEG must
+        # not be refused as text when its node asked for base64.
+        node = switched.get(path, node)
         if isinstance(node, _Text):
             return node.fill(arrival)
         if isinstance(node, dict):
-            return {key: self._fill(item, arrival) for key, item in node.items()}
+            prefix = path + "." if path else ""
+            return {key: self._fill(item, arrival, switched, prefix + key)
+                    for key, item in node.items()}
         if isinstance(node, list):
-            return [self._fill(item, arrival) for item in node]
+            return [self._fill(item, arrival, {}, None) for item in node]   # no paths in lists
         return node
 
     def _parse(self, value):
@@ -232,6 +325,22 @@ class Template:
         return value
 
 
+def _content_uses(parsed, path, uses):
+    """Every placeholder in a parsed shape as (path, name, fills the whole key). Inside a
+    list the path is None: a list item has no path a node could address."""
+    if isinstance(parsed, _Text):
+        for piece in parsed.pieces:
+            if isinstance(piece, tuple):
+                uses.append((path, piece[0], parsed.exact()))
+    elif isinstance(parsed, dict):
+        prefix = path + "." if path else ""
+        for key, item in parsed.items():
+            _content_uses(item, None if path is None else prefix + key, uses)
+    elif isinstance(parsed, list):
+        for item in parsed:
+            _content_uses(item, None, uses)
+
+
 def _holds_placeholder(parsed):
     if isinstance(parsed, _Text):
         return True
@@ -247,6 +356,10 @@ class _Text:
 
     def __init__(self, pieces):
         self.pieces = pieces
+
+    def exact(self):
+        """Exactly one placeholder, nothing around it."""
+        return len(self.pieces) == 1 and isinstance(self.pieces[0], tuple)
 
     def fill(self, arrival):
         if len(self.pieces) == 1:

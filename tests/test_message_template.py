@@ -123,11 +123,60 @@ def test_a_shape_names_the_keys_a_node_may_fill_in():
                                      "attachments"]
 
 
+def test_a_camera_switches_the_data_placeholder_and_keeps_the_shape():
+    # One shape for the sensor nodes and the camera: the camera's JPEG can't be text, so its
+    # node switches `data` to base64. Switched before filling, so the text placeholder is never
+    # tried on the photo.
+    file = AlLoRa_File(name="boat_0001.jpg", content=b"\xff\xd8\xff\xe0")
+    reception = Reception(source="c3d4", timestamp_ms=ARRIVAL_MS)
+    out = Template("pedro_v1", PEDRO_V1).render(
+        file, reception, hub={"site": "albufera"},
+        values={"data": "@file.content.base64", "device_id": "boat_cam"})
+    message = json.loads(out)
+    assert message["data"] == "/9j/4A=="
+    assert message["device_id"] == "boat_cam"
+    assert set(message) == set(PEDRO_V1)
+
+
+def test_a_switched_placeholder_keeps_its_type():
+    file, reception = _water_reading()
+    out = Template("t", {"n": "@file.size"}).render(
+        file, reception, hub={}, values={"n": "@file.chunks_total"})
+    assert json.loads(out) == {"n": 1}
+
+
+def test_a_key_the_file_fills_takes_only_a_known_placeholder():
+    template = Template("pedro_v1", PEDRO_V1)
+    for value in ("2020-01-01T00:00:00Z", "@file.contents.text", "at @file.arrival", 3, None):
+        with pytest.raises(ValueError) as refused:
+            template.check_values({"timestamp": value})
+        assert "timestamp" in str(refused.value)
+
+
+def test_a_fixed_value_stays_literal_even_when_it_looks_like_a_placeholder():
+    file, reception = _water_reading()
+    out = Template("pedro_v1", PEDRO_V1).render(
+        file, reception, hub={}, values={"device_id": "@node.device_id"})
+    assert json.loads(out)["device_id"] == "@node.device_id"
+
+
+def test_a_shape_names_the_keys_a_node_may_switch():
+    # Keys whose whole value is one placeholder. Text around a placeholder can't be switched,
+    # and nothing inside a list is addressable by path.
+    template = Template("t", {"when": "@file.arrival", "label": "from @node.label",
+                              "at": {"rssi": "@file.stats.rssi"}, "list": ["@file.name"],
+                              "tenant": "albufera"})
+    assert template.fill_keys() == ["when", "at.rssi"]
+    with pytest.raises(ValueError):
+        template.check_values({"label": "@node.mode"})
+
+
 def test_every_placeholder_resolves():
     file = AlLoRa_File(name="mq!836!1758621600123!emeteo%2Fobs", content=b"hi")
     reception = Reception(source="a1b2", session_id=7, device_id=b"\xa1\xb2\xc3\xd4",
                           rssi=-97, snr=8.5, total_chunks=3, timestamp_ms=ARRIVAL_MS)
-    shape = {name[1:]: name for name in PLACEHOLDERS}     # "node.label": "@node.label"
+    # "node.label": "@node.label". The encoding needs a single content key, so it has its own.
+    shape = {name[1:]: name for name in PLACEHOLDERS if name != "@file.content.encoding"}
     out = Template("all", shape).render(
         file, reception, hub={"site": "albufera", "published_ms": ARRIVAL_MS + 2000})
     assert json.loads(out) == {
@@ -139,6 +188,7 @@ def test_every_placeholder_resolves():
         "file.size": 2,
         "file.chunks_total": 3,
         "file.arrival": "2026-09-28T10:00:03Z",
+        "file.content": "hi",
         "file.content.text": "hi",
         "file.content.base64": "aGk=",
         "file.stats.rssi": -97,
@@ -164,6 +214,51 @@ def test_a_photo_is_not_put_in_a_text_field():
     with pytest.raises(Unpublishable) as refused:
         Template("pedro_v1", PEDRO_V1).render(file, reception, hub={})
     assert "cam.jpg" in str(refused.value)
+
+
+SAYS_HOW = {"data": "@file.content", "encoding": "@file.content.encoding"}
+
+
+def test_content_is_text_when_it_can_be_and_says_so():
+    file, reception = _water_reading()
+    out = Template("t", SAYS_HOW).render(file, reception, hub={})
+    assert json.loads(out) == {"data": '{"t": 21.4, "h": 68.2}', "encoding": "text"}
+
+
+def test_a_photo_in_the_same_shape_is_base64_and_says_so():
+    # The camera needs no switch: the shape picks, and the hint names the pick.
+    file = AlLoRa_File(name="cam.jpg", content=b"\xff\xd8\xff\xe0")
+    reception = Reception(source="c4m1", timestamp_ms=ARRIVAL_MS)
+    out = Template("t", SAYS_HOW).render(file, reception, hub={})
+    assert json.loads(out) == {"data": "/9j/4A==", "encoding": "base64"}
+
+
+def test_the_encoding_follows_a_node_that_switches_its_content():
+    # A text file forced to base64 must not arrive labelled "text".
+    file, reception = _water_reading()
+    for switched, named in (("@file.content.base64", "base64"),
+                            ("@file.content.text", "text")):
+        out = Template("t", SAYS_HOW).render(file, reception, hub={},
+                                             values={"data": switched})
+        assert json.loads(out)["encoding"] == named
+
+
+def test_the_key_an_encoding_describes_switches_only_to_other_content():
+    template = Template("t", SAYS_HOW)
+    with pytest.raises(ValueError) as refused:
+        template.check_values({"data": "@file.name"})
+    assert "data" in str(refused.value)
+
+
+def test_an_encoding_with_no_single_content_key_is_refused_when_loaded():
+    # With no content, or two, or content inside text, the hint would describe nothing clear.
+    for shape in ({"encoding": "@file.content.encoding"},
+                  {"a": "@file.content", "b": "@file.content.base64",
+                   "encoding": "@file.content.encoding"},
+                  {"a": "got @file.content", "encoding": "@file.content.encoding"}):
+        with pytest.raises(ValueError) as refused:
+            Template("t", shape)
+        assert "@file.content.encoding" in str(refused.value)
 
 
 def test_a_plain_file_has_the_same_keys_with_null_origin():
