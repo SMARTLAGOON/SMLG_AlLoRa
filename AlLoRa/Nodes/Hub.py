@@ -20,6 +20,7 @@ from AlLoRa.DataSources.DataSource import DataSource
 from AlLoRa.Control.control_types import RF_CONFIG, IN_BAND
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Pacing import Pacing
 from AlLoRa.utils.time_utils import current_time_ms as time, sleep, ticks_add, ticks_diff
 from AlLoRa.utils.debug_utils import print
 
@@ -364,6 +365,29 @@ class Hub(Node):
                         save_files=save_files)
 
     def _visit(self, digital_endpoint, print_file_content, save_files):
+        # The radio and the drive loop both read `pacing` off the object they sit on, so for
+        # the length of the visit both point at this endpoint's. Between visits they are the
+        # Hub's own again, which is what the idle rest between endpoints sleeps on.
+        own_window, own_sleep = self.connector.pacing, self.pacing
+        if digital_endpoint.pacing is None:
+            digital_endpoint.pacing = self._fresh_link_pacing()
+        self.connector.pacing = self.pacing = digital_endpoint.pacing
+        try:
+            self._listen_for_visit(digital_endpoint, print_file_content, save_files)
+        finally:
+            self.connector.pacing, self.pacing = own_window, own_sleep
+
+    def _fresh_link_pacing(self):
+        """A link nobody has learned yet: the radio's current window bounds and the sleep
+        bounds its SF and bandwidth give, the same start the Hub's own controllers had."""
+        link = Pacing(successful_interactions_required=self.pacing.successful_interactions_required,
+                      max_failures=self.pacing.max_failures,
+                      exponential_backoff_threshold=self.pacing.exponential_backoff_threshold)
+        link.set_bounds(self.connector.pacing.min_timeout, self.connector.pacing.max_timeout)
+        link.set_sleep_bounds(self.pacing.min_sleep, self.pacing.max_sleep)
+        return link
+
+    def _listen_for_visit(self, digital_endpoint, print_file_content, save_files):
         if self.debug:
             print("Listening to endpoint {} ({}) for {}s".format(
                 digital_endpoint.get_name(), digital_endpoint.get_label(),

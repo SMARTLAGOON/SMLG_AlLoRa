@@ -209,6 +209,10 @@ class Digital_Endpoint:
         self.mesh = False  # Mesh mode starts disabled
         self.retransmission_counter = 0  # Counter for retransmissions
         self.debug = debug
+        # What the Hub has learned about timing on this link: the receive window and the
+        # inter-request sleep. Each peer is its own link, so a quiet one must not detune a
+        # busy one. The Hub creates it on the first visit and swaps it in for every visit.
+        self.pacing = None
 
     # The five settings that describe a peer's RADIO: what this node has to match to hear it.
     # Anything else in a pasted block (timeouts, debug, serial_port/baud) describes how the

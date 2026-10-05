@@ -24,6 +24,16 @@ def test_set_bounds_resets_the_window_to_max():
     assert p.window == 4.0          # window resets to the new max
 
 
+def test_set_bounds_that_did_not_move_keeps_the_learned_window():
+    # A Hub retunes to each peer's config every visit; landing back on a link's own bounds
+    # is not news about that link, so what it learned there survives.
+    p = Pacing(min_timeout=0.5, max_timeout=6.0)
+    p.on_reply(1.0)
+    learned = p.window
+    p.set_bounds(0.5, 6.0)
+    assert p.window == learned
+
+
 def test_on_reply_tightens_the_window_toward_the_round_trip():
     p = Pacing(min_timeout=0.5, max_timeout=6.0)
     # EWMA: 6*0.8 + 1.0*0.2 = 5.0, floored by max(min=0.5, observed_min=1.0) = 1.0 -> 5.0

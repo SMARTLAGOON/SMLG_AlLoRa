@@ -34,6 +34,7 @@ class Pacing:
                  exponential_backoff_threshold=0.5):
         # --- adaptive receive window ---
         self.observed_min_timeout = float('inf')
+        self.min_timeout = self.max_timeout = None
         self.set_bounds(min_timeout, max_timeout)
         # --- inter-request sleep controller (its bounds arrive later via set_sleep_bounds,
         # which needs the sf/bw the collector reads off its connector) ---
@@ -44,7 +45,11 @@ class Pacing:
 
     def set_bounds(self, min_timeout, max_timeout):
         """Set the ToA-derived window bounds and reset the window to `max`. Called at config
-        time and on every RF-config change."""
+        time and on every RF-config change. Bounds that did not move leave the window alone:
+        a Hub retunes to each peer's config on every visit, and returning to a link's own
+        config says nothing new about that link."""
+        if min_timeout == self.min_timeout and max_timeout == self.max_timeout:
+            return
         self.min_timeout = min_timeout
         self.max_timeout = max_timeout
         self.window = max_timeout

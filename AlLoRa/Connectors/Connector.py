@@ -442,8 +442,7 @@ class Connector:
                 self.set_cr(cr)
             if tx_power is not None:
                 self.set_transmission_power(tx_power)
-            self.update_timeouts()
-            self.adaptive_timeout = self.max_timeout
+            self.update_timeouts()   # resets the window when, and only when, the bounds moved
             return True
         except Exception as e:
             if self.debug:
