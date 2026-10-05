@@ -19,8 +19,9 @@ wakes the receive path exactly like an intact one. That is why a receiver that n
 flag hands corruption to the application, and a fake that withheld RxDone on a CRC error would
 make that defect untestable.
 
-`FakeSpi.arrive()` is the whole interface a test needs: it stages a frame in the RX FIFO and
-raises the flags the modem would raise for it.
+`FakeSpi.arrive()` stages a frame in the RX FIFO and raises the flags the modem would raise for
+it, whatever the chip is doing. `FakeSpi.on_air()` is the stricter version for timing questions:
+the frame lands only if the chip is listening at that moment, as on a real radio.
 """
 import os
 import sys
@@ -33,7 +34,7 @@ if _DRIVERS not in sys.path:
     sys.path.insert(0, _DRIVERS)
 
 from PyLora_SX127x_extensions.board_config import BOARD          # noqa: E402
-from PyLora_SX127x_extensions.constants import MASK, REG          # noqa: E402
+from PyLora_SX127x_extensions.constants import MASK, MODE, REG    # noqa: E402
 
 FIFO = REG.LORA.FIFO
 OP_MODE = REG.LORA.OP_MODE
@@ -44,6 +45,7 @@ RX_NB_BYTES = REG.LORA.RX_NB_BYTES
 MODEM_CONFIG_1 = REG.LORA.MODEM_CONFIG_1
 MODEM_CONFIG_2 = REG.LORA.MODEM_CONFIG_2
 INVERT_IQ = REG.LORA.INVERT_IQ
+DIO_MAPPING_1 = REG.LORA.DIO_MAPPING_1
 
 LONG_RANGE_MODE = 0x80
 RX_PAYLOAD_CRC_ON = 0x04            # MODEM_CONFIG_2 bit 2: the modem computes the payload CRC
@@ -51,6 +53,7 @@ RX_PAYLOAD_CRC_ON = 0x04            # MODEM_CONFIG_2 bit 2: the modem computes t
 RX_DONE = 1 << MASK.IRQ_FLAGS.RxDone
 PAYLOAD_CRC_ERROR = 1 << MASK.IRQ_FLAGS.PayloadCrcError
 VALID_HEADER = 1 << MASK.IRQ_FLAGS.ValidHeader
+TX_DONE = 1 << MASK.IRQ_FLAGS.TxDone
 
 # SX1276 reset defaults. The LoRa MODEM_CONFIG_1 default is the one that matters: 0x72 puts
 # BW125 in the top nibble, which is why a lost bandwidth write looked like a working node.
@@ -69,6 +72,7 @@ class FakeSpi:
         self.fsk = dict(FSK_DEFAULTS)
         self.lora_mode = False      # the chip comes out of reset as an FSK modem
         self.writes = []            # (register, value, lora_mode_at_the_time)
+        self.modes_at_write = []    # (register, op_mode_at_the_time), for config that latches only when idle
         self.fifo = b""             # what a read of RegFifo walks through
         self.fifo_ptr = 0
 
@@ -79,6 +83,7 @@ class FakeSpi:
         if address & 0x80:
             register = address & 0x7F
             self.writes.append((register, value, self.lora_mode))
+            self.modes_at_write.append((register, self.op_mode()))
             if register == IRQ_FLAGS:
                 # Write one to clear: a set bit in the written value takes that flag down and
                 # a clear bit leaves it standing.
@@ -89,6 +94,9 @@ class FakeSpi:
             self._file()[register] = value
             if register == OP_MODE:
                 self.lora_mode = bool(value & LONG_RANGE_MODE)
+                if value == MODE.TX:
+                    # The transmission completes at once: the driver only ever waits for TxDone.
+                    self.lora[IRQ_FLAGS] = self.flags() | TX_DONE
             return value
         if address == FIFO:
             byte = self.fifo[self.fifo_ptr] if self.fifo_ptr < len(self.fifo) else 0x00
@@ -101,6 +109,24 @@ class FakeSpi:
 
     def flags(self):
         return self.lora.get(IRQ_FLAGS, 0)
+
+    def op_mode(self):
+        return self.lora.get(OP_MODE, 0) if self.lora_mode else self.fsk.get(OP_MODE, 0)
+
+    def listening(self):
+        return self.lora_mode and self.op_mode() in (MODE.RXCONT, MODE.RXSINGLE)
+
+    def on_air(self, frame):
+        """A peer transmits `frame`. The chip receives it only if it is listening right now.
+
+        This is the property the turnaround race turns on, which `arrive()` deliberately
+        skips: a frame sent while the chip is in standby or sleep is not buffered anywhere,
+        it is simply gone. Returns whether the chip caught it.
+        """
+        if not self.listening():
+            return False
+        self.arrive(frame)
+        return True
 
     def arrive(self, frame, crc_error=False):
         """A frame lands: stage it in the FIFO and raise the flags the modem raises for it.
@@ -146,7 +172,9 @@ class FakeBoard:
         the pin being high is exactly RxDone being set. A window that ends with the pin low
         raises, which is the "nothing arrived" path the connector turns into a timeout.
         """
-        if not self.spi.flags() & RX_DONE:
+        # DIO0 follows whichever flag it is mapped to: TxDone while sending, RxDone otherwise.
+        mapped = TX_DONE if self.spi.lora.get(DIO_MAPPING_1, 0) >> 6 == 1 else RX_DONE
+        if not self.spi.flags() & mapped:
             raise BOARD.LoRaTimeoutError("Timeout Exception!")
         self.cb_dio0(None)
         return 1

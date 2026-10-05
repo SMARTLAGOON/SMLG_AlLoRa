@@ -36,5 +36,14 @@ The bytes on the bus are unchanged and so is the status decoding. `tests/test_sx
 covers all four against a fake bus. The first three are ours to keep; the fourth is the one worth
 offering upstream.
 
+**`PyLora_SX127x_extensions/pyLora.py` leaves the receiver on after a transmission**, the same
+turn the SX1262 copy took. `send()` ends by putting the chip in continuous receive with stale RX
+flags cleared, `recv()` waits on a receiver that is already listening instead of restarting it
+through sleep, and the spreading-factor and coding-rate setters step into standby for the write
+and back out. Before this, the chip was deaf from the end of each transmission until the caller
+next reached `recv()`, about 70 ms of node software on a T3-S3, which is the same time a peer
+takes to send its next request. `tests/test_sx127x_listens_after_send.py` covers it against the
+fake chip in `tests/fake_sx127x.py`.
+
 When updating a driver, re-pin the exact upstream commit and note it here. **Rebasing this one
 onto a newer upstream means re-applying the four changes above**, so read this table first.

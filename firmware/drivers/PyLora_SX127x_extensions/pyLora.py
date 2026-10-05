@@ -147,6 +147,47 @@ class pyLora:
         while not self.__SX127X_LIB.get_irq_flags()['tx_done']:
             pass
         self.__SX127X_LIB.set_dio0_status(timeout_value=self.timeout_socket, socket_blocked=self.blocked_socket)   #self.timeout_socket
+        self._listen()
+
+    def _listen(self):
+        """ Put the receiver on air now, before the caller gets control back.
+
+            A peer starts answering within tens of milliseconds of a transmission ending, and
+            whatever the caller does next (logging, collecting garbage, reading the next
+            chunk) can take as long. The receiver used to come on only when recv() was
+            called, so the race between the two was decided by software timing. On the bench
+            the tightest rounds switched the receiver on just as the request began, and a
+            round that lost the race went unheard while the Hub waited out a whole receive
+            window.
+
+            Anything heard before this transmission is cleared, so the wait that follows it
+            starts empty, as it did when recv() restarted the receiver every time.
+        """
+        lib = self.__SX127X_LIB
+        lib.set_dio_mapping([0, 0, 0, 0])   # DIO0 = RxDone
+        lib.clear_irq_flags(RxDone=1, PayloadCrcError=1, ValidHeader=1)
+        lib.reset_ptr_rx()
+        lib.set_mode(MODE.RXCONT)
+
+    def _listening(self):
+        lib = self.__SX127X_LIB
+        return lib.get_mode() == MODE.RXCONT and lib.get_dio_mapping()[0] == 0
+
+    def _idle_for(self, change, *args):
+        """ Apply a modem setting with the chip in standby, then put it back where it was.
+
+            Modem configuration latches only in sleep or standby, and the receiver is now
+            parked in continuous receive between transmissions, so a retune would otherwise
+            land mid-receive. Returning to receive restarts it on the new settings.
+        """
+        lib = self.__SX127X_LIB
+        mode = lib.get_mode()
+        if mode != MODE.STDBY:
+            lib.set_mode(MODE.STDBY)
+        result = change(*args)
+        if mode != MODE.STDBY:
+            lib.set_mode(mode)
+        return result
 
     def recv(self, size=230):
         """ Util Method for recv
@@ -171,10 +212,15 @@ class pyLora:
             cleared, so the wait above cannot have returned for an earlier frame. And it is
             read directly rather than through the library's own rx_is_good(), which also
             tests ValidHeader and so reports trouble on every healthy reception.
+
+            A receiver that is already listening is left alone. Restarting it passes through
+            sleep, which aborts a frame arriving at that moment; send() leaves the chip
+            listening, so only a radio that has never transmitted needs switching on here.
         """
-        self.__SX127X_LIB.set_mode(MODE.SLEEP)
-        self.__SX127X_LIB.set_dio_mapping([0, 0, 0, 0])
-        self.__SX127X_LIB.set_mode(MODE.RXCONT)
+        if not self._listening():
+            self.__SX127X_LIB.set_mode(MODE.SLEEP)
+            self.__SX127X_LIB.set_dio_mapping([0, 0, 0, 0])
+            self.__SX127X_LIB.set_mode(MODE.RXCONT)
         self.__SX127X_LIB.set_dio0_status(timeout_value=self.timeout_socket, socket_blocked=self.blocked_socket)
         if self.__SX127X_LIB.get_irq_flags()['crc_error']:
             # Clear it, or the next frame on this radio inherits the verdict.
@@ -235,12 +281,12 @@ class pyLora:
         return self.__SX127X_LIB.get_preamble()
 
     def sf(self, sf):
-        self.__SX127X_LIB.set_spreading_factor(sf)
+        self._idle_for(self.__SX127X_LIB.set_spreading_factor, sf)
         self._apply_ldro()
 
     # Added method to set spreading factor
     def set_spreading_factor(self, sf):
-        self.__SX127X_LIB.set_spreading_factor(sf)
+        self._idle_for(self.__SX127X_LIB.set_spreading_factor, sf)
         self._apply_ldro()
 
     # Added method to set bandwidth
@@ -270,7 +316,7 @@ class pyLora:
 
     # Added method to set coding rate
     def set_coding_rate(self, cr):
-        self.__SX127X_LIB.set_coding_rate(cr)
+        self._idle_for(self.__SX127X_LIB.set_coding_rate, cr)
 
     # Added method to set frequency
     def set_frequency(self, freq):
