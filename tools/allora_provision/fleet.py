@@ -28,6 +28,7 @@ fleet.
 """
 import json
 import os
+import subprocess
 
 from AlLoRa.Digital_Endpoint import with_current_keys
 from AlLoRa.Control.Control_Root import Control_Root
@@ -54,6 +55,18 @@ _REGISTRY_NAME = "fleet.json"
 _PLAN_NAME = "plan.json"
 _BACKUPS_DIR = "backups"
 _STAGING_DIR = "staging"
+
+# The files in a fleet that are secrets, as the paths git is asked about. The backup name stands
+# for every numbered file `backup_identity` writes: what matters is whether a rule covers that
+# shape of name, and the bare `identity.key` pattern most repos carry does not.
+# Each probe is paired with the name the operator is shown.
+_SECRET_PROBES = (
+    (CONTROL_ROOT_NAME, CONTROL_ROOT_NAME),
+    (os.path.join(_STAGING_DIR, "private", CONTROL_ROOT_NAME),
+     os.path.join(_STAGING_DIR, "private", CONTROL_ROOT_NAME)),
+    (os.path.join(_BACKUPS_DIR, "node-01.identity.key"),
+     os.path.join(_BACKUPS_DIR, "*.identity.key")),
+)
 
 # The keys a Nodes.json entry may carry. The registry holds more than this (what posture a node
 # was provisioned into, where its identity backup went), and none of that belongs in a file the
@@ -99,11 +112,19 @@ def classify_root_half(material):
         "scalar ({}); this holds {}".format(PUBLIC_HEX_LEN, PRIVATE_HEX_LEN, len(material)))
 
 
+class FleetWouldBeCommitted(ValueError):
+    """The fleet sits in a git work tree that would commit its keys.
+
+    A ValueError so the CLI reports it as a refusal like any other, with the fix in the message.
+    """
+
+
 class Fleet:
     """One deployment's operator-side directory."""
 
     def __init__(self, path):
         self.path = os.path.abspath(path)
+        self._keys_checked = False
 
     # --- layout -------------------------------------------------------------------------
 
@@ -132,6 +153,7 @@ class Fleet:
         return os.path.join(self.path, _STAGING_DIR)
 
     def ensure(self):
+        self._refuse_if_git_would_commit_keys()
         for directory in (self.path, self.backups_path, self.staging_path):
             if not os.path.isdir(directory):
                 os.makedirs(directory)
@@ -404,6 +426,70 @@ class Fleet:
         with open(path, "r") as f:
             priv = int(f.read().strip(), 16)
         return device_id_from_pubkey(public_key_uncompressed(priv)).hex()
+
+    # --- the git guard ------------------------------------------------------------------
+
+    def _refuse_if_git_would_commit_keys(self):
+        """Stop before the first key is written if the repo around the fleet would commit it.
+
+        The normal place to run the wizard is the operator's own deployment repo, and nothing
+        this library ships can add an ignore rule there. A root minted into a tracked directory
+        is one `git add .` away from being published, and with it every node's control plane;
+        a board's identity backup lets anyone impersonate that board to its Hub. So the
+        question is put to git itself, once, at the only moment the operator can still choose.
+
+        It asks about the key files, not the directory: a repo may keep a fleet's registry and
+        staging as evidence of what went onto each board and exclude only the secrets, and that
+        layout is fine. Outside a work tree, or on a machine without git, there is nothing that
+        could commit the file and the check passes.
+        """
+        if self._keys_checked:
+            return
+        fleet = os.path.realpath(self.path)
+        anchor = fleet
+        while not os.path.isdir(anchor):
+            anchor = os.path.dirname(anchor)
+        exposed = []
+        for relative, shown in _SECRET_PROBES:
+            code = self._git(anchor, "check-ignore", "-q", os.path.join(fleet, relative))
+            if code is None or code not in (0, 1):
+                # No git, or not a work tree (git answers 128): nothing here can commit it.
+                self._keys_checked = True
+                return
+            if code == 1:
+                exposed.append(shown)
+        if exposed:
+            top = self._git_toplevel(anchor) or anchor
+            raise FleetWouldBeCommitted(
+                "{} is inside the git repository at {}, and git would commit its {}. Those are "
+                "the deployment's signing key and the boards' identity backups, in cleartext: "
+                "whoever holds them controls the nodes. Add this line to {} and run again:\n\n"
+                "    {}/\n\n"
+                "or keep the fleet outside the repository with --fleet. If git already tracks "
+                "one of these files, `git rm --cached` it as well, because an ignore rule does "
+                "not untrack a file.".format(
+                    self.path, top, ", ".join(exposed), os.path.join(top, ".gitignore"),
+                    os.path.relpath(fleet, top)))
+        self._keys_checked = True
+
+    @staticmethod
+    def _git(cwd, *args):
+        """git's exit code for `args` run in `cwd`, or None when git cannot be run at all."""
+        try:
+            return subprocess.run(["git", "-C", cwd] + list(args),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+        except OSError:
+            return None
+
+    @staticmethod
+    def _git_toplevel(cwd):
+        try:
+            done = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  universal_newlines=True)
+        except OSError:
+            return None
+        return os.path.realpath(done.stdout.strip()) if done.returncode == 0 else None
 
     # --- writes -------------------------------------------------------------------------
 

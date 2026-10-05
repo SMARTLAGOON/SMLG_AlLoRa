@@ -14,6 +14,8 @@ destroy it, and `--json` putting exactly one document on stdout.
 import io
 import json
 import os
+import shutil
+import subprocess
 
 import pytest
 
@@ -302,6 +304,19 @@ def test_the_on_site_mode_hands_over_the_signing_half_and_says_what_it_costs(tmp
     warnings = " ".join(hub["warnings"])
     assert "relay" in warnings or "courier" in warnings or "authority" in warnings
     assert "one signer" in warnings.lower()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+def test_fleet_init_inside_a_repo_that_would_commit_its_keys_fails_with_the_fix(tmp_path):
+    """The operator hears about it as a failed command carrying the ignore line, not as a
+    traceback, and no root is left behind to be committed by the next `git add .`."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    fleet_dir = tmp_path / "allora-fleet"
+    code, result = _json_run(["fleet-init"], FakeWire(), fleet_dir)
+    assert code != 0
+    assert result["ok"] is False
+    assert "allora-fleet/" in result["error"]
+    assert not (fleet_dir / "control_root.key").exists()
 
 
 def test_the_fleet_root_is_minted_once_and_reused_by_both_boards(tmp_path):

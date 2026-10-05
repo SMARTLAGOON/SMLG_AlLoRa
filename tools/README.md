@@ -96,6 +96,14 @@ allora-fleet/
 A visible directory rather than a hidden one under `$HOME`, because the root and its counter
 are files somebody has to hand over when a deployment moves from the bench to a backend.
 
+**Visible, but never committed.** The normal place to run the wizard is your own deployment
+repo, and nothing this library ships can add an ignore rule there. So before the first key is
+written, the wizard asks git whether it would commit `control_root.key`,
+`staging/private/control_root.key` or a `backups/*.identity.key`, and refuses if it would,
+printing the line to add to your `.gitignore`. It checks the keys, not the directory: keeping
+`fleet.json` and `staging/` under version control as a record of what went onto each board is
+fine. Outside a git repo, or without git installed, there is nothing to check.
+
 **Exactly one signer per root.** `control.counter` holds the highest number minted. Two signers
 on one root both start at zero, both mint number 1, and the target refuses the second as a
 replay, which looks exactly like the command not working. So handover moves `control_root.key`

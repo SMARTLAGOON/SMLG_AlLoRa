@@ -11,13 +11,15 @@ the registry of `device_id`s the operator has issued. Three rules it must never 
 """
 import json
 import os
+import shutil
+import subprocess
 
 import pytest
 
 from AlLoRa.Control.Control_Root import Control_Root
 from AlLoRa.Security.ec_p256 import public_key_uncompressed
 from tools.allora_provision.fleet import (
-    CONTROL_ROOT_NAME, Fleet, PRIVATE_HEX_LEN, PUBLIC_HEX_LEN, classify_root_half)
+    CONTROL_ROOT_NAME, Fleet, FleetWouldBeCommitted, PRIVATE_HEX_LEN, PUBLIC_HEX_LEN, classify_root_half)
 
 # RFC 6979 A.2.5's published test scalar, used here because it is unmistakably not a real key.
 ROOT_PRIV_HEX = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
@@ -353,3 +355,93 @@ def test_a_backed_up_identity_reproduces_the_device_id_the_board_computes(tmp_pa
     path = fleet.backup_identity("abcd1234", ROOT_PRIV_HEX)
     expected = device_id_from_pubkey(public_key_uncompressed(int(ROOT_PRIV_HEX, 16))).hex()
     assert fleet.device_id_of_identity_file(path) == expected
+
+
+# --- a fleet inside someone's git repo ----------------------------------------------------
+
+needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+
+
+def _repo(tmp_path, ignore=None):
+    """A git work tree at tmp_path, with `ignore` as its .gitignore if given."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    if ignore is not None:
+        (tmp_path / ".gitignore").write_text(ignore)
+    return tmp_path
+
+
+@needs_git
+def test_a_fleet_whose_keys_git_would_commit_is_refused_before_any_key_exists(tmp_path):
+    """The field case: an operator runs the wizard inside their own deployment repo, where no
+    ignore rule covers the fleet. The root minted there would be one `git add .` away from
+    being published, and with it the whole deployment's control plane."""
+    fleet = _fleet(_repo(tmp_path))
+    with pytest.raises(FleetWouldBeCommitted) as caught:
+        fleet.load_or_create_root()
+    assert not os.path.exists(fleet.root_key_path)
+    # The refusal carries the fix, so the operator can act on it without reading any docs.
+    assert "allora-fleet/" in str(caught.value)
+    assert ".gitignore" in str(caught.value)
+
+
+@needs_git
+def test_a_fleet_the_repo_ignores_whole_is_accepted(tmp_path):
+    fleet = _fleet(_repo(tmp_path, ignore="allora-fleet/\n"))
+    _, created = fleet.load_or_create_root()
+    assert created is True
+
+
+@needs_git
+def test_a_repo_that_ignores_only_the_key_material_is_accepted(tmp_path):
+    """The cockpit's shape: the registry and the staging are kept as evidence of what went onto
+    each board, and only the secrets are excluded. The check is about the keys, not the
+    directory, or this legitimate layout would be refused."""
+    fleet = _fleet(_repo(tmp_path, ignore="**/control_root.key\n**/*.identity.key\n"))
+    fleet.load_or_create_root()
+    fleet.backup_identity("d909f4eb", "aa" * 32)
+    fleet.register(name="S", role="edge", device_id=DEVICE_ID)
+
+
+@needs_git
+def test_ignoring_the_root_but_not_the_backups_is_still_refused(tmp_path):
+    """The hole this guard exists for: `identity.key` is ignored by its bare name, and the
+    numbered backups the wizard actually writes are not."""
+    fleet = _fleet(_repo(tmp_path, ignore="**/control_root.key\n**/identity.key\n"))
+    with pytest.raises(FleetWouldBeCommitted) as caught:
+        fleet.backup_identity("d909f4eb", "aa" * 32)
+    assert not os.path.exists(fleet.backups_path)
+    assert "identity.key" in str(caught.value)
+
+
+@needs_git
+def test_a_key_already_tracked_is_refused_even_under_an_ignore_rule(tmp_path):
+    """An ignore rule does not untrack a file git already has, so it is no protection for one."""
+    repo = _repo(tmp_path)
+    fleet = Fleet(str(repo / "allora-fleet"))
+    os.makedirs(fleet.path)
+    with open(fleet.root_key_path, "w") as f:
+        f.write(ROOT_PRIV_HEX)
+    subprocess.run(["git", "-C", str(repo), "add", "allora-fleet/control_root.key"], check=True)
+    (repo / ".gitignore").write_text("allora-fleet/\n")
+    with pytest.raises(FleetWouldBeCommitted):
+        fleet.load_or_create_root()
+
+
+def test_a_fleet_outside_any_repo_is_untouched_by_the_check(tmp_path):
+    # tmp_path sits outside any work tree; every other test in this file relies on that too.
+    _, created = _fleet(tmp_path).load_or_create_root()
+    assert created is True
+
+
+def test_a_machine_without_git_is_not_refused(tmp_path, monkeypatch):
+    """No git means nothing on this machine can commit the file, so there is nothing to guard."""
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError("git")
+    monkeypatch.setattr("tools.allora_provision.fleet.subprocess.run", no_git)
+    _, created = _fleet(tmp_path).load_or_create_root()
+    assert created is True
+
+
+def test_the_refusal_reaches_the_operator_as_a_failed_command(tmp_path):
+    """Raised as a ValueError so the CLI reports it like any other refusal, not as a traceback."""
+    assert issubclass(FleetWouldBeCommitted, ValueError)
