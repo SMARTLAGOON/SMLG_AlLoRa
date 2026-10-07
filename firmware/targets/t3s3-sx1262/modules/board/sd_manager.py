@@ -1,9 +1,6 @@
 # The microSD card on a board that has one.
-#
-# Pins are not restated here. They are read off the board object, which is the one file that
-# knows this board's wiring: the previous version carried its own defaults, one of which
-# (MOSI 15) contradicted the board file (11), so a caller who trusted the signature got a
-# card that never mounted and a node that ran on and served nothing.
+# The pins come from the board object, the one file with this board's wiring. An older copy kept
+# its own defaults, and one of them (MOSI 15) was wrong, so the card never mounted.
 import gc
 import machine
 

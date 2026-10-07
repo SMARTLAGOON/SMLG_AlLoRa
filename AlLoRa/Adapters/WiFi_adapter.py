@@ -1,20 +1,7 @@
-"""WiFi_adapter: a WiFi tunnel's bridge board.
+"""An Adapter that starts WiFi (access point or station) and talks to the logic board over HTTP.
 
-Thin over Adapter: the bridge holds the radio but no protocol logic. It brings up the network
-(AP hotspot or STA client), then reads transport-verb requests off an HTTP link, runs each verb
-on its real radio Connector, and writes the result back, never parsing the LoRa wire, never
-holding a session key. The verb pumping and dispatch live in Adapter; this owns only the WiFi
-bring-up and building the concrete WiFi_link bridge over it. The pre-split bridge re-parsed the
-frame with a JSON-command protocol, which is why it could only ever serve v2; the split serves
-v2 / v3-open / v3-secure alike.
-
-    adapter = WiFi_adapter(SX127x_connector())
-    adapter.run()
-
-The bring-up here and the byte transport in WiFi_link are deliberately separate: this gets the
-network up, the link moves bytes over it. The MicroPython network module is imported inside
-init_wifi rather than at module scope, so the file itself loads anywhere (which is what lets
-the config-carrying behaviour below be covered off-device).
+`network` is imported only when WiFi starts, so this file also loads on a computer.
+Usage: `WiFi_adapter(SX127x_connector()).run()`.
 """
 from AlLoRa.Adapters.Adapter import Adapter
 from AlLoRa.Links.WiFi_link import WiFi_link

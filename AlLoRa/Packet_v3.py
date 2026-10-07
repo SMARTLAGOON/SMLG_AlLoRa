@@ -1,40 +1,8 @@
-"""The v3 wire unit: a typed, versioned Packet.
+"""The v3 packet: a header with a version and a packet type. No cryptography here.
 
-v2's `Packet` fused the command into two bits of a flags byte, addressed every frame
-with two 4-byte MACs, and stored a 12-bit hex "checksum" in a 3-byte field. v3 fixes all
-three at once, without fattening the header:
-
-  * a **version nibble** (0x3) makes the format self-describing and extensible (v4+ headroom),
-    with a **typed-kind nibble** replacing the 2-bit command;
-  * **session-id addressing** collapses the two MACs to one byte once a session exists
-    (MACs survive only in the handshake / mesh, where there's no session or a relay needs
-    the real destination);
-  * the integrity trailer becomes a **real 24-bit** `sha256(payload)` digest.
-
-This is the *codec only*, the wire structure, zero crypto (the "open" security posture).
-Secure mode swaps the integrity trailer for an AEAD tag and adds an anti-replay counter;
-the kind/flag/addressing machinery here is shared by both. v2 `Packet` is left untouched
-so a v3 node can still fall back to a legacy peer during version negotiation.
-
-Header layouts (P2P shown; mesh inserts a 2-byte `seq` before `integ`):
-
-    MAC-addressed  [src4][dst4][VT1][FL1][integ3]   = 13 B   (v2-compat first contact)
-    did-addressed  [did4][VT1][FL1][integ3]         =  9 B   (v3 first contact, no MAC on wire)
-    sid-addressed  [sid1][VT1][FL1][integ3]         =  6 B   (established session)
-
-    VT   = version(4b)=0x3 | kind(4b)
-    FL   = mesh|sleep|hop|debug_hops|role_token|auth|cfg_epoch|spare
-    integ = sha256(payload)[:3]
-
-Secure mode swaps the integrity trailer for an AEAD tag and adds an anti-replay counter,
-and carries no FL byte (every flag is mesh-scoped or unbuilt, and secure is P2P only):
-
-    sid-addressed  [sid1][VT1][ctr2] + sealed(payload) + [tag4]   = 8 B overhead
-
-The did token is device_id[:4], one 4-byte identity address, the same in both directions
-(the collector polls it, the source answers under it), so it matches at wire offset 0 exactly
-like the sid. It replaces the two-MAC handshake header once a node is registered by device_id
-rather than by MAC.
+Open: [addr][VT1][FL1][integ3]. addr is src4+dst4 (13 B), did4 (9 B) or sid1 (6 B, in a session).
+VT = version 0x3 | kind; integ = sha256(payload)[:3]; mesh adds seq2. Secure: [sid1][VT1][ctr2] +
+sealed payload + [tag4], no FL. The v2 `Packet` class is unchanged, for v2 peers.
 """
 import struct
 import hashlib

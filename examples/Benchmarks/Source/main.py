@@ -1,17 +1,8 @@
-"""v2 baseline benchmark: Source (the device under test for throughput).
+"""v2 baseline benchmark: the Source, the board whose throughput is measured.
 
-Run this against the `v2.0.0` library, not against the v3 branch: it is deliberately frozen
-on the v2 API, and `Source` no longer exists on v3. The harness itself only exists on v3, so
-flashing means the tag's `AlLoRa/` package plus this file. See this folder's README.
-
-Serves a fixed set of file sizes a few times each and prints one machine-readable
-`BENCH,...` line per transfer (wall-clock around send_file -> end-to-end throughput,
-including handshake + final OK). Capture this device's serial output to a file and
-feed it to ../parse_benchmark.py.
-
-Run one SF per session: set `sf` in this folder's LoRa.json (and match it on the
-Requester), flash, capture, then change SF and repeat (e.g. SF7 / SF11 / SF12).
-Establishes the v2 baseline the v3 wire-format call is gated on (measured, not arithmetic).
+Run it on the `v2.0.0` library, not on v3 (see this folder's README). It sends a fixed set of
+file sizes and prints one `BENCH,...` line per transfer, for ../parse_benchmark.py to read.
+Run one SF per session: set `sf` in this folder's LoRa.json, and the same on the Requester.
 """
 import gc
 

@@ -1,18 +1,8 @@
-"""A sliding anti-replay window over an integer frame counter (RFC 6479 style).
+"""Rejects replayed frames, using a sliding window over the frame counter (as in RFC 6479).
 
-The receiver of a secure session calls ``accept(counter)`` once per authenticated frame.
-It answers a single question: *have I already seen this counter, or is it too old to
-judge?* A fresh counter is accepted (and remembered); a counter already seen, or one
-that has fallen out of the window, is rejected.
-
-The window tolerates bounded reordering (a fresh counter arriving after a higher one is
-still accepted while it stays within ``WINDOW`` of the highest), which v3's
-selective-repeat transfer needs; strict-monotonic checking would drop legitimately
-reordered frames. State is a single highest-seen value plus a ``WINDOW``-bit mask, a few
-bytes per session, nothing on the wire.
-
-Counters are expected to be positive (the send side starts at 1); ``0`` is the
-"nothing accepted yet" sentinel.
+Call `accept(counter)` once per authenticated frame. It rejects repeats and counters more than
+`WINDOW` below the highest, but allows reordering inside the window, which selective repeat
+needs. Counters start at 1.
 """
 
 

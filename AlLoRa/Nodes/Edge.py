@@ -1,13 +1,7 @@
-"""Edge: the node at the far placement (formerly `Source`).
+"""The node with the sensors, at the far end of the link. v2 called it `Source`.
 
-Named by where it sits, not by which way data flows: an Edge lives with the sensors/devices
-at the end of the link and *serves* by default (home role "source"): uplink is always
-Edge-serves / Hub-pulls, even for a large file. It still carries the drive loop, because a
-downlink reverses the roles for one pull: the Hub delegates the collector role with a GRANT and
-this Edge pulls the pending file, then comes home. The Edge never self-promotes, and it
-yields the instant it hears its Hub polling again. `data_sink` is therefore where a
-*downlink* lands on an Edge (a capturing sink in tests, an apply-the-artifact sink in
-production).
+It answers its Hub by default. When the Hub grants a downlink, the Edge pulls once, and goes back
+to answering as soon as it hears the Hub polling again. A downlink lands in `data_sink`.
 """
 import gc
 from AlLoRa.Nodes.Node import Node

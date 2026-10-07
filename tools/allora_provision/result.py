@@ -1,14 +1,8 @@
-"""One structured result per command, so the wizard has exactly one integration surface.
+"""One structured result per command, so a caller has one thing to parse.
 
-The second consumer of every command here is the control website, and `AlLoRaControl` is
-TypeScript: it cannot import a Python module wherever that module lives, so it will shell out
-to this CLI or talk to a small service that does. That makes machine-readable output the
-integration surface, not an importable core, and it is why every command takes `--json`.
-
-The split that matters is which stream carries what. Under `--json`, stdout carries exactly one
-JSON document and progress goes to stderr, so a caller can parse stdout without filtering it and
-a human watching the terminal still sees the steps go by. Without `--json` both go to stdout in
-the order they happened.
+With `--json`, stdout carries exactly one JSON document and progress goes to stderr, so the
+control website can parse stdout as it is, and a person still sees the steps. Without `--json`,
+both go to stdout in order.
 """
 import json
 import sys

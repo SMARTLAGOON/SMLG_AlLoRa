@@ -1,20 +1,8 @@
-# The same deployment as ../../main.py, written out longhand.
-#
-# ../../main.py reads the config and builds what it names. This file names everything itself, for
-# the secure Edge, and does nothing else different: same classes, same order, same node. Read it
-# to see what the dispatch actually does, and copy it when your deployment is not one the config
-# can describe.
-#
-# The case that matters is a radio this repository has never supported. `Node` takes a Connector
-# INSTANCE and stores it, so nothing here needs a `driver` name or a patched library: subclass
-# `Connector`, supply its nine methods (`config`, `transmit`, `recv`, `get_rssi`, `get_snr`, and
-# the five RF setters), and pass it on the line below. `SX127x_connector` is 132 lines and
-# `E5_connector` fits the same shape while being an AT-command modem rather than an SPI
-# transceiver, so the seam is wide enough for most radios.
-#
-# `tests/test_generic_main.py` runs this file and the generic one over a loopback and requires
-# the same node out of both, because a literal file that has drifted is worse than none: it is
-# the one people read.
+# The same deployment as ../../main.py, written out in full for the secure Edge.
+# Read it to see what main.py builds. Copy it when the config cannot describe your deployment,
+# for example a radio this library does not support: subclass Connector, write its nine
+# methods, and pass an instance below.
+# tests/test_generic_main.py checks that this file and main.py build the same node.
 import gc
 import time
 

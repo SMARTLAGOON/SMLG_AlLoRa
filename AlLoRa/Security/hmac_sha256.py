@@ -1,20 +1,7 @@
-"""HMAC-SHA256 (RFC 2104), written out against the native hash.
+"""HMAC-SHA256 (RFC 2104), built on the board's native SHA-256.
 
-MicroPython ships no built-in HMAC. The firmware manifest pulls micropython-lib's pure-Python
-one, and that wrapper costs 19.4 ms on the Edge and 48.1 ms on the Hub against 0.14 ms for the
-SHA-256 it wraps. Two callers pay for it, and one of them pays four times per radio round: the
-per-frame AEAD tag, which is what made a sealed transfer cost about 28% more than an open one
-instead of about 4%. The other is the session key schedule, charged once per handshake.
-
-HMAC is two hash passes over key-derived pads, so writing it here costs a dozen lines and
-returns the same bytes as the module it replaces, at 1.1 ms on both boards. It lives in its own
-module rather than inside either caller because both are primitives: an AEAD should not have to
-import a key-derivation module to seal a frame, and a key schedule should not have to import a
-cipher to stretch a secret.
-
-Everything here is byte-identical to ``hmac.new(key, msg, hashlib.sha256).digest()``. That is a
-property the tests pin against the standard library and against the RFC 5869 vectors, not an
-aspiration: a MAC that is merely fast authenticates nothing.
+It gives the same bytes as `hmac.new(key, msg, hashlib.sha256).digest()`. Use it instead of the
+`hmac` module: on the boards, MicroPython's version is 17 to 44 times slower.
 """
 import hashlib
 

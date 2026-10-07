@@ -1,26 +1,8 @@
-"""Link: the byte pipe between a split Connector's two halves.
+"""A byte pipe between the two halves of a split Connector. It never looks inside the frames.
 
-A tunnel splits a Connector across a slow link: the logic-holder runs the protocol engine +
-codec + keys and forwards the transport verbs; the bridge (Adapter) holds the radio and runs
-them. The Link is the transport underneath that forwarding: it moves opaque request/reply
-frames and knows *nothing* about verbs, the LoRa air wire, or session keys. That ignorance is
-the point: adding a BLE or USB tunnel is a new Link, never new protocol logic.
-
-Two halves of the same link object graph:
-
-  * client half (logic-holder):  rpc(request) -> reply      send a request, block for its reply
-                                 read_reply() -> reply      take the next one without asking
-  * bridge half (Adapter):       read_request() -> request  ;  write_reply(reply)
-
-`read_reply` exists because on a streaming medium a reply can outlive the question it answers:
-the bridge blocks at its radio for the length of a window, so a reply the client has stopped
-waiting for is still on its way. The client half discards such a frame by its call id and needs
-somewhere to take the next one from. A medium that pairs a response to its request by
-construction (an HTTP body) has no second frame to offer and says so by returning None.
-
-Concrete links (Serial_link, WiFi_link) delimit frames on their medium (a UART sentinel, an
-HTTP body); Loopback_link backs the contract with in-process queues so the tunnel is testable
-on CPython.
+The logic side calls `rpc()` and `read_reply()`; the radio side calls `read_request()` and
+`write_reply()`. `read_reply` picks up a late reply on a serial line. Over HTTP each reply comes
+back with its request, so there it returns None.
 """
 
 

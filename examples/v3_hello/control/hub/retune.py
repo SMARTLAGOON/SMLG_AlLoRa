@@ -1,13 +1,8 @@
-# v3 control: the Hub moves the pair onto a new radio configuration, over the air.
-#
-# This is an operation you run once, not a program a board is deployed with. A deployed Hub runs
-# ../../main.py like every other node; this file is what you run in its place when you want to
-# command a retune and watch what happens. It is a recipe, so it registers its Edge inline
-# rather than from Nodes.json: the whole example turns on one device_id you paste in.
-#
-# Same two boards as the hello-world, same Edge. Nothing here selects how the command travels:
-# that follows from what the two nodes were provisioned with, which is the whole of the setup
-# (see the README). This example is the provisioned case, so the command is a signed artifact.
+# v3 control: the Hub moves the pair to a new radio setting, over the air.
+# Run this once on the Hub, in place of ../../main.py, to send the retune and watch it happen.
+# It registers its Edge here rather than from Nodes.json, so paste the Edge's device_id below.
+# How the command travels depends only on how the nodes were provisioned (see the README).
+# Here they hold a control root, so the command is signed.
 import gc
 import time
 from AlLoRa.Nodes.Hub import Hub

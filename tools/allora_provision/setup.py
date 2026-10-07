@@ -1,34 +1,8 @@
-"""`provision setup`: the one command, and the only interactive one.
+"""`provision setup`: the one interactive command, for a person at the bench.
 
-The rest of this package is a toolkit -- five commands that each do one phase correctly and
-never ask a question. That shape is right for the control website, which shells out and parses
-`--json`, and wrong for a person at a bench: it makes them know the five commands exist, know
-the order, know which posture they want, and hand-type port paths for two boards that are told
-apart by MAC rather than by path.
-
-`setup` is the layer on top and nothing else. It **drives** `provision_edge`, `provision_hub`,
-`update_hub_roster` and `verify_pair`; it does not reimplement them. Everything it decides is
-decided before any board is touched, and then it runs the plan the operator approved.
-
-Four things make it more than a shell loop over the other commands:
-
-**It discovers the boards and lets you pick which is which.** The MAC is the identity; the port
-is not, and on native USB the port changes under you on every hard reset.
-
-**It writes the plan down and then applies it.** The document it writes is the one `apply`
-runs, so the two front doors reach one engine (`run_plan`) and the interactive path leaves
-behind something that can be kept, diffed, re-run and handed to somebody else.
-
-**It asks scratch or extend first**, whenever there is something to extend. Extend adds nodes
-to a deployment that stays running: the Hub gets its roster updated rather than rebuilt, and
-the rows this run did not provision are carried across exactly as the Hub has them.
-
-**It owns the human-in-the-loop moment.** When a freshly flashed board stays silent, the tap on
-RESET is a prompt *inside* the run rather than a failure, a message and a re-run from the top.
-That prompt is what `apply` does without, and the only thing it does without.
-
-Every question goes through `Prompt`, whose reader is injected, so the whole flow is testable
-with a scripted list of answers and no keyboard.
+It asks everything first, writes the answers as a plan, and runs it with the same engine as
+`apply`. It lists the boards so you pick which is which, asks scratch or extend, and asks for a
+RESET press if a new board stays silent. Questions go through an injected `Prompt` for the tests.
 """
 import os
 import sys

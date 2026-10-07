@@ -1,10 +1,6 @@
-"""The swappable session-store seam.
+"""Keeps a node's live secure sessions by session id: get, put, drop.
 
-Where a node keeps its live secure Sessions, keyed by session id. v3.0.0 ships the RAM
-store (sessions die on reboot -> re-handshake, which fits always-powered deployments);
-persisting to ESP32 RTC slow memory for deep-sleep duty-cycling is a v3.x store that drops
-in behind this same interface with no protocol change. The seam is a plain base class
-(no ``abc``, MicroPython-friendly) whose contract is get / put / drop.
+Sessions live in RAM and are lost on reboot, so a rebooted node does the handshake again.
 """
 
 

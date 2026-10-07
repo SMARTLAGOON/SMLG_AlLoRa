@@ -1,21 +1,7 @@
-"""The ephemeral-static ECDH handshake that establishes a secure Session.
+"""The key exchange (ECDH) that sets up a secure session between an Edge and a Hub.
 
-Three role-named steps, decoupled from the wire: each produces or consumes an opaque
-payload of bytes, so the caller chooses how to frame them and no handshake wire-kind is
-fixed here:
-
-    initiator_hello(randfunc)                 -> (state, hello_payload)     # Edge
-    responder_accept(static_priv, hello, sid) -> (session, welcome_payload) # Hub
-    initiator_complete(state, welcome)        -> session                    # Edge
-
-The initiator (an Edge) makes a fresh ephemeral keypair per session; the responder (the
-Hub) holds a long-lived static keypair and assigns the session id. Each derives the
-same ECDH shared secret from its own private key and the peer's public key, and the KDF
-turns it into matching session keys. The secret itself never crosses the wire. A fresh
-ephemeral key per session means a reboot re-handshakes into a distinct key.
-
-The two AEAD keys are combined into the Session's opaque ``key`` here; the frame layer
-splits them back out when it calls the AEAD.
+The Edge calls `initiator_hello`, then `initiator_complete`. The Hub calls `responder_accept` with
+its long-term key and picks the session id. The caller sends the payloads.
 """
 from AlLoRa.Security.ec_p256 import (
     generate_private_key, public_key_uncompressed, ecdh_shared_secret,

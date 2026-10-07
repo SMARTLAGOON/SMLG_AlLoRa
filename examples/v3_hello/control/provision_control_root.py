@@ -1,35 +1,9 @@
 #!/usr/bin/env python3
-"""Create a fleet's control root and lay out the two halves ready to copy onto the boards.
+"""Creates a fleet's control root and writes its two halves into hub/ and edge/.
 
-A control root is the authority that signs configuration commands: retune this node, reset
-that one. The Hub (or a backend) holds the private half and signs with it; every commanded
-node holds the public half and checks signatures against it. Provisioning one changes what a
-node accepts, since a node that holds a control root refuses unsigned commands from then on.
-
-    python3 provision_control_root.py                # writes into hub/ and edge/ next to this
-    python3 provision_control_root.py /path/to/fleet # writes into <path>/hub and <path>/edge
-
-Both files are called `control_root.key` on purpose: the same name and the same config line
-work on either kind of node, exactly as `identity.key` already does, and what the file
-contains is what decides the node's role. 64 hex characters is the signing half, 130 is the
-verifying half.
-
-Run it once per fleet, then add to BOTH `AlLoRa.json` files:
-
-    "control_root_file": "control_root.key"
-
-and copy each half to its board:
-
-    ampy -p /dev/cu.usbmodemHUB  put hub/control_root.key  control_root.key
-    ampy -p /dev/cu.usbmodemEDGE put edge/control_root.key control_root.key
-
-Re-running it never replaces an existing root. That is deliberate: every node is pinned to the
-root it was given, so a new one would lock the whole fleet out of its own control plane until
-every board is re-provisioned by hand. On a second run it re-derives the public half instead,
-which is what you want when adding a node to a fleet that already exists.
-
-The private half is the fleet's authority. Keep it off shared drives and out of git; a node
-that only obeys commands must never be given a copy.
+The Hub keeps the private half and signs commands with it. Each node keeps the public half and
+from then on refuses unsigned commands. Running it again never replaces an existing root, because
+every node is pinned to it. Keep the private half out of git. The steps are in this folder's README.
 """
 import os
 import sys

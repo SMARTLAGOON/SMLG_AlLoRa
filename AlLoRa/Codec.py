@@ -1,36 +1,8 @@
-"""Codec: the seam that *speaks* a `Packet` on the wire.
+"""Turns a Packet into bytes for the radio and back. There is one class per protocol mode.
 
-A `Packet` is the typed wire unit, what a frame means (kind, sid, flags, payload). A `Codec`
-is how that unit is encoded on the wire and read back off it. Framing used to be scattered:
-the version choice lived on the `Connector` (`_new_response_packet` / `_response_matches`),
-and the security posture lived as a parallel method-pair on `Packet_v3`
-(`get_content`/`load` vs `get_secure_content`/`load_secure`). This folds all of that behind
-one narrow interface so the transfer engine never branches on version or posture again:
-
-    frame(packet)      -> wire bytes                (serialize; picks the open/secure body)
-    deframe(wire)      -> packet | None             (parse; None = unparseable/corrupt/forged)
-    match_spec(request)-> a spec whose .matches(reply) says "is this the reply to my request?"
-    payload_overhead() -> bytes a frame costs around its payload (what caps the chunk size)
-
-`payload_overhead` is here because the cost is a property of the framing and nothing else:
-v2 spends 12 bytes on two MAC addresses, v3 addresses by session id in 6, and secure trades
-the integrity trailer for a sealed header plus a tag. A node that derived it any other way
-would be re-deriving this dispatch, and would drift from it.
-
-There is one implementation per (version x posture). A new version or security mode is a new
-implementation, never a wider interface:
-
-  * `V2Codec`: legacy MAC-addressed frame + checksum (v2 predates secure mode).
-  * `V3OpenCodec`: v3 sid-addressed typed frame + 24-bit integrity, no crypto.
-  * `V3SecureCodec`: v3 secure frame: the integrity trailer replaced by an AEAD-sealed
-                     payload. This is the *only* crypto home; `Packet_v3.get_secure_content`
-                     /`load_secure` are its private mechanism, not a public surface.
-
-The secure codec resolves the per-peer `Session` from the `sid`, which is cleartext at wire
-offset 0 in *both* open and secure frames, the send side by the outgoing packet's sid, the
-receive side by the sid on the wire. So the engine calls `frame`/`deframe` identically for
-open and secure; the posture never leaks up. The reply match is likewise keyless (v3: the
-cleartext sid), which is what will let it move down to the radio later without keys.
+V2Codec, V3OpenCodec and V3SecureCodec share four methods: `frame`, `deframe`, `match_spec` and
+`payload_overhead`. `deframe` returns None for a damaged or forged frame. Only V3SecureCodec does
+any cryptography.
 """
 import struct
 

@@ -1,9 +1,5 @@
 # A status subscriber that writes the live values to a file.
 #
-# It lives in the library because it names no pin, no bus and no chip: it is handed the same
-# status dict a screen is handed, and it writes text. Everything that knows what a screen or a
-# card slot is stays in a firmware target's board/ directory.
-#
 # The formatter below is based on https://github.com/majoson-chen/micropython-ulogger.
 # Thanks to the authors!
 from AlLoRa.utils.json_utils import json

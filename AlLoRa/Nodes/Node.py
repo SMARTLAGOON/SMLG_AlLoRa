@@ -1,23 +1,7 @@
-"""Node: the AlLoRa node. One object carrying identity, config, and BOTH whole-file loops.
+"""One AlLoRa node: its identity, its config, and the two file loops (asking and answering).
 
-A transfer always has a *drive* side (the initiator: polls, asks METADATA/CHUNK, reassembles)
-and a *serve* side (the responder: lives with the data, answers each request). Historically
-those were two classes (Requester drives, Source serves), which made role reversal need two
-mirrored node instances copying state between them, the chief fragility of the old role-swap
-experiment. Here both loops live on one node with one config, one connector and one session
-state; `current_role` ("collector" drives, "source" serves) picks which loop runs, so
-reversing a role never constructs, mirrors or synchronizes a second node.
-
-That is why the role is a mode on a live node and not a type: the state a loop needs (the
-radio, the session, the RF config and its trial, the identity keys, the pacing controller) is
-node-scoped and shared, and the code that *moves* between the roles (delegate, grant, yield)
-belongs to neither side. Splitting the loops into separate objects would put that machinery
-outside both and force them to reach back into the node for everything they touch.
-
-The node-type set is exactly {Edge, Hub}, and both are thin placement presets on this class:
-each picks a home role and adds the loop it runs by default. An Edge serves by default, a Hub
-drives by default. No swap state is ever persisted. On boot a node is back at `home_role`, and
-the Hub resuming its poll re-converges the pair after any failure.
+`current_role` picks the loop: "collector" asks for files, "source" answers. Edge and Hub are thin
+presets of this class. A role swap is not saved: after a reboot the node is back in `home_role`.
 """
 import gc
 from os import urandom

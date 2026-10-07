@@ -1,21 +1,8 @@
-"""Status: what a running device reports about itself, and who is watching it.
+"""A device's live values (radio settings, transfer progress, timings) and their subscribers.
 
-A small holder for the live values (RF config, the file and chunk in flight, packet sizes,
-timings, error counts) plus the subscribers those values are pushed to. It knows nothing
-about packets, sessions or radios, which is the point of it being its own thing: a bridge
-board that runs no protocol at all still wants to drive a screen, and it should not have to
-inherit a node to do it.
-
-Two shapes are load-bearing here because the code around it already depends on them:
-
-  * Values are set and read dict-style (``status['SF'] = 12``), which is how the node loops
-    write them in the middle of a transfer.
-  * What crosses to a subscriber is the values dict itself, not this object. Subscribers do
-    ``status.get(...)``, ``key in status`` and json.dumps over it, and a screen keeps the
-    reference it was handed and re-reads it on every refresh, so the dict is updated in
-    place and never replaced.
-
-A subscriber is anything with ``update(status)``.
+Set values like a dict: `status['SF'] = 12`. Subscribers get the dict itself, and a screen keeps
+that reference, so the dict is updated in place and never replaced. A subscriber is any object
+with `update(status)`.
 """
 
 

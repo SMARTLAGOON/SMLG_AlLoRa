@@ -1,32 +1,8 @@
-"""Serial_link: a byte-mover for the split Connector, over a UART or over USB-CDC.
+"""A Link over a UART or USB cable. Each frame ends with the marker `<<END>>\\n`.
 
-The concrete `Link` under a serial tunnel: it moves opaque request/reply frames between the
-logic-holder (a Raspberry-Pi/host over `pyserial`) and the bridge (an ESP32 over
-`machine.UART`, or over its own USB console), and knows nothing about the verbs, the LoRa air
-wire, or session keys. A frame is delimited on the wire by a sentinel; the frame bytes
-themselves are the JSON that `tunnel_codec` produces, which is pure printable ASCII (the LoRa
-blob rides as hex inside it), so the sentinel `<<END>>\\n` can never occur mid-frame and a
-text-only UART is safe.
-
-`text_safe` keeps the printable-only filter the old Serial adapter relied on: UART line noise
-on an ESP32 (boot chatter, brown-outs) injects stray bytes, and dropping the non-printable
-ones lets a valid frame survive noise instead of failing to parse and forcing a retransmit.
-`_resync` is its other half, for the noise that *is* printable: see below.
-
-Both halves share one implementation over a small `port` (write / read / bytes-available); the
-client and bridge differ only in which physical port they hold. There are three such ports and
-they cover every way a board can be reached:
-
-  * `client()`   the host end, `pyserial` on a device path. A USB-CDC board is an ordinary
-                 serial device to the host, so this end is the same for both wirings.
-  * `bridge()`   a board with a `machine.UART`: GPIO pins, or a board whose USB socket goes
-                 through a USB-to-serial chip (LoPy4, a Grove-to-USB E5).
-  * `bridge_usb()` a board whose USB socket is native USB (the T3S3, and other ESP32-S3,
-                 ESP32-C3 and RP2040 boards), where there is no UART behind the port and the
-                 console itself is the only handle.
-
-`Loopback_link` covers the in-process path; this covers the real wire, whose final proof is on
-hardware.
+`client()` is the computer end (pyserial), `bridge()` a board's UART, and `bridge_usb()` the USB
+console of a native-USB board. `text_safe` drops unprintable noise on the line; frames are JSON,
+so nothing real is lost.
 """
 from AlLoRa.Links.Link import Link
 from AlLoRa.utils.time_utils import current_time_ms as _now_ms, sleep_ms

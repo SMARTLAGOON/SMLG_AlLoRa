@@ -1,48 +1,8 @@
-"""A status subscriber that posts the live transfer to a web service.
+"""Sends a node's live status to a web service.
 
-The third thing that can watch a node's status dict, beside a screen and the Logger, and the
-only one a person can read from somewhere else. What it answers is the question a Hub cannot
-answer today: a file has been arriving for eleven minutes, and the only place that knows the
-name it is arriving under, how many chunks are left and what the link is doing is a terminal
-on the gateway.
-
-It lives here rather than in a deployment because it decides nothing. Give it a URL and how
-often to talk, and it moves values that already exist; where the data goes and what it means
-there is the site's business, and which node is worth watching is the operator's. A
-DataSink is the other half of this and deliberately not the same thing: a sink carries the
-artifact, once, and must never lose it; this carries an impression of the moment, often, and
-losing one costs nothing because a fresher one is already on its way.
-
-Two rules make it safe to attach to a running Hub, and both matter more than anything it does:
-
-**It never posts from the radio loop.** `update()` is called from inside the drive loop, once
-per chunk, and the loop's next act is to ask for another chunk. A synchronous request there
-would put the site's latency between two radio exchanges, and a site that has stopped
-answering would stall a transfer for the length of an HTTP timeout, over and over. So
-`update()` only takes a snapshot and returns, and a worker thread does the talking.
-
-**It drops what it could not send.** Only the newest snapshot is kept. A slow site does not
-build a queue of progress reports that were true a minute ago, because nobody wants those: the
-value of this data is entirely in it being current, which is the opposite of the sink's
-contract next door. A missed tick is not an error and is never retried.
-
-**It keeps saying so when nothing is happening.** A node notifies only while it is doing
-something, and a Hub between visits rests for its wait_after_visit, a minute by default. A
-receiver that expires a snapshot in thirty seconds would watch the gateway appear and vanish
-every minute, so the worker repeats the last snapshot on the interval. That separates the two
-questions a page actually has, "is the gateway there" and "is a file moving", instead of
-answering both with one silence.
-
-**It costs the site less every time the site says no.** An attempt is paid for whether or not
-it is delivered, and a run of refusals doubles the wait up to five minutes. This is not
-politeness. A gateway whose refused posts were free once spent a month of a free database's
-allowance in three days, against a site that answered every one of them with an error, while
-the person watching saw nothing at all. A refusal is the one answer that must never be cheaper
-than a success.
-
-Failures are swallowed on purpose, and this is the one place in the library where that is the
-right answer. A node's job is to move files. If the status service is down, or wrong about its
-token, or gone, the transfer must not notice.
+`update()` only takes a snapshot; a background thread sends it, so the radio loop never waits.
+Only the newest snapshot is kept, and it is resent at each interval. After a refusal the wait
+doubles, up to five minutes. Errors never stop a transfer.
 """
 from AlLoRa.utils.debug_utils import print
 from AlLoRa.utils.json_utils import json

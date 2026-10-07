@@ -1,18 +1,7 @@
-"""Aggregate AlLoRa benchmark serial logs into per-RF-config throughput numbers.
+"""Turns the Source's `BENCH,...` log lines into throughput per radio setting.
 
-Runs on the laptop (CPython only — no device imports). The Source benchmark main
-prints one `BENCH,...` line per file it serves; capture the Source's serial output
-to a file and feed it here:
-
-    python3 parse_benchmark.py v2_baseline_sf7.log
-    cat *.log | python3 parse_benchmark.py
-
-Produces the v2 baseline table the v3 wire-format decision is gated on — so the
-+1-header-byte / DATA-index calls are made against measured throughput, not arithmetic.
-
-Line format emitted by the Source main:
-    BENCH,sf=7,bw=125,cr=1,name=8.bin,bytes=8192,sec=12.340,retx=3,ok=1
-(Other lines — BENCH_HEADER, BENCH_DONE, debug — are ignored.)
+Runs on a computer, not on a board: `python3 parse_benchmark.py v2_baseline_sf7.log`.
+Other lines in the log are ignored. The line format is in this folder's README.
 """
 import statistics
 

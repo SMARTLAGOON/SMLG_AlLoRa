@@ -1,35 +1,8 @@
-"""USB_adapter: a bridge board that tunnels over its own USB socket.
+"""An Adapter for boards with a native USB port, such as the T3S3 (ESP32-S3).
 
-Thin over Adapter, the same way Serial_adapter and WiFi_adapter are: the bridge holds the radio
-but no protocol logic, no files, no sessions and no keys. It reads a transport-verb request,
-runs that verb on its real radio Connector, and writes the result back. What it adds is the two
-things a board whose console *is* its data port has to get right.
-
-    adapter = USB_adapter(SX127x_connector(), "LoRa.json")
-    adapter.run()
-
-Plug the board into a Raspberry Pi (or any host) with one USB cable and it is a LoRa modem for
-that host. There are no pins to wire, no baud to agree on, and nothing to configure in the
-`adapter` block: USB-CDC has no such settings, and it runs at USB speed rather than at the
-9600 baud a GPIO tunnel settles for, which takes the link almost entirely out of the transfer
-time.
-
-**Which boards need this one.** A board whose USB socket is *native* USB has no UART behind that
-socket, so this is the only way to reach it over the cable. The T3S3 is that kind, and so are the
-other ESP32-S3, ESP32-C3 and RP2040 boards, though the T3S3 is the one this has been run on. A board whose socket goes through a USB-to-serial chip (a LoPy4, an E5 on a
-Grove-to-USB adapter) already presents a real UART to its own firmware: that is `Serial_adapter`
-with UART0, and it needs nothing new. Both look identical from the host, which opens a serial
-device by path either way.
-
-**Why the logging moves.** On this board stdout is the wire. A debug line does not clutter a
-log, it lands inside a frame and corrupts it, and the loudest logger on a bridge is not the
-Adapter but the radio Connector under it. So the library's whole debug output is redirected at
-construction, before anything can log, and `"log": "file"` is offered for a bench session. It is
-off by default because the right amount of writing to a board's flash during a transfer is none.
-
-The other half of the problem, the boot banner the board emits before any of this code runs,
-cannot be redirected from here and is not tried: `Serial_link._resync` drops it on the host side,
-where it arrives.
+On these boards the USB console is the data link, so the library's debug output is switched off.
+Set `"log": "file"` to write it to flash instead. Boards with a USB-serial chip use Serial_adapter.
+Usage: `USB_adapter(SX127x_connector(), "LoRa.json").run()`.
 """
 from AlLoRa.Adapters.Adapter import Adapter
 from AlLoRa.Links.Serial_link import Serial_link

@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""The AlLoRa provisioning wizard.
+"""The AlLoRa provisioning wizard. Commands and examples: tools/README.md, or `--help`.
 
-    python3 tools/provision.py fleet-init
-    python3 tools/provision.py edge --firmware AlLoRa-t3s3-sx127x-firmware.bin
-    python3 tools/provision.py hub  --firmware AlLoRa-t3s3-sx127x-firmware.bin
-    python3 tools/provision.py verify --edge-port /dev/cu.usbmodem1101 \
-                                      --hub-port  /dev/cu.usbmodem2101
+    python3 tools/provision.py setup
 
-Every command takes `--json`. CPython only, and never frozen into firmware: the manifest
-freezes `AlLoRa/`, so nothing under `tools/` reaches a board.
+Every command takes `--json`. It runs on a computer only and is never put on a board.
 """
 import os
 import sys

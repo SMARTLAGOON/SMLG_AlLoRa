@@ -1,21 +1,8 @@
-"""The `AlLoRa.json` a board is given, built from a placement and a posture.
+"""Builds a board's `AlLoRa.json` from its placement (Edge or Hub) and its posture.
 
-Two axes and nothing else. **Placement** is Edge or Hub, and it decides one line: only the Hub
-names where received files land. **Posture** is open, secure or control, and it decides how the
-pair addresses and authenticates itself:
-
-    open      no identity, so the 1-byte session address is hand-assigned and the two ends must
-              carry the same number.
-    secure    `identity_file` set, so the node generates and keeps an identity on first boot;
-              first contact is addressed by `device_id[:4]` and the sid derives from
-              `device_id[0]`. No `session_id`: one value registers a node instead of two.
-    control   secure, plus a pinned control root on the node being commanded.
-
-The rules below are refusals rather than defaults on purpose. Each one guards a state that
-produces a board which looks provisioned and is not, and none of them is visible from the
-outside: an open node with no `session_id` simply never hears its peer, a secure node with no
-`identity_file` comes up with no `device_id` to register, and a node holding a control root
-while its config says open can only ever do the refusing half of holding one.
+An open node has no identity, and both ends need the same 1-byte session address. A secure node
+makes its identity on first boot and is registered by `device_id`. Control is secure plus a control
+root. Bad combinations are refused, not defaulted: each makes a board that looks set up and is not.
 """
 
 # The radio settings, spelled as the connector block itself spells them. `sf`, `freq`,

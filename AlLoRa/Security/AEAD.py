@@ -1,27 +1,8 @@
-"""Per-frame authenticated encryption: AES-128-CTR + truncated HMAC-SHA256.
+"""Encrypts and authenticates each frame: AES-128-CTR, then a 4-byte HMAC-SHA256 tag.
 
-The construction is encrypt-then-MAC with a 4-byte tag, using only *native* primitives
-(hardware AES-CTR + SHA-256) so it stays sub-millisecond per frame on the ESP32 and never
-threatens the receive->reply turnaround the adaptive pacing depends on. It is preferred
-over AES-GCM because CTR + HMAC needs no GHASH (no per-release C module to maintain) and
-its nonce-reuse failure mode is bounded rather than catastrophic.
-
-This module is a *pure crypto primitive*: seal()/open() are handed already-assembled
-``nonce`` and ``aad`` bytes and never interpret their layout, so nothing about the wire
-byte layout is decided here (that assembly lives at the frame layer and is still subject to
-a crypto-review pass). ``open()`` returns the plaintext on success or ``None`` on any
-authentication failure, and it verifies the tag *before* decrypting so a forged frame never
-produces plaintext.
-
-The AES-CTR primitive is platform-detected and injected, so the same construction runs on
-CPython (the ``cryptography`` lib) and on the AlLoRa MicroPython firmware (``ucryptolib``
-with the CTR build flag). ``detect_aead()`` returns None when no native AES is present,
-the graceful-degradation signal that secure mode is unavailable on this platform.
-
-The tag comes from ``hmac_sha256``, this package's own RFC 2104 over the native hash, rather
-than from the ``hmac`` module. That is what makes the "only native primitives" claim above
-true on-device: MicroPython has no native HMAC, so importing one gets a pure-Python wrapper
-around the native hash, and the wrapper rather than the hash becomes the cost of a frame.
+Not GCM: this needs no GHASH module on the board, and a reused nonce does less damage. Still, never
+reuse a nonce with the same key. `open()` checks the tag first and returns None on any failure.
+Without native AES, `detect_aead()` returns None and secure mode is off.
 """
 import hashlib
 

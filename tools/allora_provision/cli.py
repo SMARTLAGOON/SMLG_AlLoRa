@@ -1,14 +1,8 @@
-"""The command line: one command per board, and `--json` on every one of them.
+"""The command line: one command per board, each with `--json`.
 
-Machine-readable output is the integration surface. The website's backend runs the same code
-path a human does, and `AlLoRaControl` is TypeScript, so it shells out to this rather than
-importing anything: what makes that work is that stdout under `--json` is one parseable
-document and nothing else.
-
-The gesture the whole tool is judged on is **one value per node, copied once**. The Hub needs
-the Edge's `device_id`; the Edge needs nothing about the Hub. So `edge` prints and records a
-fingerprint, `hub` reads it back out of the fleet, and at no point does an operator hold two
-values for one node.
+With `--json`, stdout is one JSON document and nothing else, so the control website can run this
+and parse the result. Each node gives one value, once: `edge` records the Edge's `device_id` in
+the fleet, and `hub` reads it from there.
 """
 import argparse
 import sys

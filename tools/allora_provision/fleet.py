@@ -1,30 +1,8 @@
-"""The fleet directory: one deployment's authority, its mint counter, and its registry.
+"""The fleet folder: one deployment's control root, its command counter, and its node list.
 
-The rule that generates the right answer every time is that **the control root lives with the
-operator, not with the radio**. Ask who decides to retune a node; that is where the private
-half goes, and everything between that decision and the node is a courier, the Hub included.
-This object is that operator-side home: a plain directory a person can see, back up and hand
-over, rather than a hidden dotfile whose location becomes a mystery the day somebody has to
-move it.
-
-Three properties it exists to hold.
-
-**A root is never replaced.** Every node is pinned to the root it was given, so minting a
-fresh one over an existing fleet locks every board out of its own control plane until each is
-re-provisioned by hand. A second run re-derives the public half instead, which is what adding
-a node to an existing fleet needs.
-
-**The counter belongs to the root**, in the same shape and keyed by the same fingerprint the
-Hub uses, because `control_counter_file` on a signer holds the highest number *minted* and two
-signers on one root both start at zero and both mint number 1. The second one's artifact is
-refused as a replay, which looks exactly like the command not working. So a handover moves the
-root and the counter together, or it moves neither.
-
-**The registry is what a node was issued**, not what a board reports. It is the operator's
-record, a superset of what a Hub needs, and `render_nodes_json` narrows it to the roster the
-Hub actually reads. Keeping them separate is deliberate: the Hub writes settled radio settings
-back into its own copy, and that write must not reach the operator's record of who is in the
-fleet.
+The control root stays with the operator, not on the radio, and is never replaced, because every
+node is pinned to it. The counter moves with the root, or a second signer reuses a number and its
+command is refused as a replay. `render_nodes_json` turns the node list into the Hub's Nodes.json.
 """
 import json
 import os

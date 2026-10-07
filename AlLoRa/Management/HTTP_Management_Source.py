@@ -1,34 +1,8 @@
-"""A management source that asks a web service what this Hub should be running.
+"""Asks a web service what this Hub should be running.
 
-The transport half of the management plane, and the first implementation of the boundary next
-door. The slot, the drain and applying a change already existed and were proven on real radio;
-this is the class that goes and asks, and it was deliberately left until the site had a route
-to answer it.
-
-**One request, both directions.** The Hub's report is the body and the wish is the answer,
-because the two are one exchange: this is what I am running, and the reply is what I should be.
-Splitting it would put two round trips between two radio exchanges and let a site answer a wish
-against a report it had not yet read.
-
-**Nothing is delivered, so nothing is retried.** This is not the sink's contract, where an
-artifact must arrive exactly once, nor the subscriber's, where the newest impression replaces
-the last. It carries state: a refused exchange costs one interval of staleness, after which the
-same wish is still the wish. There is no queue, no acknowledgement and no bookkeeping, which is
-what makes the loop self-healing with no mechanism.
-
-**It never asks from the radio loop on a host.** `check()` is called from the Hub's drain,
-between two visits, and the loop's next act is to listen to an endpoint. A site that has
-stopped answering would otherwise put its whole timeout there, over and over. So on a host a
-worker thread does the talking and `check()` returns at once. On a microcontroller acting alone
-as a Hub there is no thread to spare, and the loop does the asking itself; that is the one slot
-with two fillers, and it is why both live in the library rather than in a deployment.
-
-**A refusal costs more than a success.** The same rule the status subscriber learned expensively:
-a gateway whose refused posts were free once spent a month of a free database's allowance in
-three days, against a site that answered every one of them with an error.
-
-Failures are swallowed, as they are next door and for the same reason. A node's job is to move
-files. If the site is down, or wrong about its token, or gone, the transfer must not notice.
+Each POST reports the Hub's state, and the reply says what it should run. A lost reply is not
+retried; the Hub just asks again. On a computer a background thread does the asking, so the radio
+loop never waits. Refusals slow the asking down, and no error here can stop a transfer.
 """
 from AlLoRa.Management.Management_Source import Management_Source
 from AlLoRa.utils.debug_utils import print

@@ -1,15 +1,7 @@
-# The deployed program, for every v3 node.
-#
-# It reads the config file beside it, builds what that file names, and runs it. This is the one
-# file a board runs whatever it is: an Edge or a Hub, open or secure or control, on whichever
-# radio. What distinguishes one deployment from another is the JSON, not a fork of this file.
-#
-# Copy this next to an AlLoRa.json (each folder beside it has one) and put both on the board as
-# main.py and AlLoRa.json.
-#
-# See secure/edge/main_literal.py for the same deployment written out longhand, with every class
-# named. That file is the one to read if you want to see what happens here without following a
-# dispatch, and it is the starting point for a deployment this repo does not cover.
+# The program every v3 node runs. It builds what the AlLoRa.json beside it names, and runs it.
+# Edge or Hub, open, secure or control, any radio: the JSON is what differs, not this file.
+# Put it on the board as main.py, next to the AlLoRa.json from one of the folders here.
+# secure/edge/main_literal.py is the same deployment written out with every class named.
 import gc
 import time
 

@@ -1,10 +1,7 @@
-"""v2<->v3 version negotiation policy.
+"""Decides whether to speak v2 or v3 with a peer. It only decides; it sends nothing.
 
-Kept as a pure decision so it is trivially testable and shared by both the Collector's
-first-contact logic and the (later) runtime upgrade path. The mechanism it decides over:
-a v3-capable node beacons in v2's freed spare bit 2 (`Packet.set_v3_beacon`); a v3 peer
-echoes it. This function turns "did the peer echo?" + "is the peer registered?" into the
-protocol version to speak.
+A v3 node sets a beacon bit in v2's spare flag bit (`Packet.set_v3_beacon`), and a v3 peer echoes
+it. The inputs are: did the peer echo it, and is the peer registered?
 """
 
 V2 = 2

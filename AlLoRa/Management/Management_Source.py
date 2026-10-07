@@ -1,40 +1,8 @@
-"""Management_Source, a Hub's management boundary: where it learns what it should be running.
+"""Where a Hub receives changes to its node list: which nodes are active, timings, names.
 
-A sibling of `DataSource`, `DataSink` and the status `Subscriber`, and named the same way they
-are, prefix plus plug type: the prefix says what flows, the plug type says which direction.
-`DataSource` never meant "the source role", it meant *source of Data*, and this decomposes
-identically, so it is a sibling by construction rather than by analogy.
-
-**It is not a control boundary, and the distinction is the whole design.** A *command* changes
-what a node is: it crosses the LoRa link, carries a control type, is signed by the control root
-and is checked by the verify gate. A *roster change* changes what a **Hub** does: `active`, the
-timing values and a node's name are read by the Hub alone, out of the `Nodes.json` entry
-behind each `Digital_Endpoint`, and an Edge never learns any of them. Nothing here reaches the
-air, so none of the trust model applies to it, and a design that treated the two as one concept
-would inherit a downlink requirement it does not have.
-
-**A Hub holds one of these and an Edge never does.** A node holding a control root refuses
-unsigned in-band control from then on, so that the signature is protecting something; an Edge
-holding this boundary would be a second, unsigned way to change that node's settings. The Hub is
-different because it is the trust anchor and the authenticated peer, and its own endpoint
-entries are its own business. That is a rule about trust, and a class name cannot carry a
-reason, so it is written here and enforced by where the verbs live: on `Hub`, on nothing else.
-
-**Nothing is delivered, so nothing needs a delivery guarantee.** This is not the sink's
-contract next door, where an artifact must arrive exactly once. It carries desired state: the
-newest wish replaces the last one, there is no queue and no acknowledgement, and a change that
-gets lost keeps not matching what the Hub reports and simply goes out again. So `take_intent`
-is a plain take rather than the peek-retain a `DataSource` performs, and the difference is
-deliberate.
-
-**One slot, two fillers.** On an SBC an API thread calls `submit_intent` from outside the loop.
-On a microcontroller acting alone as a Hub there is no thread to spare, so the loop pumps
-`check()` between visits and the subclass fills the slot from there. The slot and the drain are
-identical on both, which is why they are in the library rather than in a deployment.
-
-The base class is a working boundary in its own right: a slot, and the verbs to fill and empty
-it. A transport subclass overrides `check()` to go and ask, and `report()` to say what this Hub
-is running in the same exchange.
+It never carries commands, and only a Hub has one: on an Edge it would bypass signed control.
+Subclasses override `check()` to fetch changes and `report()` to say what is running. Only the
+newest change is kept, and `take_intent` removes it.
 """
 
 

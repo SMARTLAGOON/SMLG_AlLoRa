@@ -1,18 +1,7 @@
-"""A v3 node's crypto-bound identity: the fingerprint of its long-term public key.
+"""A v3 node's identity: the SHA-256 hash of its long-term public key (`device_id`).
 
-The successor to MAC-as-identity. v2 addressed and "identified" a node by its wifi MAC, a
-value anyone can claim. v3 derives identity from a key the node holds: device_id =
-SHA256(pubkey). The operator registers the fingerprint on the Collector exactly like copying
-a MAC today, but now it names a keypair, not a spoofable address.
-
-The long-term identity key is distinct from the per-session ephemeral used in the ECDH: the
-ephemeral changes every session (that is what makes a reboot re-key into fresh material),
-so it can't be a stable identity. The identity key lives across reboots; its fingerprint is
-what stays registered.
-
-Wire use of the fingerprint:
-  * device_id[:4] addresses first contact (one 4-byte token, no MAC on the wire);
-  * device_id[0]  seeds the 1-byte session id once a session exists.
+It comes from the long-term key, not the per-session one. On the air, `device_id[:4]` addresses
+first contact, and `device_id[0]` seeds the session id.
 """
 import hashlib
 

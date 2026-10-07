@@ -1,35 +1,8 @@
-"""The plan: what a provisioning run intends to do, written down before it does any of it.
+"""The plan: a file that says what a provisioning run will do, written before anything runs.
 
-The plan is the unit. `setup` writes one as it asks its questions and then applies it; `apply`
-runs one somebody else wrote, a website included. Same file, same engine, and the interactive
-path gains an artefact the operator can keep, diff, re-run and send to somebody else.
-
-**A plan names boards by MAC, never by port.** The port is not an identity: on native USB it
-re-enumerates on every hard reset, so a plan written on Monday and re-run on Tuesday would aim
-at whichever board happened to land on that path. The MAC survives a flash and names one
-physical board, which is why the wizard already offers boards by it. `ports_for` is where the
-two are matched up, once, at the start of a run.
-
-**A plan says scratch or extend, and that is its first field for a reason.** Extend is adding
-an Edge, replacing a broken node, or swapping a Hub into a deployment that is already in the
-field. Not asking the question is what let a run flash into a non-empty fleet, orphan a record
-and append a phantom the Hub then spent a listening window polling every cycle.
-
-**Each node names its own board, radio and firmware; the RF settings stay run-level.** Which
-chip a node has and where it is attached is a fact about that node: the bench pair is an SX127x
-Hub and an SX1262 Edge, and a run-level radio cannot describe it. How the radio is tuned is a
-fact about the deployment, because both ends have to agree on `sf`, `freq` and `bandwidth` or
-they do not hear each other, and a per-node setting there is a way to build a fleet that cannot
-talk.
-
-**A node may be described before the board that will be it exists.** Board, radio, role, name,
-posture and RF are design-time facts, which somebody planning a deployment knows. Which
-physical unit fills the slot is a bench-time fact, which they do not. So an entry may carry no
-MAC: `validate` accepts that, and the refusal moves to the only moment it matters, which is
-`apply`, where something is about to be flashed.
-
-This module holds the document and nothing else: no board is touched here, no fleet is read.
-That is what lets a plan be checked, printed and diffed before anything is plugged in.
+`setup` writes one and applies it; `apply` runs one written by anyone, the website included.
+Boards are named by MAC, not by port, which changes on every reset. A node can be planned before
+its board exists, with no MAC; `apply` refuses it then. Radio settings are per run, not per node.
 """
 import json
 import os

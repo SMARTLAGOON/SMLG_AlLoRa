@@ -1,17 +1,6 @@
-"""debug_utils: the library's one debug print, and where its output is allowed to go.
+"""The library's debug print. Every AlLoRa module uses it instead of the built-in `print`.
 
-Every AlLoRa module logs through the `print` below, shadowing the builtin, so a timestamp is
-free and there is a single place that decides where a debug line ends up. That single place is
-what makes a USB bridge possible at all: on a board whose tunnel runs over its own USB-CDC
-console, stdout *is* the wire, and a stray debug line does not merely clutter a log, it lands
-inside a frame and corrupts it. `set_sink` moves the library's output off that wire in one
-call, covering not just the Adapter but the radio Connector underneath it, which is the noisiest
-logger on a bridge board.
-
-The sink is module-global on purpose. A per-object logger would have to be threaded through
-Connector, Adapter and every DataSource to reach the call sites that matter, and a single one
-of them missed is a corrupted frame; a board either has a free console or it does not, and that
-is a property of the board, not of one object on it.
+`set_sink` redirects all debug output at once. Boards whose console is the data link need this.
 """
 import builtins
 from AlLoRa.utils.time_utils import get_current_timestamp

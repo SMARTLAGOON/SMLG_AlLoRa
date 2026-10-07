@@ -1,15 +1,7 @@
-"""Serial_connector: a serial tunnel's logic-holder half.
+"""A Tunnel_connector that reaches the radio board over a UART cable.
 
-Thin over Tunnel_connector: it is a split Connector whose transport verbs cross a UART to a
-bridge (Adapter) running the radio. All the tunnel logic (exchange-routed matching, D↓/td↑
-pacing, opaque wire so v2/v3-open/v3-secure all cross unchanged) lives in Tunnel_connector;
-this only builds the concrete Serial_link client from the config and keeps the old constructor
-so existing Hub examples import it unchanged. It replaces the previous ad-hoc
-`S&W:`/`ACK:`/`Listen:` string protocol, which re-parsed the frame on the bridge and so only
-ever spoke v2.
-
-It also owns *recovery*, because a serial adapter is the one bridge that can be rebooted and
-reopened: see `recover_link` below, and `usb_reset` for doing it without a reset wire.
+If the radio board reboots, `recover_link` reopens the connection. `usb_reset` does the same over
+USB, without a reset wire.
 """
 from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
 from AlLoRa.Links.Serial_link import Serial_link

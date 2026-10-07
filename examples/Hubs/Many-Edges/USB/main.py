@@ -1,16 +1,8 @@
-# A Hub on a host (a Raspberry Pi, a laptop) whose radio is a board on the other end of one
-# USB cable. The host runs the engine, the endpoint roster, the keys and the sessions; the
-# board runs `examples/Adapters/USB_adapter` and works the radio and nothing else.
-#
-# The sibling `Serial/` example is the same Hub over a Pi's own GPIO UART, with a wire to the
-# board's RST pin. This one needs neither: no pins, no baud to agree on, no reset wire, and it
-# runs on any host with a USB socket rather than only on a Pi.
-#
-# What the cable costs you is that a reset now takes the port with it. Over GPIO the port
-# belongs to the Pi, so resetting the board leaves the file descriptor valid. Over USB the
-# serial device *is* the board: reset it and it re-enumerates, the descriptor dies, and it may
-# come back on a different path. `Serial_connector` handles all three of those now, which is
-# what makes this example a drop-in rather than a downgrade. See `recover_link`.
+# A Hub on a host (a Raspberry Pi, a laptop) whose radio is a board on one USB cable.
+# The host runs the Hub and holds the keys. The board runs examples/Adapters/USB_adapter.
+# Unlike the Serial/ example, it needs no pins, no baud rate and no reset wire.
+# Resetting the board also resets its USB port, which may come back on another path.
+# Serial_connector finds it again: see `recover_link`.
 
 from serial.tools import list_ports
 

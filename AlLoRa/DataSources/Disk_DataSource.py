@@ -1,51 +1,7 @@
-"""Disk_DataSource: the outbound queue that survives losing power.
+"""An outgoing file queue kept on flash, so it survives a power cut.
 
-The mirror of Disk_DataSink. That sink takes each file the collector role finished
-receiving and writes it under a folder; this source takes each file sitting in a folder
-and hands it to the source role to send. One is where files land, the other is where
-they wait, and between them a deployment can be restarted at any point without a file
-falling through the gap.
-
-Which is the whole reason it exists. The queue on the DataSource base lives in RAM, so a
-node that lost power between reading a sensor and getting the reading on the air lost the
-reading, silently and with nothing to retry. A field node that only reports every few
-hours can lose most of a day that way, and nothing downstream can tell the difference
-between a node that had nothing to say and a node whose readings never survived to be
-said. Here the file is on flash before it is ever queued, and it is deleted only once the
-far end confirms it: the node may repeat itself after a reboot, but it does not go quiet.
-
-**Two sources of truth, deliberately, and neither can lose a file.**
-
-- The *directory* decides what is pending. A file in it is queued, its absence is delivery.
-- A small index beside it, `queue.json`, decides what order they go in. It holds names, not
-  contents.
-
-They are reconciled rather than trusted. A file the index has never heard of is adopted
-onto the end of the queue, so a producer can still drop a file into the folder by hand and
-have it sent. A name in the index with no file behind it is forgotten. The failure mode of
-the index is therefore a file going out in the wrong *order*, never a file going missing,
-and that is the reason for the split: a directory cannot remember the order things were put
-into it. `listdir` returns entries in whatever arrangement the filesystem is holding, which
-is not a promise on either filesystem an ESP32 might be flashed with, and on FAT it visibly
-changes as files are deleted and their slots reused. Deleting a file on every delivery is
-what this class does all day, so that is the normal case and not an edge one. File
-timestamps are no help either: board clocks come up unset.
-
-Writes are ordered so that an interruption costs order and never data. The payload is
-committed first and the index second, because a crash between the two leaves a file that
-the next reconcile adopts. Doing it the other way round would leave the index describing a
-file that was never written.
-
-MicroPython target discipline: a payload is never held in RAM at all, only the chunk the
-radio is asking for right now; the directory is re-scanned only when the queue has run dry
-rather than on every radio round; both writes go through the same all-or-nothing commit the
-config files use; and nothing here opens more than one file at a time.
-
-That first point costs one open handle, held for as long as a file is at the head of the
-queue and closed on every path it can leave by. The alternative was reading the whole
-payload and handing it to a file object that kept it too: two resident copies, a ceiling on
-what a node could send that had nothing to do with the protocol, and a stretch of seconds
-where a node loading a file could not hear the radio.
+A file is deleted only after the receiver confirms it. After a reboot a file may be sent twice, but
+it is never lost. `queue.json` holds only the send order; a file copied in by hand goes to the end.
 """
 
 from AlLoRa.DataSources.DataSource import DataSource

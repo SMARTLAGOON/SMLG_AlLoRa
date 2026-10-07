@@ -1,14 +1,7 @@
-"""Hub: the center-placement authority (formerly `Requester`/`Collector`/`Gateway`).
+"""The node that polls its Edges and collects their files. Earlier names: `Requester`, `Gateway`.
 
-Named by where it sits: the Hub is the permanent controller of its Edges. It polls, pulls
-their uplink files, and never surrenders control. Its home role is "collector" (the drive
-loop); it also carries the serve loop because a downlink temporarily reverses the roles:
-the Hub delegates the collector role to an Edge with a GRANT, serves the pending file to the
-Edge's pull, and reclaims control the moment the pull ends (or its reclaim timer fires).
-
-A Hub holds one or more endpoints and runs the visit loop over them itself (`run()`). One
-endpoint is the 1:1 collector, many is the gateway deployment: the same class either way,
-which is why the two v2 classes it replaces are gone rather than kept as separate nodes.
+`run()` polls each Edge in turn, and the same class handles one Edge or many. To send a downlink,
+the Hub lets one Edge pull from it, serves that pull, then takes control back.
 """
 import gc
 from os import urandom

@@ -1,15 +1,7 @@
-"""Derive the session keys from the ECDH shared secret (HKDF-SHA256).
+"""Derives the session keys from the handshake's shared secret (HKDF-SHA256).
 
-The raw ECDH output (a curve X coordinate) is not usable key material directly, and one
-secret must yield several independent keys. HKDF-SHA256, the standard extract-then-expand
-KDF, stretches the secret and separates it into an AES encryption key, a distinct HMAC
-key, and a per-session nonce prefix, all cryptographically independent.
-
-The construction here (the info label and the nonce-prefix length) is *provisional*: it is
-a defensible default, but the exact bytes are a published surface deliberately left for a
-crypto-review pass, so it is not treated as frozen. The nonce prefix pairs with the 2-byte
-frame counter to form the AEAD nonce; its length is set so the assembled nonce lands at a
-conventional 12 bytes.
+It gives an AES key, a separate HMAC key and a nonce prefix. The prefix plus the 2-byte frame
+counter make the 12-byte nonce. The label and prefix length are provisional until a crypto review.
 """
 from AlLoRa.Security.hmac_sha256 import hmac_sha256, DIGEST_SIZE
 

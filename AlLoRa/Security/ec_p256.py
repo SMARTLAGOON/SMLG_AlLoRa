@@ -1,23 +1,8 @@
-"""Minimal pure-Python P-256 (secp256r1) for the ECDH handshake and the control root.
+"""P-256 elliptic-curve maths in pure Python, for the handshake (ECDH) and signatures (ECDSA).
 
-Elliptic-curve math with no native crypto module, so ephemeral-static ECDH runs on the
-AlLoRa firmware. The asymmetric cost is seconds of scalar multiplication on-device, and it is
-paid once per session at the handshake, never per frame. Consolidated from the project's
-SecureAlLoRa reference implementation (the two hand-rolled P-256 files merged into one),
-carrying what ECDH needs (keypair generation, SEC1 uncompressed points, on-curve validation, the
-shared-secret computation) plus both halves of the control-root signature: verification, run
-by a field node on the rare downlink control artifact (config/OTA/model) and never on the
-per-frame hot path, and signing, run by whoever holds the root private key.
-
-The curve math is dependency-free; signing additionally needs HMAC + ``hashlib`` for its
-deterministic nonce, which the security layer already requires (the KDF and the AEAD are
-built on both, and secure mode refuses to start without them). The HMAC comes from this
-package's own ``hmac_sha256`` rather than from the ``hmac`` module: MicroPython's is pure
-Python and costs 19.4 ms a call on the Edge against 1.1 ms, and RFC 6979 makes several calls
-per signature, all of them inside the handshake.
-
-Public keys are always validated to be real points on the curve before use. Accepting an
-off-curve point is a classic invalid-key attack that can leak the private scalar.
+One key operation takes seconds on a board, so use it for a handshake or a control command, never
+per frame. Every public key is checked to lie on the curve first, because a bad point could leak
+the private key.
 """
 import hashlib
 

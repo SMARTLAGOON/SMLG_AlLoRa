@@ -1,15 +1,8 @@
-"""v2 baseline benchmark: Requester (the puller).
+"""v2 baseline benchmark: the Requester, which keeps pulling files from the Source.
 
-Run this against the `v2.0.0` library, not against the v3 branch: it is deliberately frozen
-on the v2 API, and `Requester` no longer exists on v3. The harness itself only exists on v3,
-so flashing means the tag's `AlLoRa/` package plus this file. See this folder's README.
-
-Continuously pulls files from the Source so the Source can push back-to-back. The
-timing/throughput is measured and printed on the *Source* side; this side just keeps
-the conversation going. Discards received files (save_file=False).
-
-Set SOURCE_MAC to the Source's MAC (it prints its MAC on boot) and SF to match the
-Source's LoRa.json. The endpoint's RF config retunes this node to the Source.
+Run it on the `v2.0.0` library, not on v3 (see this folder's README). The Source measures and
+prints the timing. This side only keeps the transfer going and throws away what it receives.
+Set SOURCE_MAC to the Source's MAC (printed at boot) and SF to match the Source's LoRa.json.
 """
 import gc
 

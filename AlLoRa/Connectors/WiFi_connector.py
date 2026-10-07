@@ -1,11 +1,4 @@
-"""WiFi_connector: a WiFi tunnel's logic-holder half.
-
-Thin over Tunnel_connector: a split Connector whose transport verbs cross an HTTP link to a
-bridge (Adapter) running the radio. The tunnel logic lives in Tunnel_connector; this only
-builds the concrete WiFi_link client from the config and keeps the old constructor so existing
-Hub examples import it unchanged. It replaces the previous JSON-command HTTP protocol,
-which re-parsed the frame on the bridge and so only ever spoke v2.
-"""
+"""A Tunnel_connector that reaches the radio board over HTTP on WiFi."""
 from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
 from AlLoRa.Links.WiFi_link import WiFi_link
 

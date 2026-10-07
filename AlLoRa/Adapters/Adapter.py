@@ -1,25 +1,8 @@
-"""Adapter: the bridge half of a split Connector, and the thing a bridge board boots.
+"""The bridge half of a split Connector. It runs on the board that has the radio.
 
-When the radio sits on a different board from the logic (a Raspberry Pi has no LoRa), the
-Connector is split in two halves: the node holds the near half (WiFi_connector,
-Serial_connector) and the bridge board runs this far half, which drives the real radio
-Connector. The halves exchange transport verbs over a Link, a dumb byte pipe.
-
-The bridge holds no protocol logic, no files, no sessions and no keys: it reads a
-transport-verb request off the link, runs that verb on its radio, and writes the result back.
-It never parses the LoRa wire and, for `exchange`, matches replies on the cleartext prefix the
-logic-holder sent down. That is what lets one dumb bridge serve v2, v3-open and v3-secure
-alike, and it is why an Adapter is not a node: the node-type set is exactly {Edge, Hub}. It
-holds a Status so a bridge board can still drive a screen or a logger, which needs no protocol.
-
-Two ways in, because a bridge is used two ways:
-
-  * `Adapter(radio, link=link)` wires the two halves directly. Nothing is read from disk.
-  * `Serial_adapter(radio)` / `WiFi_adapter(radio)` / `USB_adapter(radio)` boot from a config
-    file: they configure the radio from its `connector` block and build their own Link from the
-    `adapter` block. `USB_adapter` is the one for a board reached over its own USB socket, and
-    it is also the one that cannot print: its console is the link, so it redirects the library's
-    debug output before it boots.
+It reads radio commands from a Link, runs them on its radio, and sends back the result. It has no
+protocol logic and no keys, so the same bridge works for v2 and v3. Use `Adapter(radio, link=link)`
+directly, or a subclass that builds its Link from the config file.
 """
 import gc
 

@@ -1,56 +1,7 @@
-"""Serial_DataSource: a producer on the other end of a cable, feeding whole files in.
+"""Receives whole files from another device, such as a Raspberry Pi, over a UART cable.
 
-The deployment is a Raspberry Pi wired to a board over UART. The Pi captures something it
-knows how to capture, compresses it, and pushes the archive down the cable; the board holds
-the AlLoRa protocol, the outbox and the radio. It is the composition the ubiquitous language
-calls board-runs-logic with a serial DataSource, and it is what the GNSS rig has actually been
-running since 2024.
-
-**This is per-file movement, not per-packet.** The same physical cable can carry either, and
-which one it is depends on where the protocol lives. A Serial *connector* would put the logic
-on the Pi and make the board a radio adapter, moving one packet at a time; this moves whole
-files and leaves the board in charge. Building the wrong one gives an adapter wearing a
-DataSource's name.
-
-**The receive has to be resumable, and that is the whole design.** A capture takes minutes at
-9600 baud, and `check()` is called from the serve loop the radio shares, where nothing may
-block. So there is no "read a file" call here: there is a state machine that consumes whatever
-bytes have arrived, does a bounded amount of work, and returns. It can be stopped between any
-two bytes and picked up on the next round.
-
-**What this changed from the earlier version, stated as a trade rather than a verdict.** The
-code it replaces was a single blocking `while True` with 2000 ms port timeouts, run on its own
-thread. That was deliberate and it worked: it ran in the field for about a year, and because
-the read had a thread to block in, the cable moved at the speed of the wire rather than at one
-handover per radio round. What the cooperative shape buys instead is a partial arrival that
-survives a restart, no thread stack on the board's heap, a source that runs on targets with no
-`_thread` at all, and a failure path that runs when a transfer fails. What it costs is
-throughput per turn, which is why `link_chunk_size` here is worth more than the baud rate.
-
-**A partial arrival is never a queued file.** The bytes land under a `.tmp`, which the queue's
-own rules already exclude from the directory it reads and delete on the next boot, and the
-file joins the queue only after its length and checksum both match what was announced. The
-failure this rules out is the expensive one: a truncated capture believed to be a short one,
-which nothing downstream can tell apart from a real one.
-
-The wire is the Pi's, unchanged, so no Pi in the field has to be touched:
-
-    Pi                                  board
-    START\\n                     ->
-                                 <-     LISTEN\\n
-    <8 byte size>\\n
-    <26 byte name>\\n
-    <10 byte crc32>\\n           ->
-    <crc32 of chunk>\\n <chunk>  ->
-                                 <-     ACK\\n   (kept)  or  NACK\\n  (send it again)
-    ...
-    END\\n                       ->
-                                 <-     OK\\n    (the file is on the card; let go of it)
-
-Subclassing Disk_DataSource rather than DataSource is what makes the rest free: send order
-across reboots, `is_durable()`, delete only on the peer's confirmation, and the option of
-keeping a copy of what was sent. Starting from the base would have rebuilt all of it in RAM,
-which is where the readings were being lost in the first place.
+`check()` reads a little at a time, so a long transfer never blocks the radio loop. A file stays a
+`.tmp` until its length and CRC match, so a cut-off file is never queued.
 """
 
 import binascii
@@ -59,7 +10,9 @@ from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
 from AlLoRa.utils.time_utils import current_time_ms, ticks_diff
 from AlLoRa.utils.debug_utils import print
 
-# The header the Pi sends after LISTEN, as fixed-width fields. Reading it as fixed widths
+# The cable protocol a producer speaks is drawn in examples/v3_hello/serial/README.md, "The wire".
+
+# The header the producer sends after LISTEN, as fixed-width fields. Reading it as fixed widths
 # rather than as lines is deliberate: a length-limited readline returns early on a short field
 # and everything after it shifts by a byte, which is silent and produces a plausible-looking
 # wrong name. Only the name's width varies between producers, so only that one is a parameter.
@@ -71,8 +24,8 @@ _HEADER = 1         # LISTEN sent; waiting for the fixed header block
 _CHUNK_HEADER = 2   # between chunks; the next line is a checksum, or END
 _CHUNK_BODY = 3     # a checksum arrived; waiting for the bytes it describes
 
-# A line long enough to be noise rather than a message. The longest thing the Pi ever sends on
-# its own line is a ten-digit checksum, so anything past this is a producer talking a different
+# A line long enough to be noise rather than a message. The longest thing a producer ever sends
+# on its own line is a ten-digit checksum, so anything past this is a producer talking a different
 # protocol, or a boot log, and holding it would grow the buffer without bound.
 _MAX_LINE = 64
 
@@ -95,8 +48,8 @@ class Serial_DataSource(Disk_DataSource):
         self.tx = tx
         self.rx = rx
         # The cable's chunk, which is not the radio's. The node computes what a LoRa frame can
-        # carry and re-clamps it on every RF config change; this is only how much the Pi hands
-        # over between acknowledgements, and it has to match what the Pi was written to send.
+        # carry and re-clamps it on every RF config change; this is only how much the producer
+        # hands over between acknowledgements, and it has to match what the producer sends.
         self.link_chunk_size = link_chunk_size
         self.name_length = name_length
         self.shorten_names = shorten_names
@@ -303,7 +256,7 @@ class Serial_DataSource(Disk_DataSource):
             return True
         # Written before it is acknowledged, the other way round from the v2 code. The wire is
         # unchanged either way, but an ACK now means the bytes are on the card rather than that
-        # they arrived: a power cut between the two used to lose a chunk the Pi had been told
+        # they arrived: a power cut between the two used to lose a chunk the producer had been told
         # to forget.
         self._writer.write(chunk)
         self._received += len(chunk)

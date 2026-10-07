@@ -1,25 +1,9 @@
 #!/usr/bin/env python3
-"""Log a board's serial session to a timestamped file (and echo it to the terminal).
+"""Logs a board's serial output to a file and to the terminal, each line stamped in seconds.
 
-Run ONE per device, in its own terminal tab:
-
-    python3 capture_serial.py /dev/cu.usbmodemA source.log
-    python3 capture_serial.py /dev/cu.usbmodemB collector.log --seconds 90
-
-Every line is prefixed with seconds-since-start, so the two logs can be aligned
-to see who transmits / who waits.
-
-Stopping:
-  * Ctrl-C stops it cleanly within ~0.5 s (a signal handler flips a flag — this
-    works even while the serial output is flooding).
-  * Press Ctrl-C twice, or Ctrl-\ (SIGQUIT), to force-quit immediately.
-  * --seconds N  auto-stops after N seconds (0 = run until Ctrl-C, the default).
-
-Notes:
-  * Only ONE program may hold a serial port at a time — close any screen / picocom /
-    ampy on that port first, or you'll get "resource busy".
-  * Press the board's RESET button after starting, to capture from the boot banner.
-  * Needs pyserial (already present if you use ampy):  pip install pyserial
+Run one per board, each in its own terminal, so the two logs line up. Ctrl-C stops it; press it
+twice to force-quit. Only one program can hold a serial port, so close screen or ampy first.
+Press the board's RESET after starting to catch the boot messages. Options: `--help`.
 """
 import argparse
 import signal

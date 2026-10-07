@@ -1,20 +1,8 @@
-"""Tunnel_connector: the logic-holder half of a split Connector.
+"""The logic half of a split Connector. The radio is on another board, run by an Adapter.
 
-A tunnel runs the protocol engine, codec and keys on one device (a Raspberry-Pi gateway) and
-the radio on another (an ESP32 Adapter) across a serial/WiFi link. This is the half on the
-logic-holder: a real Connector whose transport verbs are forwarded over a Link to the bridge,
-which runs them on its radio and returns the result. Because only opaque wire crosses the
-link (never a parsed Packet), v2 / v3-open / v3-secure all tunnel unchanged, closing the
-old "tunnels only speak v2" gap. The codec and session keys stay entirely here; the bridge is
-dumb and keyless.
-
-Two things move against the old design's fused override:
-  * the wait-for-the-reply loop runs *at the radio* via `exchange`: only the matching reply
-    (plus the radio-measured `td`) crosses the slow link, never a foreign frame, never a
-    ping-ponged receive window;
-  * the window `D` is sent *down* and the true `td` comes *up*, so pacing is owned here from a
-    real measurement, retiring the old `ACK:<timeout>+0.5` guess where the far side reported
-    its own timeout.
+Radio commands go to the Adapter over a Link. The codec and the keys stay on this side. For
+`exchange`, the Adapter waits for the reply at the radio and sends back only that reply and its
+measured timing (`td`).
 """
 from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.Codec import build_codec

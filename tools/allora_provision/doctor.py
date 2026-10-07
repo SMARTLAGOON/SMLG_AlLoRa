@@ -1,24 +1,8 @@
-"""Whether this machine can drive a board, and what to do when it cannot.
+"""Checks that this computer can drive a board, and says what to do when it cannot.
 
-The wizard needs two executables it deliberately does not install as dependencies: `mpremote`
-for every file operation, and `esptool` for the flash. Saying "install them" and stopping is
-the least useful moment to be unhelpful, and on a machine with several Pythons it is also not
-enough information to act on. Two traps live here, and both produce a tool that looks installed
-and does not work:
-
-**The executable is not the import.** `pip install mpremote` puts a script in one interpreter's
-scripts directory. If that directory is not on PATH, the install succeeds and the wizard still
-cannot find it, which reads as the install having failed.
-
-**More than one copy can be installed.** Where a machine has several Pythons, the one that
-answers to `python3` is often not the one whose scripts directory holds the tools, and a pip
-install from the wrong interpreter leaves two copies on PATH. The earlier one wins and nothing
-anywhere says which ran, so the wizard can be driving a different build than the person testing
-the same command by hand. Every copy found is reported, in the order PATH resolves them.
-
-So this module works out where a script would land and whether that place is on PATH *before*
-anything is installed, and looks again *after*, because pip reporting success says the package
-is on the machine and not that the wizard can run it.
+The wizard needs `mpremote` and `esptool`, which can look installed and still not run: pip put
+them in a folder that is not on PATH, or another copy earlier on PATH runs instead. So it checks
+where pip would install them, before and after installing, and lists every copy in PATH order.
 """
 import os
 import shutil

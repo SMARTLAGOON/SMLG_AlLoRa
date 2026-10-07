@@ -1,16 +1,8 @@
-"""The control artifact's byte layout, shared by the two ends that have to agree on it.
+"""The byte layout of a signed control command. The signer and the checker both use it.
 
     version(1) || type(1) || target_device_id(32) || counter(4) || payload || sig(64)
     sig = ECDSA-P256 over SHA-256(everything before it), raw r || s.
-
-Minting and verifying are separate objects, usually on separate machines, and the one thing
-they cannot afford to disagree about is where the bytes are. The layout lives here rather
-than in either of them, so neither side owns it and neither can quietly drift from the other.
-
-The counter sits inside the signed region and a recipient refuses any artifact whose counter
-it has already passed. Without it a signed artifact is valid forever: a carrier that cannot
-forge a command could still keep replaying one, re-imposing a recorded config at will with a
-perfectly good signature, which is the exact property an end-to-end authority exists to deny.
+A node refuses a counter that is not higher than the last one, so an old command cannot be replayed.
 """
 
 # Bumped only when the byte layout changes. Version 1 had no counter, so an artifact minted

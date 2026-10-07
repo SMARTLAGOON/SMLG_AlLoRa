@@ -1,20 +1,8 @@
-"""Talking to a T3S3 over the wire, with the bench's hard-won gotchas encoded rather than
-documented.
+"""Talks to a T3S3 over USB, with the bench's known problems handled in code.
 
-The single fact that drives almost everything here is that the ESP32-S3 uses **native USB**
-(USB-Serial/JTAG). From that follows: the port re-enumerates on every hard reset, so the path
-a board answered on before a flash is not the path it answers on after; `ampy` hangs on this
-REPL, so every file operation goes through `mpremote`; `esptool`'s auto-reset does not work, so
-download mode is entered over the wire from MicroPython itself and the buttons are the
-fallback; and only one program may hold a port at a time, so a capture left running makes every
-later step fail with a busy device.
-
-That knowledge currently lives in one skill file and in three sessions of tribal memory, which
-is a large part of what makes first contact with these boards painful for anyone else. It
-belongs in code that runs.
-
-Every external command goes through a `Runner`, injected, so the whole layer is testable
-without a board on the desk.
+On native USB the port changes on every hard reset, `ampy` hangs, and esptool cannot reset the
+board. So file work uses `mpremote`, and MicroPython itself enters download mode. Only one program
+can hold a port. Commands go through an injected `Runner`, so the tests need no board.
 """
 import glob
 import shutil

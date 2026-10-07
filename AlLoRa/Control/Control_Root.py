@@ -1,20 +1,7 @@
-"""The control root itself: the authority that mints what a node's verify gate accepts.
+"""Signs control commands with the root private key. `Control_Root_DataSink` checks them.
 
-`Control_Root_DataSink` verifies against a pinned public key; this is the private half that
-produces what it verifies. Both live in the library on purpose. A deployment with a backend
-lets the backend mint and the Hub only carry the result; a deployment without one gives its
-Hub the root private key and lets it mint locally, which is what makes a self-contained
-installation able to reconfigure itself at all.
-
-Two costs of that, worth naming rather than burying. The signing code is frozen into every
-node, including Edges that will never sign (small, since the curve primitives were already
-there for the handshake). And a minting Hub holds a private key on the board: that is the
-operator's trade, and it is why holding one is a deliberate act of provisioning rather than
-something that happens by default.
-
-A better delegation model exists and is deliberately not built here: a scoped, short-lived
-authority signed by the root would let a Hub retune a node without ever holding the key that
-can also reset or re-flash it. That is a later increment, not a different design.
+Usually a server signs. A Hub without a server can hold the key and sign commands itself. That key
+can reset or re-flash every node, so put it on a Hub only on purpose.
 """
 import hashlib
 

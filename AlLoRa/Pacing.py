@@ -1,26 +1,8 @@
-"""Pacing: one home for the timing the protocol adapts as it runs.
+"""Adaptive timing: how long to wait for a reply, and how long to sleep between requests.
 
-A pure policy object: no radio, no I/O. It is fed the Time-on-Air-derived bounds by whoever
-owns the RF config (the `Connector` for the window; the collector for the sleep), so the
-adaptation is unit-testable off-device, which it never was while it lived scattered on the
-`Connector` and on the collector.
-
-Two adaptive controllers live here, the two halves of the "one home":
-
-  * The **adaptive receive window** (v2's `adaptive_timeout`): it starts wide (`max`) and
-    tightens toward the observed round-trip on each good reply (EWMA), then jitter-grows back
-    toward `max` on a timeout, floored by the ToA `min` and the best round-trip yet seen,
-    capped at `max`. Driven by `set_bounds` / `on_timeout` / `on_reply`.
-
-  * The **inter-request sleep controller** (v2's `NEXT_ACTION_TIME_SLEEP`): the gap the
-    initiator waits between rounds. It starts at the sf/bw-derived `min` and hunts for the
-    shortest gap the link tolerates, probing shorter after a run of successes, backing off
-    (exponential below a threshold, jittered above it) on failure, and pinning a floor once
-    it has found the edge. Driven by `set_sleep_bounds` / `on_success` / `on_failure`, read
-    via `next_sleep`.
-
-A given deployment drives whichever half it needs (the `Connector` the window, the
-collector the sleep); a step-4 `request`/`respond` engine will drive both from one home.
+It never touches the radio; the caller gives it the airtime limits. The wait shrinks toward the
+measured round trip and grows after a timeout. The sleep gets shorter after successes and longer
+after failures.
 """
 from os import urandom
 

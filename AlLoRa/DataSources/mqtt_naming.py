@@ -1,14 +1,8 @@
-"""The MQTT envelope: `mq!<artifact_id>!<timestamp_ms>!<escaped-topic>` as the file NAME.
+"""Names the file that carries one MQTT message: `mq!<artifact_id>!<timestamp_ms>!<topic>`.
 
-The pairing convention between an MQTT_DataSource and an MQTT_DataSink. The original
-topic, a monotonic artifact id and an optional timestamp ride the AlLoRa file name
-(which crosses the link exactly once, inside METADATA) while the file content stays the
-MQTT payload byte-for-byte. Preserving the topic therefore costs zero payload bytes per
-chunk; the price is only that topics must stay comfortably inside one METADATA frame.
-
-Escaping exists because the name doubles as a filename on the receiving side (the
-reassembly temp path is built from it): `/` can never appear, and `!` / `%` must escape
-so the field delimiter and the escape character themselves round-trip.
+The topic travels in the file name, and the file holds the MQTT payload unchanged. The name is sent
+in one METADATA frame, so the topic must fit in it. `/`, `!` and `%` in the topic are escaped,
+because the receiver also uses the name as a file path.
 """
 
 _PREFIX = "mq!"

@@ -1,21 +1,8 @@
-"""The three phases: the Edge, the Hub, and the transfer that proves the pair.
+"""The three phases: the Edge, the Hub, and a transfer that proves the pair works.
 
-The order inside each phase is not stylistic. Two steps in particular have to happen where they
-happen, and both guard something that fails silently otherwise.
-
-**The identity backup comes before the flash.** The flash erases the board filesystem and the
-`device_id` is derived from a key that lives on it, so a reflash without a backup invalidates
-the operator's registration and, on a bench board, the provenance of every measurement
-published under that fingerprint. Nothing announces it: the board comes back working, with a
-new identity, and the Hub simply never hears from the node it registered. This is the single
-most damaging thing the wizard can get wrong, so it refuses to flash a board whose identity it
-could not save.
-
-**The device_id is read after the config lands, not before.** It does not exist until the node
-runs with `identity_file` set, and asking for it earlier gets an answer that is either nothing
-or a key from an older provisioning.
-
-Phase 3 exists because without it "successfully provisioned" means only that files were copied.
+The board's identity is backed up before the flash, because the flash erases it and the Hub would
+never hear that node again. If the backup fails, the board is not flashed. The `device_id` is read
+after the config is on the board, since it does not exist until the node runs with that config.
 """
 import json
 import os

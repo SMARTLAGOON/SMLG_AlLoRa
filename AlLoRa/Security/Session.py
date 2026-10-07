@@ -1,12 +1,7 @@
-"""The per-peer secure-session state: sid + key + counter, crypto-agnostic.
+"""One secure session with one peer: session id, key and frame counter.
 
-Created by the handshake (ECDH -> KDF -> key + nonce prefix) and consumed by the secure
-transfer. The Session owns the two stateful pieces the wire depends on, the monotonic
-send counter and the receive-side anti-replay window, and holds the key material as
-opaque bytes so the AEAD backend stays swappable. It fixes no nonce/AAD byte layout (that
-is intentionally left to a later crypto-review pass, since the exact bytes are a published
-surface we don't want to freeze prematurely); it only guarantees a unique, monotone send
-counter and correct replay rejection.
+The handshake creates it. It owns the send counter, which only goes up, and the replay window for
+received frames. The frame layer decides the nonce layout, not this class.
 """
 from AlLoRa.Security.Replay_window import Replay_window
 

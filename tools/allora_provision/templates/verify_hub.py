@@ -1,11 +1,6 @@
-# The Hub half of the wizard's verify step. Bounded: it pulls one file and exits.
-#
-# Run with `mpremote run`, which soft-resets rather than hard-resets, so the port does not
-# re-enumerate and everything this prints is caught from the first line. A capture attached to
-# the serial device cannot do that.
-#
-# Every line it prints for the wizard to read starts with VERIFY:, one fact per line, so the
-# host side parses facts rather than scraping a log.
+# The Hub half of the wizard's verify step. It pulls one file and exits.
+# Run it with `mpremote run`: a soft reset keeps the port, so every line it prints is caught.
+# Each line meant for the wizard starts with VERIFY: and holds one fact.
 import gc
 
 from AlLoRa.Nodes.Hub import Hub
