@@ -27,7 +27,7 @@ import pytest
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Control.Control_Root import Control_Root
 from AlLoRa.Control.control_envelope import TARGET_LEN
-from AlLoRa.Control.control_types import IN_BAND, RF_CONFIG
+from AlLoRa.Control.control_types import IN_BAND, RF_CONFIG, RESET
 from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Nodes.Edge import Edge
@@ -50,6 +50,8 @@ DEVICE_ID = bytes(range(32))
 
 
 class _CapturingActuator:
+    handles = (RF_CONFIG, RESET)
+
     def __init__(self):
         self.applied = []
 

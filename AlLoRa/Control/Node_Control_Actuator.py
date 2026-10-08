@@ -1,3 +1,5 @@
+import sys
+
 from AlLoRa.Control.Control_Actuator import Control_Actuator
 from AlLoRa.Control.control_types import RF_CONFIG, RESET
 from AlLoRa.utils.json_utils import json
@@ -15,10 +17,13 @@ class Node_Control_Actuator(Control_Actuator):
     switches.
     """
 
+    handles = (RF_CONFIG, RESET)
+
     def __init__(self, node, reset_fn=None):
         self.node = node
-        # None -> resolve machine.reset() lazily at drain time (device-only; importing machine
-        # on a host would fail). Tests inject a fake so the suite never actually resets.
+        # None -> the default for where this runs, resolved at drain time: machine.reset() on a
+        # board, an exit of the AlLoRa program on a host (see _default_reset). A deployment that
+        # wants a full reboot of its Pi, or a reset of its radio adapter, passes its own.
         self._reset_fn = reset_fn
 
     def apply(self, control_type, payload):
@@ -43,11 +48,7 @@ class Node_Control_Actuator(Control_Actuator):
             reset_fn = self._reset_fn
 
             def _reset():
-                fn = reset_fn
-                if fn is None:
-                    import machine   # device-only; imported here so a host build never needs it
-                    fn = machine.reset
-                fn()
+                (reset_fn or _default_reset)()
 
             # Defer: reboot only after the final-OK is out, or the Hub never hears completion,
             # re-grants the downlink, and the Edge reboots into the same RESET forever.
@@ -58,3 +59,13 @@ class Node_Control_Actuator(Control_Actuator):
         # command the node cannot act on): log it. Returns None so apply() just falls through.
         print("Node_Control_Actuator: dropped a verified control artifact ({})".format(reason))
         return None
+
+
+def _default_reset():
+    # RESET always means AlLoRa's own node. On a board that is the board. On a host such as a
+    # Pi it is the AlLoRa program, which exits with a failure status so the service running it
+    # starts it again: a clean exit would leave a service set to restart on failure stopped.
+    if sys.implementation.name == "micropython":
+        import machine   # device-only; imported here so a host never needs it
+        machine.reset()
+    sys.exit("Node_Control_Actuator: RESET received, exiting for the service to restart AlLoRa")

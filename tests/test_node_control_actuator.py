@@ -13,6 +13,10 @@ the final-OK is out. Mirrors v2's proven "reply on the old config, then switch."
 """
 
 import json as _json
+import sys
+import types
+
+import pytest
 
 from AlLoRa.Control.Node_Control_Actuator import Node_Control_Actuator
 from AlLoRa.Control.control_types import RF_CONFIG, RESET
@@ -79,6 +83,23 @@ def test_reset_apply_queues_and_only_resets_on_drain():
 
     node.queued[0]()   # the Edge drains it after the final-OK is on the air
     assert reset_calls == [1], "draining a queued RESET must invoke the reset function once"
+
+
+def test_reset_on_a_host_exits_the_program_for_its_service_to_restart(monkeypatch):
+    # On a Pi there is no board to reset: RESET means AlLoRa's own program, and the service
+    # that runs it brings it back. It exits with a failure code, because a service restarts on
+    # failure by default, and it must not reach for a `machine` module even if one is importable.
+    board_resets = []
+    fake_machine = types.ModuleType("machine")
+    fake_machine.reset = lambda: board_resets.append(1)
+    monkeypatch.setitem(sys.modules, "machine", fake_machine)
+    node = _FakeNode()
+    Node_Control_Actuator(node).apply(RESET, b"")
+
+    with pytest.raises(SystemExit) as exited:
+        node.queued[0]()
+    assert exited.value.code not in (0, None), "a clean exit would leave the service stopped"
+    assert board_resets == [], "a host must never call machine.reset"
 
 
 # --- Slice 4: a malformed / non-dict RF_CONFIG payload is dropped, never queued or raised ---

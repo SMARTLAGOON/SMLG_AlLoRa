@@ -27,7 +27,7 @@ import threading
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Control.Node_Control_Actuator import Node_Control_Actuator
-from AlLoRa.Control.control_types import IN_BAND, RF_CONFIG, RESET
+from AlLoRa.Control.control_types import IN_BAND, RF_CONFIG, RESET, CUSTOM
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
@@ -50,7 +50,8 @@ class _CapturingActuator:
     """Records what it was asked to do, so a test can compare the in-band path's arguments
     against the signed path's without a radio or a real reconfiguration."""
 
-    def __init__(self):
+    def __init__(self, handles=(RF_CONFIG, RESET)):
+        self.handles = handles
         self.applied = []
 
     def apply(self, control_type, payload):
@@ -156,6 +157,33 @@ def test_an_unknown_control_type_is_dropped_without_a_reply(tmp_path):
     edge.respond(edge._respond_handler)
 
     assert actuator.applied == [], "an unknown control type must not reach the actuator"
+    assert _replies(peer, edge) == [], "and must not be acknowledged"
+
+
+def test_a_type_the_actuator_does_not_handle_is_dropped_without_a_reply(tmp_path):
+    # Known to the library, but nothing on this node acts on it. Acknowledging would tell the
+    # Hub the command landed when the actuator was always going to ignore it.
+    actuator = _CapturingActuator(handles=(RF_CONFIG,))
+    edge, peer = _make_edge(tmp_path, control_actuator=actuator)
+    edge.connector.inbox.put(_control_frame(edge, IN_BAND | RESET))
+
+    edge.respond(edge._respond_handler)
+
+    assert actuator.applied == [], "an unhandled type must not reach the actuator"
+    assert _replies(peer, edge) == [], "and must not be acknowledged"
+
+
+def test_custom_is_never_accepted_unsigned(tmp_path):
+    # CUSTOM goes to whatever runs beside AlLoRa, a camera board or a program on the same Pi,
+    # and changes what that device does as much as a reset changes the node. It is only ever
+    # taken from a signed artifact, even on an open node whose actuator handles it.
+    actuator = _CapturingActuator(handles=(RF_CONFIG, RESET, CUSTOM))
+    edge, peer = _make_edge(tmp_path, control_actuator=actuator)
+    edge.connector.inbox.put(_control_frame(edge, IN_BAND | CUSTOM, b"take a photo"))
+
+    edge.respond(edge._respond_handler)
+
+    assert actuator.applied == [], "an unsigned CUSTOM must not reach the actuator"
     assert _replies(peer, edge) == [], "and must not be acknowledged"
 
 

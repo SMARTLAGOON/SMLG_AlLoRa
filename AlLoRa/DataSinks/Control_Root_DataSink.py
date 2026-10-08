@@ -1,6 +1,6 @@
 import hashlib
 
-from AlLoRa.Control.control_types import RF_CONFIG, RESET
+from AlLoRa.Control.control_types import KNOWN
 from AlLoRa.Control.control_envelope import (
     ENVELOPE_VERSION, HEADER_LEN as _HEADER_LEN, MIN_LEN as _MIN_LEN,
     SIG_LEN as _SIG_LEN, TARGET_LEN as _TARGET_LEN)
@@ -13,11 +13,6 @@ from AlLoRa.utils.json_utils import json
 # The envelope layout (and the version that names it) is shared with the minting side, so the
 # two ends cannot drift; ENVELOPE_VERSION is re-exported here because this module was where
 # callers first found it.
-
-# Only types with an actuator in this release are forwarded. A validly-signed but not-yet-
-# actuatable type (MODEL/OTA reserved) or an undefined byte is dropped at the gate, never
-# forwarded and never re-pulled. Extend this tuple as actuators land.
-_LIVE_TYPES = (RF_CONFIG, RESET)
 
 
 class Control_Root_DataSink(DataSink):
@@ -44,6 +39,11 @@ class Control_Root_DataSink(DataSink):
         self.control_root = self._load_control_root(control_root)
         self.device_id = bytes(device_id)
         self.actuator = actuator
+        # Forwarded: what the library knows and the actuator says it acts on. A signed artifact
+        # of any other type is dropped here, never forwarded and never re-pulled, so adding a
+        # command is a new actuator and never an edit to this check. Fixed at construction, the
+        # same as the root it verifies against.
+        self._forwarded = tuple(t for t in getattr(actuator, "handles", ()) if t in KNOWN)
         # Named by default, under the same filename the authority that commands this node keeps
         # its own number in. Passing None asks for the mark in RAM, which is a deliberate act at
         # the call site rather than something a caller falls into by not knowing the argument
@@ -154,7 +154,7 @@ class Control_Root_DataSink(DataSink):
         if version != ENVELOPE_VERSION:
             return self._reject("unsupported envelope version {}".format(version))
         control_type = mv[1]
-        if control_type not in _LIVE_TYPES:
+        if control_type not in self._forwarded:
             return self._reject("no actuator for control type {}".format(control_type))
         if bytes(mv[2:2 + _TARGET_LEN]) != self.device_id:
             return self._reject("artifact addressed to another node")

@@ -28,7 +28,8 @@ import pytest
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.DataSinks.DataSink import Reception
 from AlLoRa.Control.Control_Actuator import Control_Actuator
-from AlLoRa.Control.control_types import RF_CONFIG, RESET, MODEL, OTA
+from AlLoRa.Control.Node_Control_Actuator import Node_Control_Actuator
+from AlLoRa.Control.control_types import RF_CONFIG, RESET, MODEL, OTA, CUSTOM
 from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink, ENVELOPE_VERSION
 from AlLoRa.Security.ec_p256 import ecdsa_sign, public_key_uncompressed
 from test_config_persistence import _dying_open
@@ -71,11 +72,25 @@ class _CapturingActuator(Control_Actuator):
     """The v3.0.0 consumer: no real actuator yet, it just records what it was handed. In
     production this is where change_rf_config / reset / OTA live; that is a later increment."""
 
-    def __init__(self):
+    def __init__(self, handles=(RF_CONFIG, RESET)):
+        self.handles = handles
         self.applied = []   # (control_type, payload)
 
     def apply(self, control_type, payload):
         self.applied.append((control_type, bytes(payload)))
+
+
+class _QueueingNode:
+    """Just enough node for a real Node_Control_Actuator: it records what would be deferred."""
+
+    def __init__(self):
+        self.queued = []
+
+    def queue_control_action(self, action):
+        self.queued.append(action)
+
+    def change_rf_config(self, cfg):
+        return True
 
 
 def _artifact(tmp_path, content, name="ctrl.bin", chunk_size=32):
@@ -152,6 +167,33 @@ def test_undefined_or_unactuatable_type_is_dropped(tmp_path):
     assert actuator.applied == [], "a type with no actuator must be dropped at the gate"
 
 
+def test_the_default_node_actuator_still_drops_a_signed_model_or_custom(tmp_path):
+    # A node built before actuators declared their types must behave exactly as it did: a
+    # genuine MODEL or CUSTOM artifact is dropped at the gate, because nothing on it handles one.
+    node = _QueueingNode()
+    sink = _sink(Node_Control_Actuator(node, reset_fn=lambda: None))
+    sink.consume(_artifact(tmp_path, _envelope(MODEL, b"weights")), Reception(source="hub"))
+    sink.consume(_artifact(tmp_path, _envelope(CUSTOM, b"take a photo", counter=2)),
+                 Reception(source="hub"))
+    assert node.queued == [], "a type the actuator does not handle must never reach it"
+
+
+def test_an_actuator_that_declares_custom_receives_it(tmp_path):
+    actuator = _CapturingActuator(handles=(CUSTOM,))
+    _sink(actuator).consume(_artifact(tmp_path, _envelope(CUSTOM, b"take a photo")),
+                            Reception(source="hub"))
+    assert actuator.applied == [(CUSTOM, b"take a photo")], \
+        "a signed CUSTOM must reach an actuator that declares it, payload untouched"
+
+
+def test_an_actuator_cannot_widen_the_known_types(tmp_path):
+    # Declaring a byte the library has no meaning for does not make it forwardable: the known
+    # list is the library's, and an actuator only narrows it.
+    actuator = _CapturingActuator(handles=(0x7F,))
+    _sink(actuator).consume(_artifact(tmp_path, ENV_UNKNOWN_TYPE_VALID), Reception(source="hub"))
+    assert actuator.applied == [], "a type outside the known list must be dropped at the gate"
+
+
 def test_truncated_envelope_is_dropped_not_crashed(tmp_path):
     # A file too short to even hold the fixed header+sig must be dropped cleanly, not indexed into.
     actuator = _CapturingActuator()
@@ -204,6 +246,8 @@ def test_wrong_length_device_id_is_a_construction_error():
 # --- Slice 6: an actuation failure propagates (retry), unlike a verification reject ---------
 
 class _FailingActuator(Control_Actuator):
+    handles = (RF_CONFIG,)
+
     def apply(self, control_type, payload):
         raise RuntimeError("actuator busy")
 

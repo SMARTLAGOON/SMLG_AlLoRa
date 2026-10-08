@@ -13,7 +13,7 @@ from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.Status import Status
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
-from AlLoRa.Control.control_types import IN_BAND, KNOWN as CONTROL_TYPES
+from AlLoRa.Control.control_types import IN_BAND, CUSTOM, KNOWN as CONTROL_TYPES
 from AlLoRa.Pacing import Pacing
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, \
     ticks_add, ticks_diff
@@ -1066,36 +1066,10 @@ class Node:
         # Masked rather than subtracted so a reserved bit that later gains a meaning lands
         # outside the closed enum and is dropped, instead of aliasing onto a real type.
         control_type = payload[0] & 0x7F
-        if self.home_role == "collector":
-            # Actuation follows authority: an authority evaluates control from below, it does
-            # not apply it. Mechanically a peer holding the collector role can drive a control
-            # round, since driving is what retunes RF, but a delegated role carries no
-            # authority with it. And the harm is not local: a wrongly retuned Edge costs that
-            # node until its trial reverts it, while a wrongly retuned authority moves the
-            # aggregation point for every node aimed at it.
+        refusal = self._in_band_refusal(control_type)
+        if refusal is not None:
             if self.debug:
-                print("Ignoring an in-band control command: this node is the authority")
-            return
-        if self.control_root is not None:
-            # Provisioning a control root is the operator declaring an external authority over
-            # this node, and a node that has the stronger tier accepts nothing below it. If an
-            # unsigned frame could still retune it, the signed path would secure nothing: an
-            # attacker in radio range would ask in band rather than forge a signature it cannot
-            # produce. Checked after the authority test only so a minting Hub, which is refused
-            # on both counts, reports the reason that holds even when it mints for no one.
-            if self.debug:
-                print("Refusing an in-band control command: this node verifies signed control")
-            return
-        if control_type not in CONTROL_TYPES:
-            if self.debug:
-                print("Dropping an in-band control command of unknown type: ", control_type)
-            return
-        if self.control_actuator is None:
-            # Nothing to act with. Staying silent rather than acknowledging is the point: an
-            # ack would move the commanding end onto a configuration this node will never
-            # apply, which is a deaf endpoint rather than a failed command.
-            if self.debug:
-                print("Dropping an in-band control command: no actuator on this node")
+                print(refusal)
             return
         self.control_actuator.apply(control_type, bytes(payload[1:]))
         ack = self.new_packet()
@@ -1109,6 +1083,42 @@ class Node:
         # The safe boundary the actuator defers to: the acknowledgement is on the air, so
         # switching the radio (or resetting) can no longer cost the peer its confirmation.
         self._run_pending_control()
+
+    def _in_band_refusal(self, control_type):
+        """Why this node will not act on an in-band command of this type, or None if it will.
+
+        Every refusal is silent on the wire: an acknowledgement would tell the commanding end the
+        command landed, and move it onto a configuration this node is never going to apply.
+        """
+        if self.home_role == "collector":
+            # Actuation follows authority: an authority evaluates control from below, it does
+            # not apply it. Mechanically a peer holding the collector role can drive a control
+            # round, since driving is what retunes RF, but a delegated role carries no
+            # authority with it. And the harm is not local: a wrongly retuned Edge costs that
+            # node until its trial reverts it, while a wrongly retuned authority moves the
+            # aggregation point for every node aimed at it.
+            return "Ignoring an in-band control command: this node is the authority"
+        if self.control_root is not None:
+            # Provisioning a control root is the operator declaring an external authority over
+            # this node, and a node that has the stronger tier accepts nothing below it. If an
+            # unsigned frame could still retune it, the signed path would secure nothing: an
+            # attacker in radio range would ask in band rather than forge a signature it cannot
+            # produce. Checked after the authority test only so a minting Hub, which is refused
+            # on both counts, reports the reason that holds even when it mints for no one.
+            return "Refusing an in-band control command: this node verifies signed control"
+        if control_type not in CONTROL_TYPES:
+            return "Dropping an in-band control command of unknown type: {}".format(control_type)
+        if control_type == CUSTOM:
+            # CUSTOM is handed to whatever runs beside AlLoRa and changes what that device does
+            # as much as a reset changes the node, so it is only taken from a signed artifact,
+            # even on an open node whose actuator handles it.
+            return "Refusing an in-band CUSTOM command: it is only accepted signed"
+        if (self.control_actuator is None
+                or control_type not in getattr(self.control_actuator, "handles", ())):
+            # Nothing to act with, or nothing that acts on this type.
+            return "Dropping an in-band control command: no actuator for type {}".format(
+                control_type)
+        return None
 
     def _on_grant(self, packet):
         # Base: ignore. The Edge preset overrides this to accept the delegated collector role;
