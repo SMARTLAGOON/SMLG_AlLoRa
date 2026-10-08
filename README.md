@@ -20,9 +20,6 @@ Details of the protocol can be found in these articles:
 
 * [AI*LoRa: Enabling Efficient Long-Range Communication with Machine Learning at the Edge](https://dl.acm.org/doi/10.1145/3641512.3690040)
 
-We're also developing a custom GPT, [AlLoRa Genius](https://chat.openai.com/g/g-rOGxxA1BZ-allora-genius),
-to assist in understanding and utilizing the AlLoRa protocol.
-
 -----
 
 # The model in one page
@@ -325,8 +322,34 @@ card or a broker. It is two objects on purpose:
   break the acknowledgement the node is still sending, so `Node_Control_Actuator` queues a deferred
   action and the run loop drains it once the final OK is on the air.
 
-A deployment adds an effect by subclassing the actuator and touching no protocol code. The control
-types are a closed enum riding inside the signed region: `RF_CONFIG`, `RESET`, `MODEL`, `OTA`.
+The control types are a closed list riding inside the signed region, and only ever appended to:
+
+| Type | Means |
+|---|---|
+| `RF_CONFIG` (1) | change the node's radio settings, with a trial |
+| `RESET` (2) | restart AlLoRa's own node: the board, or the AlLoRa program on a Pi |
+| `MODEL` (3) | an AiLoRa model, for how the node picks its own radio settings (no actuator yet) |
+| `OTA` (4) | an update of AlLoRa itself (no actuator yet) |
+| `CUSTOM` (5) | signed bytes for whatever runs beside AlLoRa, which AlLoRa never reads |
+
+#### Add your own command
+
+Subclass the actuator, list the types it handles, and queue the effect:
+
+```python
+class Camera_Actuator(Node_Control_Actuator):
+    handles = Node_Control_Actuator.handles + (CUSTOM,)
+
+    def apply(self, control_type, payload):
+        if control_type != CUSTOM:
+            return super().apply(control_type, payload)
+        self.node.queue_control_action(lambda: camera_uart.write(bytes(payload)))
+```
+
+The gate forwards a verified artifact only when the library knows its type **and** the actuator
+lists it, so a new command needs no change to the gate. `CUSTOM` is only ever accepted signed.
+[`examples/custom_command`](examples/custom_command) runs two such actuators on your computer, one
+for a device on an ESP32's serial wire and one for a program beside AlLoRa on a Pi.
 
 </details>
 
