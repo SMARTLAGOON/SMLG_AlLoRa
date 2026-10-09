@@ -648,7 +648,8 @@ frame uses the third.
 - **MAC:** the board's physical address. In v3 it is a label, a folder name, and the address for a
   first contact with a node that might still be v2 (the 13-byte header).
 - **device_id:** an Edge's v3 identity, the fingerprint of its public key (`SHA256(pubkey)`). It
-  cannot be faked, and it stays the same across reboots as long as `identity_file` is set. A first
+  stays the same across reboots as long as `identity_file` is set. In `secure` the Hub does not
+  yet check that an Edge holds the key behind it (see [Security](#-security)). A first
   contact by `device_id` uses the 9-byte header, with no MAC on the air.
 - **session id:** the 1-byte address of one Edge and Hub session, used once the session exists (the
   6-byte header). It comes from the node's identity by default, and you can set it with
