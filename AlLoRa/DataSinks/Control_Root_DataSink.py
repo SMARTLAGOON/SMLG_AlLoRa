@@ -44,6 +44,12 @@ class Control_Root_DataSink(DataSink):
         # command is a new actuator and never an edit to this check. Fixed at construction, the
         # same as the root it verifies against.
         self._forwarded = tuple(t for t in getattr(actuator, "handles", ()) if t in KNOWN)
+        if not self._forwarded:
+            # Started anyway, it would drop every command as "no actuator for control type N",
+            # which points a student away from the actuator they just wrote.
+            raise ValueError(
+                "this actuator handles no control type: list them in `handles`, "
+                "e.g. handles = (RF_CONFIG, RESET)")
         # Named by default, under the same filename the authority that commands this node keeps
         # its own number in. Passing None asks for the mark in RAM, which is a deliberate act at
         # the call site rather than something a caller falls into by not knowing the argument

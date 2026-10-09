@@ -21,6 +21,19 @@ serial device got: take a photo
 program restarted, it reads: new detection model
 ```
 
+## Send it from the Hub
+
+A Hub that holds the control root sends the command in one call:
+
+```python
+hub.send_control(endpoint, CUSTOM, b"take a photo")
+```
+
+The Hub signs it, numbers it from the same counter it uses for radio changes, and delivers it on
+its next visit to that Edge. The call returns `PENDING`, because the Edge checks and acts after
+the transfer, where the Hub cannot see. If your device should answer, send the answer back as
+ordinary data.
+
 ## The two actuators
 
 - [`serial_device_actuator.py`](serial_device_actuator.py), for an ESP32: writes the bytes to a
@@ -48,7 +61,8 @@ To use one on a node, build it in place of `Node_Control_Actuator` in `wire_cont
 ## Rules your actuator follows
 
 - **List the types you handle** in `handles`. The gate forwards only those, so a command nothing
-  handles is dropped, not acknowledged and ignored.
+  handles is dropped, not acknowledged and ignored. An actuator that lists none stops the node
+  at startup.
 - **Queue, do not act**, in `apply()`. The node is still acknowledging the transfer when `apply()`
   runs. Hand over with `node.queue_control_action(...)`, and the node runs it after the final OK.
 - **`CUSTOM` is only accepted signed.** A node without a control root never acts on one.

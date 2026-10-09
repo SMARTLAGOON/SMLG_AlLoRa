@@ -10,7 +10,7 @@ from AlLoRa.Nodes.Node import Node
 from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids, \
     label_for_config, with_current_keys, config_key_for, NO_ADDRESS
 from AlLoRa.DataSources.DataSource import DataSource
-from AlLoRa.Control.control_types import RF_CONFIG, IN_BAND
+from AlLoRa.Control.control_types import RF_CONFIG, IN_BAND, KNOWN
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Packet_v3 import Packet_v3
 from AlLoRa.Pacing import Pacing
@@ -957,9 +957,8 @@ class Hub(Node):
                     else self.UNREACHABLE
             return self._record_rf_change(digital_endpoint, outcome)
         if artifact is None:
-            payload = dumps(new_config).encode("utf-8")
-            artifact = self.control_root.mint(RF_CONFIG, digital_endpoint.device_id,
-                                              self._next_control_counter(), payload)
+            artifact = self._mint_control(digital_endpoint, RF_CONFIG,
+                                          dumps(new_config).encode("utf-8"))
         # No chunk size: the artifact may sit in the queue across the very reconfiguration it
         # carries, so it is cut when it is delivered, at whatever this Hub can carry then.
         file = AlLoRa_File(name="ctrl.bin", content=bytearray(artifact))
@@ -968,6 +967,40 @@ class Hub(Node):
         # the transfer has closed and this end has stopped listening, so the verdict is reached
         # somewhere this Hub cannot see it. The probe is what observes which way it went.
         return self._record_rf_change(digital_endpoint, self.PENDING)
+
+    def send_control(self, digital_endpoint, control_type, payload=b""):
+        """Send one signed command, RESET or CUSTOM, to one endpoint. Returns PENDING.
+
+        For a Hub that holds the control root. The command is numbered from the same counter
+        `ask_change_rf` uses, so a deployment that sends both never has two counters for one
+        root; when two overlap, the Edge refuses a genuine command as a replay and nothing on
+        this side says why. There is no in-band route: an Edge never takes CUSTOM unsigned.
+
+        An RF change is refused here and sent with `ask_change_rf`, which also moves this Hub
+        onto the new settings. Sent from here, the Edge would move alone and go unheard.
+
+        PENDING because the Edge verifies and acts after the transfer has closed, out of this
+        Hub's sight. Whether a command was carried out is the deployment's to report back.
+        """
+        if control_type == RF_CONFIG:
+            raise ValueError("an RF change is sent with ask_change_rf, which moves this Hub too")
+        if control_type not in KNOWN:
+            raise ValueError("unknown control type {}".format(control_type))
+        artifact = self._mint_control(digital_endpoint, control_type, payload)
+        self.queue_downlink(digital_endpoint,
+                            AlLoRa_File(name="ctrl.bin", content=bytearray(artifact)))
+        return self.PENDING
+
+    def _mint_control(self, digital_endpoint, control_type, payload):
+        # Checked before a number is spent: a refused call should cost nothing, and a gap in
+        # the sequence, though harmless to the fleet, is confusing to read in the counter file.
+        if self.control_root is None:
+            raise ValueError("this Hub holds no control root, so it cannot sign a command")
+        if digital_endpoint.device_id is None:
+            raise ValueError("endpoint {} has no device_id to address a signed command to"
+                             .format(digital_endpoint.name))
+        return self.control_root.mint(control_type, digital_endpoint.device_id,
+                                      self._next_control_counter(), payload)
 
     def rf_change_status(self, digital_endpoint):
         """What became of the last RF change asked of this endpoint: one of ACCEPTED, REFUSED,

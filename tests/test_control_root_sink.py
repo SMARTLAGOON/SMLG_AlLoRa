@@ -189,9 +189,18 @@ def test_an_actuator_that_declares_custom_receives_it(tmp_path):
 def test_an_actuator_cannot_widen_the_known_types(tmp_path):
     # Declaring a byte the library has no meaning for does not make it forwardable: the known
     # list is the library's, and an actuator only narrows it.
-    actuator = _CapturingActuator(handles=(0x7F,))
+    actuator = _CapturingActuator(handles=(CUSTOM, 0x7F))
     _sink(actuator).consume(_artifact(tmp_path, ENV_UNKNOWN_TYPE_VALID), Reception(source="hub"))
     assert actuator.applied == [], "a type outside the known list must be dropped at the gate"
+
+
+@pytest.mark.parametrize("handles", [(), (0x7F,)])
+def test_an_actuator_that_handles_no_known_type_is_a_construction_error(handles):
+    # A first actuator that forgets `handles` would otherwise start, and then drop every command
+    # as "no actuator for control type 1", which points away from the mistake. Refused here
+    # instead, with the attribute to fix in the message.
+    with pytest.raises(ValueError, match="handles"):
+        _sink(_CapturingActuator(handles=handles))
 
 
 def test_truncated_envelope_is_dropped_not_crashed(tmp_path):

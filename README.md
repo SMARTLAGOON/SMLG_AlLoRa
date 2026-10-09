@@ -348,6 +348,7 @@ class Camera_Actuator(Node_Control_Actuator):
 
 The gate forwards a verified artifact only when the library knows its type **and** the actuator
 lists it, so a new command needs no change to the gate. `CUSTOM` is only ever accepted signed.
+A Hub that holds the control root sends one with `hub.send_control(endpoint, CUSTOM, payload)`.
 [`examples/custom_command`](examples/custom_command) runs two such actuators on your computer, one
 for a device on an ESP32's serial wire and one for a program beside AlLoRa on a Pi.
 
