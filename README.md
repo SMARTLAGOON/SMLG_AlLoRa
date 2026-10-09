@@ -6,11 +6,16 @@ Cite this repository: [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.774124
     <img src="readme_assets/logo.png"  width="50%">
 </p>
 
-AlLoRa turns a raw LoRa radio, which can only move a couple of hundred bytes at a time and drops
-frames whenever the air is bad, into a link that transfers **whole files** reliably over long
-distances. It is a Python / MicroPython library, so the same code runs on an ESP32-class board, a
-Raspberry Pi, or a laptop. It is based on the original [LoRaCTP](https://github.com/pmanzoni/loractp),
-adding a modular design, mesh capabilities, larger packets and faster transfers.
+AlLoRa is a toolbox for transferring content over LoRa: whole files, not just a few bytes of
+sensor data. It grew out of [LoRaCTP](https://github.com/pmanzoni/loractp), and adds larger
+packets for faster transfers, pieces you can swap to fit your hardware, and a mesh mode to reach
+further.
+It is written in Python and MicroPython, so the same code runs on an ESP32 board, a Raspberry Pi
+or a laptop.
+
+The protocol is built with distributed Edge-AI in mind: field nodes that do not only send their
+data, but also receive what they need to keep working, like a new radio configuration, a command
+or a model. So files now travel both ways, from the field to the Hub and back.
 
 Details of the protocol can be found in these articles:
 
@@ -20,189 +25,308 @@ Details of the protocol can be found in these articles:
 
 * [AI*LoRa: Enabling Efficient Long-Range Communication with Machine Learning at the Edge](https://dl.acm.org/doi/10.1145/3641512.3690040)
 
------
+## Index
 
-# The model in one page
-
-AlLoRa v3 separates three things that v2 fused into its node names: **where a node sits**, **what it
-does in a given transfer**, and **who is in command**.
-
-```
- Application │ DataSource ─▶ │             │ ─▶ DataSink
-             │ (feeds files) │             │   (store / forward / website)
- ────────────┼───────────────┼─────────────┼───────────────────────────────
- Protocol    │     Edge ─────┤             ├──── Hub
-             │ (source role) │             │  (collector role)
- ────────────┼───────────────┼─────────────┼───────────────────────────────
- Transport   │  Connector ───┤ ⇄ Packets ⇄ ├─── Connector
-             │ (radio · tunnel · loopback) │   (… · Adapter bridge)
-```
-
-**There are exactly two node types, and they are named by placement.**
-
-- **`Edge`** is the deployed, on-site node: it lives with the sensors and it *serves* what it has.
-- **`Hub`** is the aggregation node and the permanent authority: it polls its Edges and *pulls*
-  their files. One Edge or fifty, it is the same class.
-
-**The role is a separate, swappable axis.** The **collector role** drives each round (it sets the
-pace: polls, asks for metadata and chunks, reassembles) and the **source role** serves (it holds the
-data and answers). By default the Hub is the collector and the Edge is the source, which is the
-uplink. For a downlink the Hub *delegates* the collector role to one Edge, that Edge pulls the file,
-and the Hub reclaims. Only the drive moves: the Hub stays in command throughout, and it is always
-the authenticated peer and key holder.
-
-That is why the type names say nothing about data direction. `Source` and `Collector` named a node by
-what it did with data, and data direction is exactly what role reversal flips, so the old names
-misdescribed the node half the time it mattered.
-
-**Both ends carry both application boundaries.** A `DataSource` feeds files *in* to whoever is
-serving; a `DataSink` drains completed files *out* of whoever is collecting. The diagram shows the
-uplink; on a downlink they mirror.
-
-## Coming from v2
-
-| v2 / early-v3 term | v3 term | Kind of thing |
-|---|---|---|
-| `Source` node | **`Edge`** node | type (placement) |
-| `Collector` node | **`Hub`** node | type (placement + authority) |
-| `Requester` | a `Hub` with one Edge and a trivial sink | removed in v3 |
-| `Gateway` | a `Hub` with many Edges and a cloud sink | removed in v3 |
-| `source` / `collector` | the **role** names (the words that used to be type names) | role |
-| `initiator` / `responder` | unchanged, but demoted to the per-round mechanic, not a role name | round / wire |
-| `Adapter` node | transport: the far half of a split Connector | **not** a node type |
-| `Interface` | absorbed into `Adapter` | deleted, not renamed |
-| `CTP_File` | **`AlLoRa_File`** | core piece |
-| `Gateway.check_digital_endpoints()` | **`Hub.run()`** | main-loop verb |
-| `DataSource` / `DataSink` | unchanged, now present on **both** types | app boundary |
-
-**`Source`, `Requester` and `Gateway` no longer exist.** They survived the migration as aliases and
-were removed once nothing in the library, the examples or the firmware imported them, because a name
-that only redirects is a name someone still has to learn. A year-old `main.py` needs two edits:
-`Source` becomes `Edge`, and both `Requester` and `Gateway` become `Hub`. Pass the constructor
-arguments **by keyword**, since the old positional orders are not the new one, and drop
-`NEXT_ACTION_TIME_SLEEP`: it has been a silent no-op since v2.0 and the v3 constructors refuse it
-rather than accept a knob they cannot honour (the adaptive gap lives on `Pacing`). To run old code
-unchanged instead, use the `v2.0.0` tag, which is what it was written against.
-
-Two verbs are worth keeping straight, because they are **not** a second pair of role names: the
-collector role **drives** a round, the source role **serves** it. A node has a drive loop and a serve
-loop; a role says which one it is running.
+- [Folders](#folders)
+  - [AlLoRa](#allora): Nodes, DataSources and DataSinks, Connectors, Control, core pieces
+  - [Examples](#examples)
+  - [Firmware](#firmware)
+  - [Tests](#tests)
+- [How does it work?](#how-does-it-work)
+  - [Communication logic](#-communication-logic)
+  - [Packet structure](#-packet-structure)
+  - [Identity and addressing](#-identity-and-addressing)
+  - [Security](#-security)
+  - [RF configuration](#-rf-configuration-and-the-trial)
+  - [Mesh mode](#-mesh-mode)
+- [Coming from v2](#coming-from-v2)
 
 -----
 
-# Learn by doing
+# Folders
 
-Check the [examples folder](examples) for the full set. The shortest path:
+Inside the repository, you will find the following folders:
 
-- [Setting up AlLoRa in LilyGo T3S3 devices](firmware/T3S3/)
-- [An Edge on a T3S3](examples/Edges/T3S3) and the [Hub that polls it](examples/Hubs/One-Edge/T3S3)
-- [Setting up AlLoRa in LoPy4 devices](examples/Hubs/One-Edge/LoPy4)
-- [A Hub on a Raspberry Pi or a computer, polling many Edges](examples/Hubs/Many-Edges)
-- [Adapters](examples/Adapters), for a device with no radio of its own
+```
+AlLoRa/          the library
+examples/        runnable examples, by node type and by board
+firmware/        MicroPython firmware and build targets for the supported boards
+tests/           the test suite (CPython)
+```
 
-A minimal Edge, serving a file to whoever asks:
+## [AlLoRa](AlLoRa)
+
+It contains all the code needed to set up a communication network between devices, from a
+point-to-point link to a Hub with many Edges. To build a deployment, you pick a few pieces from
+it: a **node** for each board, a **Connector** for each node to reach the radio, and the places
+where your data comes **in** and goes **out**.
+
+<p align="center">
+  <img width="600" src="readme_assets/figures/toolbox-intro.svg"
+       alt="The AlLoRa toolbox: every module comes out of the box">
+</p>
+
+<details>
+<summary><b>What is inside:</b> Nodes, DataSources and DataSinks, Connectors, Control, and the core pieces.</summary>
+
+The modules at the top level are the core pieces every node uses. A folder holds a family of
+alternatives you pick from (`Nodes/`, `Connectors/`, `Links/`, `Adapters/`, `DataSources/`,
+`DataSinks/`), except `Security/` and `Control/`, which you use as a whole. A file named in
+lowercase holds functions and constants; a capitalised one is named after the class it provides.
+
+### [Nodes](AlLoRa/Nodes)
+
+<img align="right" width="200" src="readme_assets/figures/toolbox-nodes.svg"
+     alt="AlLoRa toolbox: nodes (Edge, Hub, Digital Endpoint)">
+
+A node is the element in charge of the communication logic. There are two node types, named by
+where they sit in the deployment, not by which way the data goes: the **Edge** in the field, and
+the **Hub** that collects from it. The Hub keeps a **Digital Endpoint** for each of its Edges.
+
+<br clear="right">
+
+<details>
+<summary><b>Edge</b>: the field node, with the sensors.</summary>
+
+#### [Edge.py](AlLoRa/Nodes/Edge.py)
+
+The Edge runs with the sensing application, serves its files to the Hub, and receives what the Hub
+sends it (configurations, commands, models). It keeps one `Digital_Endpoint`, for its Hub, so a
+file sent down has somewhere to land.
+
+**Usage:**
+
+1. **Instantiation:**
+
+   - `connector`: the [Connector](#connectors-links-and-adapters) this node reaches LoRa through.
+   - `config_file`: the node's [`AlLoRa.json`](#the-config-file).
+   - `datasource` (optional): where the files to send come from. Without one, you hand files over
+     yourself with `set_file`.
+   - `data_sink` (optional): where a file the Hub sends ends up.
+   - `control_actuator` (optional): what carries out a verified command. See [Control](#control).
+
+2. **Set a file:** `set_file(file)` takes an `AlLoRa_File` to serve. `get_chunk_size()` tells you
+   the chunk size to cut it with.
+
+3. **Run:** `run()` answers the Hub's requests forever. `run(timeout=60)` returns after a minute.
 
 ```python
-from AlLoRa.Nodes.Edge import Edge
-from AlLoRa.File import AlLoRa_File
-from AlLoRa.Connectors.SX127x_connector import SX127x_connector
-
-edge = Edge(SX127x_connector(), config_file="AlLoRa.json")
-edge.set_file(AlLoRa_File(name="hello.bin", content=payload,
-                          chunk_size=edge.get_chunk_size()))
+edge = Edge(connector=connector, config_file="AlLoRa.json",
+            datasource=Disk_DataSource(queue_path="Outbox"))
 edge.run()
 ```
 
-And the Hub that pulls it:
+</details>
+
+<details>
+<summary><b>Hub</b>: the node that collects, one Edge or fifty.</summary>
+
+#### [Hub.py](AlLoRa/Nodes/Hub.py)
+
+The Hub coordinates the transfers. It visits each of its Edges in turn, pulls their files, and
+hands them to its DataSink. It is also the one that sends files and commands down to an Edge. One
+Edge or fifty, it is the same class.
+
+**Usage:**
+
+1. **Instantiation:**
+
+   - `connector`, `config_file`: as for the Edge.
+   - `nodes_file` (optional, default `"Nodes.json"`): the list of Edges to visit. See
+     Digital Endpoint below.
+   - `data_sink` (optional): where finished files go. The default saves them to disk.
+   - `debug_hops` (optional, default `False`): record the path of each packet in mesh mode, on
+     v2 links only. See [Mesh mode](#-mesh-mode).
+   - `control_root` (optional): the signing key, for a Hub that sends signed commands. See
+     [Control](#control).
+
+2. **Run:** `run(save_files=True)` visits the Edges forever, the most overdue one first, and hands
+   each finished file to the DataSink. Without `save_files=True` the files are received but not
+   kept, which is only useful for tests.
+
+3. **Send something down:**
+   - `queue_downlink(endpoint, file)` sends a file to one Edge at the next safe moment.
+   - `send_control(endpoint, control_type, payload)` sends a signed command (`RESET` or `CUSTOM`).
+   - `ask_change_rf(endpoint, new_config)` moves one Edge, and the Hub with it, to new radio
+     settings.
 
 ```python
-from AlLoRa.Nodes.Hub import Hub
-from AlLoRa.Connectors.SX127x_connector import SX127x_connector
-from AlLoRa.Digital_Endpoint import Digital_Endpoint
-
-hub = Hub(SX127x_connector(), config_file="AlLoRa.json")
-hub.set_digital_endpoints([Digital_Endpoint(name="edge-1", mac_address="9eeff0dc",
-                                            active=True, session_id=42)])
+hub = Hub(connector=connector, config_file="AlLoRa.json",
+          data_sink=MQTT_DataSink(host="10.0.0.4", topic_prefix="albufera"))
 hub.run(save_files=True)
 ```
 
-Both node types run with the same verb. `run()` without a `timeout` is the deployed main loop: it
-never returns. A Hub with several endpoints registered in `Nodes.json` visits each in turn, most
-overdue first, for that endpoint's own listening window.
-
------
-
-# The pieces
-
-## Nodes
+</details>
 
 <details>
-<summary>Two types on one shared base, plus the endpoint handle a Hub keeps per Edge.</summary>
+<summary><b>Digital Endpoint</b>: what the Hub knows about one Edge.</summary>
 
-### [Node.py](AlLoRa/Nodes/Node.py)
+#### [Digital_Endpoint.py](AlLoRa/Digital_Endpoint.py)
 
-The shared base: identity and config, one exchange round, **both** loops (drive and serve), the
-handshake, and the RF-config trial machinery. It is not meant to be instantiated. MicroPython has no
-abstract classes, so a parent class does the job.
+The Digital Endpoint holds one Edge's name and address, its radio settings, how often to visit it,
+and the state of the transfer in progress. It also assembles the `AlLoRa_File` once every chunk
+has arrived. You rarely build one by hand: the Hub builds one per entry of `Nodes.json`.
 
-### [Edge.py](AlLoRa/Nodes/Edge.py)
+**Usage:** each entry of `Nodes.json` is one Edge:
 
-The far-placement node. Home role `source`. `run()` answers its Hub's polls and uplink pulls, and
-honors a delegation by driving one downlink pull before coming home. It holds one
-`Digital_Endpoint`, for its Hub, so a downlink has somewhere to land.
+```json
+[
+  {
+    "name": "src",
+    "mac_address": "9eeff0dc",
+    "session_id": 42,
+    "active": true,
+    "wait_after_visit": 60,
+    "listening_time": 30
+  }
+]
+```
 
-An Edge never self-promotes and yields the instant it hears its Hub polling again.
+- `name`: a short nickname, used in logs and folder names.
+- `mac_address`, `session_id` or `device_id`: how the Hub addresses this Edge. See
+  [Identity and addressing](#-identity-and-addressing).
+- `active` (default `true`): `false` keeps the Edge on the list without visiting it.
+- `listening_time` (default 30 s): how long one visit lasts.
+- `wait_after_visit` (default 60 s): how long this Edge rests before the next visit.
+- `connector` (optional): this Edge's own radio settings, if they differ from the Hub's. Copy
+  the `connector` block from the Edge's config; anything you leave out comes from the Hub's.
 
-### [Hub.py](AlLoRa/Nodes/Hub.py)
-
-The center-placement node and the permanent authority. Home role `collector`. It holds a
-`Digital_Endpoint` per registered Edge and `run()` is the visit loop over them. It also carries the
-serve loop, because delegating a downlink means serving the file the delegated Edge then pulls.
-
-One endpoint is the 1:1 case, many is the gateway deployment. Same class, which is why the old split
-between a `Requester` and a `Gateway` dissolved: the difference was only how many endpoints and which
-sink.
-
-### [Digital_Endpoint.py](AlLoRa/Digital_Endpoint.py)
-
-A Hub's **session handle for one remote Edge**: its identity and RF settings, the state machine of
-the transfer, the mesh-retransmission state, the file currently in flight, and the secure session.
-It also assembles the complete `AlLoRa_File` once every chunk has arrived. An Edge holds one too, for
-its Hub.
-
-The Hub retunes to an endpoint's RF settings before listening to it, which is how one Hub serves
-several Edges on different configs. An endpoint that states no RF is polled on **the node's own
-`AlLoRa.json` config**, so the common case, where both ends share a configuration, needs nothing
-written down. To place one Edge on different settings, give its `Nodes.json` entry a `connector`
-block copied from that Edge's own config; anything the block omits still comes from this node.
-See [examples/Hubs/Many-Edges](examples/Hubs/Many-Edges).
+The Hub retunes to each Edge's settings before visiting it, so one Hub can serve Edges on
+different radio settings.
 
 </details>
 
-## Transport: Connector, Link, Adapter
+<details>
+<summary><b>The config file</b>: <code>AlLoRa.json</code>, read by every node.</summary>
 
-Three names sit at this layer and they are not synonyms:
+#### The config file
 
-- **Connector** = my access to the channel
-- **Link** = the byte pipe joining two halves of a split Connector
-- **Adapter** = the far half, the one on the bridge
+Every node reads its settings from a JSON file, usually `AlLoRa.json`:
 
-> A node reaches the LoRa channel through a **Connector**. Usually that Connector owns a radio on the
-> same board. When the radio sits on a *different* board (a Raspberry Pi has no LoRa), the Connector
-> is **split in two halves**: the node holds the near half (`WiFi_connector`, `Serial_connector`) and
-> the bridge board runs the far half inside an **Adapter**, which drives the real radio Connector.
-> The halves exchange transport verbs (transmit, listen, exchange, get and set RF) over a **Link**: a
-> dumb byte pipe with no knowledge of packets, sessions, or keys. The bridge holds no protocol logic,
-> no files, and no keys; it just serves the channel on the node's orders. Adding a new medium means
-> writing one new Link, never new protocol logic.
+```json
+{
+  "name": "S",
+  "protocol_version": 3,
+  "security_mode": "open",
+  "session_id": 42,
+  "mesh_mode": false,
+  "connector": {
+    "sf": 7,
+    "freq": 868,
+    "bandwidth": 125,
+    "coding_rate": 1,
+    "tx_power": 14
+  }
+}
+```
+
+- `protocol_version`: `3` for the v3 packets. Left out, the node speaks v2, so it can talk to an
+  older deployment.
+- `security_mode`: `"open"` (the default) or `"secure"`. See [Security](#-security).
+- `chunk_size` (optional): leave it out and the node uses the largest chunk its packets can carry.
+  If you set one that does not fit, the node lowers it at startup.
+- `mesh_mode` (default `false`): see [Mesh mode](#-mesh-mode).
+- `connector`: the radio settings, read by the Connector.
+
+The [one program](examples/v3_hello/main.py) in `examples/v3_hello` also reads `node`, the radio
+`driver`, and the `datasource` and `data_sink` blocks from this file, so an Edge and a Hub differ by
+one line of JSON. Its [README](examples/v3_hello) lists them.
+
+</details>
+
+### [DataSources](AlLoRa/DataSources)
+
+<img align="right" width="200" src="readme_assets/figures/toolbox-data.svg"
+     alt="AlLoRa toolbox: data in and out (DataSource, AlLoRa_File, DataSink)">
+
+A DataSource feeds files to the node that sends them: a sensor reading becomes a file, an MQTT
+message becomes a file. Hand one to a node, and the node sends whatever it queues.
+
+<br clear="right">
 
 <details>
-<summary>The Connectors, and what a Link actually has to implement.</summary>
+<summary>The DataSources, and where their files come from.</summary>
 
-### [Connectors/](AlLoRa/Connectors)
+<p align="center">
+  <img width="700" src="readme_assets/figures/datasources.svg"
+       alt="Where a file to send comes from: the Edge takes it from its one DataSource, on disk, MQTT, serial or your own">
+</p>
 
-One contract (`transmit`, `listen`, `exchange`, plus RF config and `mac` / `rssi`), swappable, so
-AlLoRa reaches as many kinds of device as possible.
+| DataSource | Files come from |
+|---|---|
+| [`DataSource`](AlLoRa/DataSources/DataSource.py) | your own code, through a queue in memory |
+| [`Disk_DataSource`](AlLoRa/DataSources/Disk_DataSource.py) | a folder on flash, which survives a power cut |
+| [`MQTT_DataSource`](AlLoRa/DataSources/MQTT_DataSource.py) | an MQTT broker, one file per message |
+| [`Serial_DataSource`](AlLoRa/DataSources/Serial_DataSource.py) | another device on a serial cable |
+
+`Disk_DataSource` deletes a file only once the other side confirms it arrived. After a reboot a
+file may be sent twice, but it is never lost.
+
+</details>
+
+### [DataSinks](AlLoRa/DataSinks)
+
+A DataSink takes each finished file, together with a `Reception`: who sent it and how it arrived
+(RSSI, SNR, number of chunks, session). The default saves it to disk.
+
+<details>
+<summary>The DataSinks, and where their files go.</summary>
+
+<p align="center">
+  <img width="700" src="readme_assets/figures/datasinks.svg"
+       alt="Where a finished file goes: the Hub hands it to its one DataSink, on disk, MQTT, HTTP or your own">
+</p>
+
+| DataSink | Each file goes to |
+|---|---|
+| [`Disk_DataSink`](AlLoRa/DataSinks/Disk_DataSink.py) | a folder named after the sender, under `Results/` (the default) |
+| [`MQTT_DataSink`](AlLoRa/DataSinks/MQTT_DataSink.py) | an MQTT broker |
+| [`HTTP_DataSink`](AlLoRa/DataSinks/HTTP_DataSink.py) | a web service, such as a control website |
+
+To write your own, subclass `DataSink` and implement `consume(file, reception)`.
+
+An `MQTT_DataSource` on one side and an `MQTT_DataSink` on the other make an MQTT bridge over
+LoRa: the topic travels in the file name, and the message is republished on the same topic at the
+far broker.
+
+</details>
+
+### Connectors, Links and Adapters
+
+<img align="right" width="200" src="readme_assets/figures/toolbox-transport.svg"
+     alt="AlLoRa toolbox: transport (Connector, Link, Adapter)">
+
+A **Connector** gives a node access to LoRa. Many boards have a LoRa radio, while others (like a
+Raspberry Pi) do not, so the Connector is the bridge that makes AlLoRa available to as many kinds
+of device as possible. When the radio sits on another board, the Connector is split in two, and a
+**Link** joins the halves to an **Adapter** on the radio board.
+
+<br clear="right">
+
+<details>
+<summary>The Connectors, the Links and the Adapters.</summary>
+
+<p align="center">
+  <img width="800" src="readme_assets/figures/deployment.svg"
+       alt="A typical deployment: three Edges reach a Hub on a Raspberry Pi through an Adapter and a Link">
+</p>
+
+Three names sit at this layer, and they are not synonyms:
+
+- **Connector**: a node's access to the LoRa channel.
+- **Link**: the cable or network that joins the two halves of a split Connector.
+- **Adapter**: the radio board at the far end of that Link.
+
+Usually a node's Connector drives a radio on the same board, like the three Edges above. A
+Raspberry Pi has no LoRa radio, so its Connector is **split in two halves**: the Hub holds the near
+half, and a small radio board holds the far half inside an **Adapter**. The two halves talk over a
+**Link** (WiFi, a serial cable, or USB). The Adapter is not a node: it holds no files and no keys,
+and only runs the radio on the Hub's orders.
+
+#### [Connectors](AlLoRa/Connectors)
+
+Every Connector has the same methods (`transmit`, `listen`, `exchange`, plus the radio settings,
+`mac` and `rssi`), so you can swap one for another without touching the node.
 
 | Connector | For |
 |---|---|
@@ -210,127 +334,72 @@ AlLoRa reaches as many kinds of device as possible.
 | [`SX1262_connector`](AlLoRa/Connectors/SX1262_connector.py) | Boards with an SX1262 (LilyGo T3S3) |
 | [`LoPy4_connector`](AlLoRa/Connectors/LoPy4_connector.py) | Pycom LoPy4, using its native LoRa library |
 | [`E5_connector`](AlLoRa/Connectors/E5_connector.py) | A Seeed E5 module driven over AT commands |
-| [`Serial_connector`](AlLoRa/Connectors/Serial_connector.py) | The near half of a tunnel over UART or USB |
-| [`WiFi_connector`](AlLoRa/Connectors/WiFi_connector.py) | The near half of a tunnel over the network |
+| [`Serial_connector`](AlLoRa/Connectors/Serial_connector.py) | The near half, over a serial cable or USB |
+| [`WiFi_connector`](AlLoRa/Connectors/WiFi_connector.py) | The near half, over the network |
 | [`Loopback_connector`](AlLoRa/Connectors/Loopback_connector.py) | Two nodes in one process, for tests |
 
-The name is deliberate: the *channel* is the physical medium, usually the LoRa channel, while the
-Connector is the medium-agnostic **access** to it.
+#### [Links](AlLoRa/Links)
 
-### [Links/](AlLoRa/Links)
+A Link only moves bytes. It knows nothing about packets or keys.
 
-A Link is defined by its **contract**, not by a list of media: `rpc(request)` on the client half,
-`read_request()` and `write_reply(reply)` on the bridge half, plus `close()`. It moves opaque
-request and reply frames and knows nothing about verbs, the air wire, or keys.
+| Link | Media |
+|---|---|
+| [`Serial_link`](AlLoRa/Links/Serial_link.py) | UART and USB |
+| [`WiFi_link`](AlLoRa/Links/WiFi_link.py) | HTTP over the network |
+| [`Loopback_link`](AlLoRa/Links/Loopback_link.py) | tests on a computer |
 
-There are three link **shapes**, and each covers a family of media rather than a single one:
+`Serial_link` takes any port object that can write, read and say how many bytes are waiting, so
+a direct USB cable already works with it.
 
-| shape | class | media |
-|---|---|---|
-| byte stream, sentinel-framed | [`Serial_link`](AlLoRa/Links/Serial_link.py) | UART, **USB-CDC**, likely BLE over a stream profile |
-| request and reply, natively framed | [`WiFi_link`](AlLoRa/Links/WiFi_link.py) | HTTP over TCP |
-| in-process | [`Loopback_link`](AlLoRa/Links/Loopback_link.py) | CPython tests |
+#### [Adapters](AlLoRa/Adapters)
 
-`Serial_link` hardcodes no UART. It takes any `port` object exposing write, read and
-bytes-available, duck-typing pyserial's `in_waiting` or `machine.UART`'s `any()`, so a direct USB
-connection already works with no new Link. A new medium needs a new Link only when its transport does
-not fit one of the three shapes.
-
-### [Adapters/](AlLoRa/Adapters)
-
-The deployment name for the bridge device: the far half of the split Connector plus the radio
-Connector it drives. `Serial_adapter` and `WiFi_adapter` mirror the connector names on the node side,
-so the medium is in the class name at both ends and the radio stays an argument:
+The program a radio board runs to serve the far half. The medium is in the class name, and the
+radio is an argument:
 
 ```python
-# node side                             # bridge side
+# node side                             # radio board side
 connector = WiFi_connector()            adapter = WiFi_adapter(SX1262_connector())
 connector = Serial_connector()          adapter = Serial_adapter(SX127x_connector())
 ```
 
-An Adapter is a **runner**: what a bridge board's `main.py` instantiates to boot a link and serve the
-channel forever. It holds no protocol logic, no pacing, no keys, no files and no session, which is
-exactly why it is transport and not a third node type.
-
 </details>
 
-## Application boundaries: DataSource and DataSink
+### [Control](AlLoRa/Control)
+
+<img align="right" width="200" src="readme_assets/figures/toolbox-control.svg"
+     alt="AlLoRa toolbox: control (Security)">
+
+A Hub can send an Edge a command: change your radio settings, restart, or something of your own.
+Each command is signed with the deployment's **control root**, a signing key that stays with the
+operator, and the Edge acts on it only once the signature checks out.
 
 <details>
-<summary>Where a deployment plugs in: files in one side, files out the other.</summary>
+<summary>How a command travels, the command types, and how to add your own.</summary>
 
-### [DataSources/](AlLoRa/DataSources/DataSource.py)
+<p align="center">
+  <img width="800" src="readme_assets/figures/control-root.svg"
+       alt="A signed command: the control root signs, the Hub sends, the Edge verifies and its actuator acts">
+</p>
 
-A `DataSource` feeds `AlLoRa_File`s to whoever is in the source role: a sensor reading becomes a
-file, an MQTT message becomes a file. Hand one to a node and its serve loop pumps it and sends
-whatever it queues. The base class lives in the `DataSources` package, the input-boundary mirror of
-`DataSinks`; the old top-level `AlLoRa.DataSource` import path was removed with the node aliases.
+Every Edge holds the control root's public key from the day it is set up. On the Edge, two pieces
+do the work:
 
-[`MQTT_DataSource`](AlLoRa/DataSources/MQTT_DataSource.py) subscribes to a broker and turns each
-received message into a file. Paired with an [`MQTT_DataSink`](AlLoRa/DataSinks/MQTT_DataSink.py) on
-the other side of the link, the original topic travels inside the file name (the payload crosses
-untouched, byte for byte) and the message is republished on that same topic at the far broker.
-Together they are a bidirectional, topic-preserving MQTT bridge over AlLoRa, with role reversal
-carrying the downlink direction and a shared `Loop_guard` preventing a republished message from being
-bridged back again.
-
-[`Disk_DataSource`](AlLoRa/DataSources/Disk_DataSource.py) is the outbound queue that survives losing
-power, and the mirror of `Disk_DataSink`: one is the folder files land in, the other is the folder
-they wait in. The base queue lives in RAM, so a node that lost power between taking a reading and
-getting it on the air lost the reading with nothing to retry. Here the file is on flash before it is
-queued and is deleted only once the far end confirms it, so a node that reboots mid-transfer repeats
-itself rather than going quiet.
-
-It keeps two truths and reconciles them instead of trusting either. The **directory** says what is
-pending: a file in it is queued, its absence is delivery. A small **`queue.json`** beside it says in
-what order they go, holding names rather than contents. A file the index has never heard of is
-adopted onto the end, so a producer can still drop one into the folder by hand; a name with no file
-behind it is forgotten. So the worst an index can do is send a file in the wrong order, never lose
-one. The split is needed because a directory does not remember the order things were put into it:
-`listdir` returns entries however the filesystem is holding them, which is not a promise on either
-filesystem an ESP32 might be flashed with, and file timestamps are no help when board clocks come up
-unset. Writes are ordered payload first, index second, so an interruption costs order and never data.
-
-The node's serve loop borrows the head of a queue rather than taking it, and drops it only on the
-peer's acknowledgement. That is the same rule a Hub already followed when serving a delegated
-downlink, so both directions now retire a queued file on the same evidence. The trade is
-at-least-once: if the acknowledgement is what goes missing, the file is sent twice.
-
-### [DataSinks/](AlLoRa/DataSinks/DataSink.py)
-
-A `DataSink` takes ownership of each completed file: `consume(file, reception)`, where `Reception` is
-a frozen snapshot of who sent it and how it arrived (RSSI, SNR, chunk count, session and device ids).
-[`Disk_DataSink`](AlLoRa/DataSinks/Disk_DataSink.py) is the default and saves under a folder named
-after the sender. A management website is a `DataSink`. So is a cloud uploader, or a database writer.
-
-Before this seam existed, the collector hardwired a disk save, so "what to do with the data" leaked
-into the node and every deployment re-invented it.
-
-### [Control/](AlLoRa/Control)
-
-The one application boundary that pushes **inward**, back down the stack, instead of outward to a
-card or a broker. It is two objects on purpose:
-
-- [`Control_Root_DataSink`](AlLoRa/DataSinks/Control_Root_DataSink.py) is the **verify gate**, and a
-  genuine `DataSink`: it is what an Edge registers to receive downlink control artifacts. It parses
-  the envelope off the reassembled file, checks the signature against the control root and the
-  addressing against this device, and passes on only what is authentic and meant for this node. All
-  crypto, no device knowledge, so it is the same class on every node.
-- [`Control_Actuator`](AlLoRa/Control/Control_Actuator.py) is what the gate hands a **verified**
-  artifact to: `apply(control_type, payload)`, where the effect happens. Device-specific, and it owns
-  the one thing the gate cannot know, which is *when it is safe to act*. Acting immediately would
-  break the acknowledgement the node is still sending, so `Node_Control_Actuator` queues a deferred
-  action and the run loop drains it once the final OK is on the air.
-
-The control types are a closed list riding inside the signed region, and only ever appended to:
+- [`Control_Root_DataSink`](AlLoRa/DataSinks/Control_Root_DataSink.py) is the **verify gate**. It
+  checks the signature and that the command is meant for this node, and passes on only what
+  passes.
+- [`Control_Actuator`](AlLoRa/Control/Control_Actuator.py) carries out a verified command. The
+  default, `Node_Control_Actuator`, waits until the transfer has finished before it acts, so the
+  Edge can still send its final acknowledgement.
 
 | Type | Means |
 |---|---|
-| `RF_CONFIG` (1) | change the node's radio settings, with a trial |
-| `RESET` (2) | restart AlLoRa's own node: the board, or the AlLoRa program on a Pi |
-| `MODEL` (3) | an AiLoRa model, for how the node picks its own radio settings (no actuator yet) |
+| `RF_CONFIG` (1) | change the node's radio settings, with a [trial](#-rf-configuration-and-the-trial) |
+| `RESET` (2) | restart the node: the board, or the AlLoRa program on a Pi |
+| `MODEL` (3) | a new AiLoRa model for choosing the radio settings (no actuator yet) |
 | `OTA` (4) | an update of AlLoRa itself (no actuator yet) |
 | `CUSTOM` (5) | signed bytes for whatever runs beside AlLoRa, which AlLoRa never reads |
+
+The [`control/`](examples/v3_hello/control) folder of the hello world shows how to set up the keys.
 
 #### Add your own command
 
@@ -346,162 +415,174 @@ class Camera_Actuator(Node_Control_Actuator):
         self.node.queue_control_action(lambda: camera_uart.write(bytes(payload)))
 ```
 
-The gate forwards a verified artifact only when the library knows its type **and** the actuator
-lists it, so a new command needs no change to the gate. `CUSTOM` is only ever accepted signed.
-A Hub that holds the control root sends one with `hub.send_control(endpoint, CUSTOM, payload)`.
-[`examples/custom_command`](examples/custom_command) runs two such actuators on your computer, one
-for a device on an ESP32's serial wire and one for a program beside AlLoRa on a Pi.
+The Hub sends it with `hub.send_control(endpoint, CUSTOM, payload)`. An Edge only ever accepts
+`CUSTOM` signed. [`examples/custom_command`](examples/custom_command) runs two such actuators on
+your computer, one for a device on an ESP32's serial cable and one for a program beside AlLoRa on
+a Pi.
 
 </details>
 
-## Core pieces
+### Core pieces
+
+<img align="right" width="200" src="readme_assets/figures/toolbox-core.svg"
+     alt="AlLoRa toolbox: core pieces (AlLoRa_File, Packets)">
+
+The modules at the top of `AlLoRa/`, which every node uses without you choosing them.
 
 <details>
-<summary>File, Packet, Codec, Pacing.</summary>
+<summary>File, Packet, Codec and Pacing.</summary>
 
-### [File.py](AlLoRa/File.py)
+#### [File.py](AlLoRa/File.py)
 
-`AlLoRa_File` is the unit being transferred. It can be instantiated **with content**, to be chunked
-and served, or **as an empty container**, to receive chunks and be assembled once they have all
-arrived. Writes are positioned and idempotent, so a re-sent chunk costs nothing and arrival order
-does not matter.
+`AlLoRa_File` is the unit being transferred. Created **with content**, it is cut into chunks and
+served. Created **empty**, it is a container that receives the chunks and puts them back together.
+A chunk that arrives twice costs nothing, and the order of arrival does not matter.
 
-### [Packet.py](AlLoRa/Packet.py) and [Packet_v3.py](AlLoRa/Packet_v3.py)
+#### [Packet_v3.py](AlLoRa/Packet_v3.py) and [Packet.py](AlLoRa/Packet.py)
 
-The typed wire unit: what a frame *means* (kind, session, flags, payload), as opposed to how it is
-encoded. `Packet` is the v2 format, kept untouched so a v3 node can still fall back to a legacy peer.
-`Packet_v3` is the current one. See [Packet structure](#-packet-structure).
+What a frame means: its kind, session, flags and payload. `Packet_v3` is the current format, and
+`Packet` is the v2 one, kept so a v3 node can still talk to an old one. See
+[Packet structure](#-packet-structure).
 
-### [Codec.py](AlLoRa/Codec.py)
+#### [Codec.py](AlLoRa/Codec.py)
 
-The narrow seam that *speaks* a Packet on the wire: `frame`, `deframe`, plus a keyless `match_spec`
-for matching a reply to its request and `payload_overhead()` for what the framing costs. Protocol
-version and security posture both hide behind this one interface (v2, v3-open, v3-secure today), so a
-new version or a new security mode is a new implementation and never a wider interface.
+Turns a Packet into bytes on the air and back. There is one per protocol version and security mode
+(v2, v3 open, v3 secure).
 
-### [Pacing.py](AlLoRa/Pacing.py)
+#### [Pacing.py](AlLoRa/Pacing.py)
 
-The one home for adaptive timing: the receive window, the gap between requests, and the airtime
-budget. Pure policy, no I/O. The fixed inter-request sleep of early versions is gone; the controller
-finds the shortest gap the link tolerates on its own. To bound it at runtime, use
+Sets the timing: how long to wait for a reply, and how long to pause between requests. It finds
+the shortest pause the link can take by itself. To bound it, use
 `node.pacing.set_sleep_bounds(min_sleep, max_sleep)`.
 
 </details>
+
+</details>
+
+## [Examples](examples)
+
+Examples of AlLoRa with different types of devices and levels of complexity. Learn by doing:
+
+- [v3 hello world](examples/v3_hello): two T3S3 boards, one file over LoRa, open, secure or signed
+- [A Hub on a Raspberry Pi or a computer, polling many Edges](examples/Hubs/Many-Edges)
+- [Adapters](examples/Adapters), for a device with no radio of its own
+- [Your own command](examples/custom_command), signed by the Hub and run beside AlLoRa
+
+## [Firmware](firmware)
+
+The MicroPython firmware and build targets for the supported boards. Start with
+[Setting up AlLoRa in LilyGo T3S3 devices](firmware/T3S3/).
+
+## [Tests](tests)
+
+The test suite. It runs on a computer with CPython: `python3 -m pytest -q`.
 
 -----
 
 # How does it work?
 
 <p align="center">
-  <img width="700" src="readme_assets/figures/Modules-AlLoRa.png">
+  <img width="800" src="readme_assets/figures/architecture.svg"
+       alt="AlLoRa architecture: an Edge and a Hub, a DataSource and a DataSink, a Connector each, and LoRa between them">
 </p>
 
-The protocol is structured symmetrically. On the left is the Edge, holding an `AlLoRa_File` fed to it
-by a `DataSource` and reaching LoRa through a `Connector`. On the right is the Hub, holding a
-`Digital_Endpoint` per Edge, reaching LoRa through its own `Connector`, and handing each completed
-file to a `DataSink`.
+As we can see in the image above, the protocol is structured in a symmetrical way. At the left we
+have the **Edge**, a field node that runs with the sensors and produces the files. A
+**DataSource** feeds it those files, and a **Connector** gives it access to LoRa.
 
-*(The figure is from the v2 papers and still shows the old `Source` and `Requester` names. The
-[mapping table](#coming-from-v2) reads it into the current vocabulary.)*
+At the right we have the **Hub**, the node that coordinates the transfers with one or more Edges
+and stores what they send. It keeps one **Digital Endpoint** per Edge, reaches LoRa through its own
+Connector, and hands each finished file to a **DataSink**. Between them travel the **Packets**.
+
+<p align="center">
+  <img width="800" src="readme_assets/figures/architecture-two-way.svg"
+       alt="AlLoRa architecture in both directions: for a downlink the roles swap and dashed pieces are added">
+</p>
+
+Files can also travel the other way, from the Hub to an Edge: a new configuration, a command, a
+model. For this **downlink**, the Hub hands the driving to the Edge for one transfer, the Edge
+pulls the file, and then everything goes back to normal. We call the two jobs in a transfer
+**roles**: the **collector** drives and receives, the **source** holds the file and answers. By
+default the Hub is the collector and the Edge is the source. The Hub stays in command in both
+directions.
 
 ## → Communication logic
 
-The transfer runs on requests from the collector-role node to the source-role node. Depending on the
-state of the `Digital_Endpoint`, the collector sends a request and waits for a reply. If nothing
-arrives, or it arrives corrupted, the request is repeated until it lands, with a timeout where one is
-needed.
+<p align="center">
+  <img width="800" src="readme_assets/figures/exchange.svg"
+       alt="The AlLoRa exchange: establish connection, ask metadata, ask for data, final acknowledge">
+</p>
 
-<img align="right" width="400" src="readme_assets/figures/Untitled%201.png">
+The system follows a logic of requests from the collector to the source. The collector sends a
+request and waits for the reply. If nothing arrives, or it arrives corrupted, it asks again,
+until the reply lands or a timeout runs out.
 
-A `Digital_Endpoint` moves through these states:
+The Digital Endpoint moves through four states:
 
-1. **Establish connection.** Every endpoint starts here. A simple OK packet goes out and the endpoint
-   waits for an OK back. In secure mode this is also where the handshake happens.
+1. **Establish connection.** Every endpoint starts here. An OK goes out, and the endpoint waits for
+   an OK back. In secure mode the key handshake also runs here.
 
-2. **Ask metadata.** The first step of receiving a file: ask what is coming, and how much of it. The
-   endpoint creates an empty `AlLoRa_File` to act as the container. v3's typed metadata also carries
-   the sender's chunk size, so the receiver can place each arrival at the right offset instead of
-   assuming both ends chose the same size.
+2. **Ask metadata.** Ask what is coming: the file name, its size, and the chunk size the source
+   used. The endpoint creates an empty `AlLoRa_File` to hold the chunks.
 
-3. **Ask for data.** Chunks are requested until the container is full. Each arrival is written into
-   place; once every chunk is in, the file is assembled and handed to the `DataSink`.
+3. **Ask for data.** Ask for the chunks one by one until the file is complete. Then it is put back
+   together and handed to the DataSink.
 
-4. **Final acknowledge.** A closing OK keeps the two nodes in step, and the source-role node waits
-   for it before considering the file delivered and re-arming for the next one.
+4. **Final acknowledge.** A closing OK keeps both nodes in step. The source waits for it before it
+   counts the file as delivered and moves on to the next one.
 
 ## → Packet structure
 
-The Packet is the fundamental unit on the air. A LoRa frame carries at most 255 bytes at SF7 through
-SF10 (less at SF11 and SF12), so every byte of header is a byte of payload lost, and the header is
-where AlLoRa spends its optimisation effort.
+The format lives in [`Packet_v3.py`](AlLoRa/Packet_v3.py) (v2 in [`Packet.py`](AlLoRa/Packet.py)).
 
-### v3
+The Packet is the fundamental unit sent over LoRa. A LoRa frame carries at most 255 bytes (at SF7
+to SF10; less at SF11 and SF12), so every byte of header is a byte of data lost. It seems like a
+small difference, but when sending kilobytes of data, every byte counts.
 
-v3 makes the format **self-describing** and stops paying for addresses it does not need:
+<p align="center">
+  <img width="800" src="readme_assets/figures/packet-v3.svg"
+       alt="A v3 packet: a 6 or 8 byte header and up to 249 bytes of payload, open, mesh or secure">
+</p>
 
-```
- MAC-addressed  [src4][dst4][VT1][FL1][integ3]   = 13 B   (v2-compatible first contact)
- did-addressed  [did4][VT1][FL1][integ3]         =  9 B   (v3 first contact, no MAC on the wire)
- sid-addressed  [sid1][VT1][FL1][integ3]         =  6 B   (established session)
+Once a session exists, a v3 header starts with a 1-byte **session id** (`sid`) instead of two MAC
+addresses. Then come:
 
- VT     = version (4 bits, 0x3) | kind (4 bits)
- FL     = mesh | sleep | hop | debug_hops | role_token | auth | cfg_epoch | spare
- integ  = sha256(payload)[:3]
-```
+- **VT** (1 byte): the protocol version (`3`) and the kind of message.
+- **FL** (1 byte): the flags, one per bit.
+- **integ** (3 bytes): the first 3 bytes of `sha256(payload)`, to catch a corrupted frame.
+- **seq** (2 bytes, mesh only): a sequence number, so a forwarded packet is not forwarded twice.
 
-Three changes, no fattening:
+The VT and FL bytes, bit by bit:
 
-- A **version nibble** makes the format extensible, and a **typed kind nibble** replaces v2's 2-bit
-  command. v2 had three different features contending for one spare flag bit; v3 has room for role
-  swap, control commands and encryption side by side.
-- **Session-id addressing** collapses two 4-byte MACs to **one byte** once a session exists. MACs
-  survive in the handshake, where no session exists yet, and in mesh, where a relay needs the real
-  destination.
-- The integrity trailer is a **real 24-bit** `sha256(payload)` digest, rather than v2's 12-bit hex in
-  a 3-byte field.
+<p align="center">
+  <img width="700" src="readme_assets/figures/header-v3-bits.svg"
+       alt="The v3 VT byte (version and kind) and FL byte (one flag per bit)">
+</p>
 
-Mesh inserts a 2-byte sequence number before the integrity trailer, so the sid-addressed mesh header
-is 8 bytes.
+In secure mode the flags and `integ` give way to a 2-byte counter (`ctr`), which stops a recorded
+frame from being replayed, and a 4-byte authentication tag (`tag`) after the encrypted payload.
+So an encrypted v3 chunk still carries less header than an unencrypted v2 one:
 
-**Secure mode** replaces the integrity trailer with an AEAD tag and adds an anti-replay counter. It
-drops the flag byte entirely, since every flag it carried is either mesh-scoped or unbuilt and secure
-mode is point to point:
-
-```
- sid-addressed  [sid1][VT1][ctr2] + sealed(payload) + [tag4]   = 8 B overhead
-```
-
-So an authenticated, encrypted v3 chunk still costs **less header than an unencrypted v2 one**.
-
-| framing | header cost | payload at SF7 |
+| Framing | Header | Payload at SF7 |
 |---|---|---|
 | v2, point to point, compressed MACs | 12 B | 243 B |
 | v2, point to point, full MACs | 20 B | 235 B |
 | v2, mesh, compressed MACs | 14 B | 241 B |
-| **v3 open, session-addressed** | **6 B** | **249 B** |
-| v3 open, session-addressed, mesh | 8 B | 247 B |
-| **v3 secure, session-addressed** | **8 B** | **247 B** |
-
-Nodes do not have to be told any of this. `chunk_size` in `AlLoRa.json` is a request, and the node
-caps it at whatever its own codec reports as the framing cost, so a v3 node is not silently held at
-v2's ceiling and a chunk size that would not fit is corrected at startup rather than on the air.
-Leave the key out and the node uses that computed ceiling directly, which is the number a config
-file has no way of knowing.
-
-### v2
+| **v3 open** | **6 B** | **249 B** |
+| v3 open, mesh | 8 B | 247 B |
+| **v3 secure** | **8 B** | **247 B** |
 
 <details>
-<summary>The v2 header, still spoken by the v2 codec for legacy peers.</summary>
+<summary>The v2 packet, still spoken to v2 nodes.</summary>
 
-- **MAC addresses (16 bytes):** 8 bytes of source MAC then 8 of destination.
+- **MAC addresses (16 bytes):** 8 bytes of source MAC, then 8 of destination.
 - **Command and flags (1 byte):** the command type plus several flags.
 - **Checksum (3 bytes):** the last 3 bytes of a SHA-256 digest, as hex.
-- **Message ID (2 bytes, mesh only):** a random number between 0 and 65,535, used to suppress
-  duplicate retransmissions.
+- **Message ID (2 bytes, mesh only):** a random number between 0 and 65,535, to drop duplicate
+  retransmissions.
 
-Optional MAC compression packs each address from 8 bytes to 4 with binary struct packing, which is
-what the 12-byte and 14-byte rows above are. It is configurable per deployment, for backward
-compatibility with older installs.
+Optional MAC compression packs each address from 8 bytes to 4, which gives the 12-byte and
+14-byte rows in the table above.
 
 <div align="center">
 <table>
@@ -541,127 +622,179 @@ The v2 flag byte:
 </p>
 
 1. **Command (2 bits):** `00` DATA (the payload is a requested chunk), `01` OK (connection
-   acknowledged, or content correctly received), `10` CHUNK (a request for a specific chunk, whose
-   number is in the payload), `11` METADATA (file name and size, requested or provided).
+   acknowledged, or content received), `10` CHUNK (a request for one chunk, whose number is in the
+   payload), `11` METADATA (file name and size, asked for or given).
 2. **Mesh bit:** the message should be forwarded.
 3. **Hop bit:** the message was forwarded at least once.
-4. **Debug hop bit:** replace the content with path details, for research.
-5. **Change RF bit:** a change of radio configuration between nodes.
+4. **Debug hop bit:** replace the content with the path, for research.
+5. **Change RF bit:** a change of radio settings between nodes.
 
 </details>
 
 ## → Identity and addressing
 
+A node has three names: its **MAC**, its **device_id** (from its key), and a 1-byte **session
+id**. The first frame to a node uses the first or the second, and once a session exists every
+frame uses the third.
+
 <details>
-<summary>How a node is named, and how the first frame to it is addressed.</summary>
+<summary>The three names, and the header each one uses.</summary>
 
-- **MAC.** A physical address. In v2 it was also the identity. In v3 it survives as a human label,
-  as the folder and topic key, and as the bootstrap address for a node that might still be v2.
-- **device_id.** An Edge's v3 identity: the fingerprint of its long-term public key,
-  `SHA256(pubkey)`. Registered on the Hub the way a MAC was, but crypto-bound and therefore
-  unforgeable. It is stable across reboots as long as `identity_file` is set.
-- **session id (sid).** The 1-byte logical address of one Edge and Hub session, at offset 0 of every
-  established-session frame. Identity-derived by default (the first byte of the `device_id` in secure
-  mode, the device-specific low byte of the short MAC in open mode), overridable with an explicit
-  `session_id` in the config, and reassigned by the Hub on the rare 1-byte clash. It stays one byte
-  even when the link is tunnelled.
+<p align="center">
+  <img width="800" src="readme_assets/figures/header-v3.svg"
+       alt="The v3 header layouts: 13, 9 and 6 bytes open, 8 bytes of overhead secure">
+</p>
 
-**How the first frame is addressed follows how the node was registered, never blind probing.**
-Registered by MAC means v2-compatible framing, which is what makes interop and beacon upgrade
-possible. Registered by `device_id` means v3 framing, with no MAC on the wire at all.
+- **MAC:** the board's physical address. In v3 it is a label, a folder name, and the address for a
+  first contact with a node that might still be v2 (the 13-byte header).
+- **device_id:** an Edge's v3 identity, the fingerprint of its public key (`SHA256(pubkey)`). It
+  cannot be faked, and it stays the same across reboots as long as `identity_file` is set. A first
+  contact by `device_id` uses the 9-byte header, with no MAC on the air.
+- **session id:** the 1-byte address of one Edge and Hub session, used once the session exists (the
+  6-byte header). It comes from the node's identity by default, and you can set it with
+  `session_id` in the config.
+
+How the first frame is addressed follows how the Edge was registered in `Nodes.json`: by MAC, the
+Hub speaks a frame a v2 node understands; by `device_id`, it speaks v3.
 
 </details>
 
 ## → Security
 
+AlLoRa has two modes, picked with `security_mode` in the config: **open** (the default, no
+encryption) and **secure** (every frame encrypted and authenticated).
+
 <details>
-<summary>Two postures, and what the secure one actually protects.</summary>
+<summary>How the secure mode works, how to set it up, and what it does not protect.</summary>
 
-`security_mode` in `AlLoRa.json` selects the posture:
+- **`open`** (the default): no encryption. The integrity check catches corrupted frames, not an
+  attacker.
+- **`secure`**: the two nodes agree on a session key with an **ECDH handshake on P-256**. Then
+  every frame is encrypted with **AES-128-CTR**, authenticated with a **4-byte HMAC-SHA256 tag**,
+  and numbered. A frame whose tag does not match is dropped unread, and so is a replayed one.
 
-- **`open`** (the default): no crypto. The integrity trailer catches corruption, not an attacker.
-- **`secure`**: an ephemeral-static **ECDH handshake on P-256** establishes a session, then every
-  data frame is sealed with **AES-128-CTR and authenticated with a truncated HMAC-SHA256 tag**,
-  encrypt-then-MAC, and carries a counter that a sliding replay window checks on arrival.
+<p align="center">
+  <img width="800" src="readme_assets/figures/handshake.svg"
+       alt="The secure handshake: the Edge sends a one-time key, the Hub its own, and every frame after is sealed">
+</p>
 
-The asymmetric cost is paid once per session, never per frame. The curve math is dependency-free
-pure Python so it runs on the firmware with no native crypto module; the per-frame AES is
-platform-detected instead, so it uses the ESP32's hardware AES on-device and stays well under the
-receive-to-reply turnaround the adaptive pacing depends on. Where no native AES exists, `secure`
-degrades to `open` rather than pretending.
+**The handshake.** The first time a Hub visits an Edge, it asks for a key. The Edge answers with a
+one-time public key, the Hub answers with a key of its own, made fresh each time the Hub starts,
+and both work out the same session key from the two. The handshake runs once per session, never
+per frame. The curve math is pure Python, so it runs on any board. The per-frame AES on a board
+needs the AlLoRa firmware, which uses the ESP32's hardware AES; on a computer it comes from the
+`cryptography` package. A node set to `secure` with no AES available stops at startup with an error, rather than
+running unprotected without telling you. For tests only, `allow_insecure_fallback` lets it run
+`open` instead.
 
-The security perimeter is the **Edge to Hub LoRa link**. Whatever happens downstream of the Hub, on
-its way to a cloud or a database, is secured separately by that deployment.
+**Setting it up.** Set `"security_mode": "secure"` on both nodes, and give the Edge an
+`identity_file`:
 
-The **control root** is the other anchor, and it is separate on purpose. It is a deployment-level
-ECDSA P-256 signing root whose public key every node holds from provisioning. An Edge verifies that
-any downlink control artifact, a config change, a reset, an OTA or a returned model, chains to the
-control root before acting on it. Because it is per *deployment* rather than per Hub, Hubs stay
-swappable without re-touching every Edge.
+```json
+  "security_mode": "secure",
+  "identity_file": "identity.key",
+```
 
-Role reversal moves the drive, never the trust anchor: a temporarily driving Edge is still
-authenticating *to* its Hub.
+On its first boot the Edge creates its key in that file. Its `device_id` is `node.device_id`, and
+the example program prints it at every boot. Register that `device_id` in the Hub's `Nodes.json`, in place of the MAC (see
+[Identity and addressing](#-identity-and-addressing)). Keep the key file: a full reflash that
+erases it gives the Edge a new key and a new `device_id`, and the Hub keeps polling the old one
+and hears nothing, with no error on either side. Without `identity_file`, the Edge makes a new key
+at every boot, which is only useful for tests.
+[`examples/v3_hello/secure`](examples/v3_hello/secure) walks through it on two boards.
+
+**After a reboot.** Sessions live in RAM, so a rebooted Edge has none. The Hub notices once the
+Edge has been silent for `session_recovery_after` visits (3 by default): it polls again, and if
+that goes unanswered too, it drops the session and handshakes from scratch on the next visit. A
+few visits of data are lost; nothing has to be done by hand.
+
+**Commands.** With a [control root](#control) provisioned, the Hub signs every command and the
+Edge refuses any that is unsigned. Create it once, on your laptop, with
+[`provision_control_root.py`](examples/v3_hello/control/provision_control_root.py): it writes the
+signing half for the Hub and the checking half for the Edges. Both nodes then name it with
+`"control_root_file": "control_root.key"`. Signed commands need `secure` on both nodes, because a
+command names its Edge by `device_id`. Without a control root, the only command a Hub can send is
+a change of radio settings, unsigned, and any nearby radio can send one too. The [`control/`](examples/v3_hello/control) folder has the steps.
+
+**What `secure` does not protect.** It is built for environmental monitoring, where the data is
+not secret but a forged command would be serious. Someone with a LoRa radio within range can:
+
+- read the data an Edge sends, because the handshake does not check who is on the other end;
+- pose as a registered Edge and send the Hub false data, knowing only its `device_id`;
+- drain an Edge's battery by polling it;
+- make an Edge believe one transfer was delivered when the Hub never got it;
+- pull an Edge onto a session of their own, until the Hub's recovery brings it back.
+
+They cannot send a command the Edge will act on, if a control root is provisioned. A third mode,
+`strict`, where the Edge also checks the Hub's identity, is designed but not built: a node set to
+it stops at startup.
+
+`secure` protects the LoRa link between Edge and Hub. What happens after the Hub, on the way to a
+cloud or a database, is up to the deployment.
 
 </details>
 
 ## → RF configuration and the trial
 
+The Hub can move an Edge to new radio settings. The Edge tries them first, and keeps them only
+once a full chunk has crossed; if not, it goes back to the settings it had.
+
 <details>
-<summary>Why a radio reconfiguration is never committed on arrival.</summary>
+<summary>Why, and how the Hub follows the Edge.</summary>
 
-Changing spreading factor, bandwidth, frequency, coding rate or TX power has to happen over the very
-link the change might break. A verified `RF_CONFIG` is therefore never committed on arrival. The node
-switches, runs a bounded **trial** on the new config, and then either commits it or falls back to the
-**last-known-good** config, which is the one that was in force before and is therefore known
-reachable. Committing a trial is what promotes the new config to last-known-good.
+<p align="center">
+  <img width="800" src="readme_assets/figures/rf-trial.svg"
+       alt="The RF trial: the Edge tries the new settings and keeps them only once a full chunk has crossed">
+</p>
 
-The verdict is a **completed full-payload exchange**, not just any frame: a short frame is not proof
-that a full chunk will land. Short frames put the trial in **hold-pending**, extending the window
-without deciding it. Silence for the whole window restores.
+New radio settings (spreading factor, bandwidth, frequency, coding rate, TX power) have to be sent
+over the very link they might break. So the Edge does not keep them on arrival: it switches, tries
+them for a while, and keeps them only once a full chunk has crossed. If the trial window passes in
+silence, it goes back to the settings it had before, which are known to work.
 
-The window is time-based, not a cycle count, because time on air swings roughly thirty-fold between
-SF7 and SF12. The signed payload carries `trial` in seconds; when it is absent, both ends derive a
-default scaled to time on air.
-
-The two ends are deliberately asymmetric. The Edge self-restores on silence. The Hub keeps the old
-config beside the new one for that endpoint and **probes both**, alternating on its normal poll loop,
-so nothing new blocks the radio.
+While the trial runs, the Hub listens on both the old and the new settings, one per visit, so it
+finds the Edge whichever way the trial went. The window is in seconds, and its default grows with
+the time on air, since a frame at SF12 takes about thirty times longer than at SF7.
 
 </details>
 
 ## → Mesh mode
 
-With mesh mode active, communication works exactly as described above, except that when a request
-goes unanswered a set number of times the `Digital_Endpoint` enters **retransmission mode**: it sets
-the mesh bit, asking other nodes in range to forward the message and extend the system's reach.
+> Mesh mode was used in the field with v2. It has not been tested on v3 yet.
 
-A node that receives a packet not addressed to it normally discards it. With the mesh bit set, it
-forwards it instead, after sleeping a random 0.1 to 1 second to reduce collisions when several nodes
-are active and in range of each other. Each forward sets the hop bit, so the path is visible. When
-the destination sees that a message arrived in retransmission mode, it replies with the mesh bit set
-too, on the assumption that the reply needs the same path back, and it does *not* sleep first: the
-node being asked for something always has priority.
+If the mesh mode is activated, the communication works exactly as described above, except that
+when a request goes unanswered a set number of times, the Digital Endpoint enters
+**retransmission mode**: it sets the mesh bit, asking the other nodes in range to forward the
+message and extend the reach of the system.
 
-If a reply arrives with the hop bit clear, it went straight there and retransmission is not needed,
-so the collector clears retransmission mode for that endpoint.
+<details>
+<summary>How the forwarding works, and the debug hops tool.</summary>
 
-To stop duplicates from collapsing the system, each new packet gets a random id, which every node
-keeps in a fixed-size list and checks whenever a mesh-bit packet arrives. A second fixed-size list
-holds forwarded ids, so nothing is forwarded twice.
+A node that receives a packet that is not for itself normally drops it. With the mesh bit set, it
+forwards it instead, after sleeping a random 0.1 to 1 second, to reduce collisions when several
+nodes are active and in range of each other. Each forward sets the hop bit, so we can see the
+packet went through other nodes. When the destination sees that a message came in retransmission
+mode, it replies with the mesh bit set too, since the reply will probably need the same path back,
+and it does *not* sleep first: the node being asked always has priority.
 
-**Secure mode is point to point only.** The sealed header has no sequence number, so a secure node
-that believed it was forwarding would in fact be framing point to point and fail in a way that looks
-like a radio fault. The library refuses that combination at startup, where a misconfiguration
-belongs, rather than at the first exchange. (This is about AlLoRa's own flooding mesh. Riding a
-Meshtastic mesh keeps the frame point to point, with the routing in the Meshtastic frame, so it needs
-nothing here.)
+If a reply arrives with the hop bit off, it came straight from the Edge, so the Hub turns
+retransmission mode off for that Edge.
 
-## → Debug hops
+To avoid duplicates flooding the system, each new packet gets an id, which every node keeps in a
+fixed-size list and checks whenever a mesh packet arrives. A second list holds the ids already
+forwarded, so nothing is forwarded twice.
 
-Debug hops is an option on a collector-role node, and a useful tool for checking the path of a packet
-in mesh mode. It overrides the message content and uses the payload to record each node the packet
-passes through. The information can be retrieved from the collector's storage afterwards and used to
-decide how to distribute nodes across an area.
+**Secure mode is point to point only.** The library refuses `secure` together with `mesh_mode`.
+
+### Debug hops
+
+> Debug hops works on v2 links only (`protocol_version` 2). A v3 packet has no room to record
+> the path yet.
+
+Debug hops is an option on the Hub (`debug_hops=True`), useful to check the path of a packet in mesh
+mode. It replaces the content of the message and uses the payload to record each node the packet
+goes through. The Hub saves this, and you can use it to decide where to place the nodes in the
+area to cover.
 
 The output is a `log_rssi.txt` that looks like this:
 
@@ -673,40 +806,33 @@ The output is a `log_rssi.txt` that looks like this:
 2022-06-17_17:11:56: ID=10063 -> [['C', -99, 0.1], ['B', -95, 0], ['C', -94, 0.1], ['G', -103, 0]]
 ```
 
-Each line is a reception time, the message id, and the list of hops. Each hop records the node's
-name, the RSSI of the last packet it received over LoRa, and the random time it waited before
-forwarding. Some of those waits are 0, which is not chance: those nodes were the destination of the
-request, and as noted above they have priority.
+Each line shows the time of reception, the id of the message, and the list of hops. Each hop
+records the node's name, the RSSI of the last packet it received, and the random time it waited
+before forwarding. In some hops the wait is 0. This is not chance: those nodes were the
+destination of the request, and as we said before, they have priority.
+
+</details>
 
 -----
 
-# Repository layout
+# Coming from v2
 
-```
-AlLoRa/          the library
-examples/        runnable examples, by node type and by board
-firmware/        MicroPython firmware and build targets for the supported boards
-tests/           the test suite (CPython)
-```
+<details>
+<summary>The v2 names, and what they are called now.</summary>
 
-Inside `AlLoRa/`, three conventions are worth knowing before you go looking for something:
+| v2 name | v3 name | Note |
+|---|---|---|
+| `Source` node | **`Edge`** | |
+| `Requester` | **`Hub`** with one Edge | |
+| `Gateway` | **`Hub`** with many Edges | same class |
+| `Gateway.check_digital_endpoints()` | **`Hub.run()`** | |
+| `CTP_File` | **`AlLoRa_File`** | |
+| `Interface` | **`Adapter`** | transport, not a node |
+| `DataSource` | `DataSource` | now under `AlLoRa.DataSources` |
 
-**1. Core at the root, interchangeable families in folders.** The loose top-level modules are the
-core pieces every node uses: `Packet`, `Packet_v3`, `Codec`, `Pacing`, `File`, `Digital_Endpoint`,
-`Status`, `negotiation`, `tunnel_codec`. A folder means a family of **alternatives** behind one shared
-contract or base, from which a deployment picks: `Nodes/`, `Connectors/`, `Links/`, `Adapters/`,
-`DataSources/`, `DataSinks/`.
+A year-old `main.py` needs two edits: `Source` becomes `Edge`, and both `Requester` and `Gateway`
+become `Hub`. Pass the constructor arguments **by keyword**, since the order changed, and drop
+`NEXT_ACTION_TIME_SLEEP`: the v3 nodes refuse it (the timing adapts by itself now, see
+[Pacing](#core-pieces)). To run old code unchanged, use the `v2.0.0` tag.
 
-**2. Some folders are planes, not families.** `Security/` and `Control/` are folders whose members are
-*not* interchangeable with each other: they group a domain rather than a set of alternatives. You do
-not choose one file from `Security/`, you use the whole thing. The test is whether the members
-substitute for one another.
-
-**3. A lowercase filename means the module defines no class.** `negotiation.py`, `tunnel_codec.py`,
-`mqtt_naming.py`, `control_types.py` and everything in `utils/` are functions and constants. A
-capitalized filename is the name of the class the module provides.
-
-One naming rule falls out of this: a `_DataSink` suffix is a **plug type**, not
-decoration. It promises `consume(file, reception)` and a node's sink slot. `Control_Root_DataSink`
-carries the suffix because it really is one; `Control_Actuator` does not, because it takes
-`apply(control_type, payload)` and plugs into the gate instead.
+</details>
