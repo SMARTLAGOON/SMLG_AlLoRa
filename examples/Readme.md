@@ -1,115 +1,176 @@
-# AlLoRa Examples
+# AlLoRa examples
 ---
 By [Benjamín Arratia](https://www.barratia.com)
 
-This folder contains examples of how to use AlLoRa in different devices and configurations. There are two kinds of node, [**Edges**](Edges) and [**Hubs**](Hubs), plus the [**Adapters**](Adapters) that bridge a node to a radio it does not hold itself.
+This folder holds examples of AlLoRa on different boards and in different setups, from two boards
+on a desk to a Hub on a Raspberry Pi polling many Edges. The best way to learn AlLoRa is to run it,
+so we start with the smallest one: one file, from one board to another, over LoRa.
 
-A basic AlLoRa setup consists of at least two devices: an Edge and a Hub. The Edge is the device that sits out with the data we are interested in accessing at a long distance (e.g sensor data), and it serves that data. 
-The Hub is the device that polls the Edges and pulls their data. One Hub can hold a single Edge (the 1:1 case) or many of them; it is the same class either way, so the old split between a "Requester" and a "Gateway" is now only a matter of how many endpoints you register.
+## Your first transfer
 
-The Adapters are not nodes. They are bridges that carry the LoRa connection over another technology (WiFi, UART, etc), so that a device with no radio of its own, like a computer, can still reach the channel.
+**Objective:** send a small file from an **Edge** to a **Hub** over LoRa, and find it saved on the
+Hub. It takes two boards and about fifteen minutes.
 
-A practical setup would be to have a LoRa-enabled ESP32 (LilyGo T3S3, Pycom LoPy4, etc) connected to a Sensor (a DataSource), acting as an Edge, another ESP32 like the first one acting as a Serial Adapter, connected to a Raspberry Pi acting as a Hub. The Raspberry Pi will run the Hub part of the code and send commands to the LoRa module through the Serial Adapter, which will send the AlLoRa commands to the Edge. The data from the Sensor will end up in a folder named after the Edge in the Raspberry Pi, after being successfully polled by the Hub.
+We use the [`v3_hello`](v3_hello) example in its simplest form, [`open/`](v3_hello/open): no keys
+and no identities, just the transfer. Every command below runs from the `v3_hello` folder.
 
-Let's try to run a simple example to understand how AlLoRa works.
+### Requirements
 
-## Example: Two T3S3 devices communicating:
+#### Hardware
 
+- Two [LilyGo T3S3](https://lilygo.cc/products/t3s3-v1-0?variant=42586879688885) boards, each with
+  its antenna attached. We tested in Europe, on 868 MHz. In the US, use the 915 MHz version and set
+  `"freq": 915` in both `AlLoRa.json` files.
+- Two USB cables.
 
-### Requirements:
+The T3S3 comes with one of two radios, the SX1276 or the SX1262, and AlLoRa runs on both. This
+guide uses the SX1276. With an SX1262, download the `sx1262` firmware below instead, and in both
+`AlLoRa.json` files set `"driver": "sx1262"` and add the radio's pins to the `connector` block, as
+shown in [the SX1262 firmware notes](../firmware/targets/t3s3-sx1262/README.md).
 
-#### Hardware:
-- Two [LilyGo T3S3 devices](https://lilygo.cc/products/t3s3-v1-0?variant=42586879688885). The examples were tested in Europe, so we used the SX1276 868MHz version. If you are in the US, you should use the 915MHz version.
+#### Tools
 
-#### Tools:
+```bash
+pip3 install esptool mpremote
+```
 
-- Esptool installed on your machine, available in [this repository](https://github.com/espressif/esptool)
-- Adafruit MicroPython tool: [Ampy](https://learn.adafruit.com/micropython-basics-load-files-and-run-code/install-ampy)
+`esptool` writes the firmware, and `mpremote` copies files onto the board and opens its console.
 
-#### Firmware:
+#### Firmware
 
-- Download micropython firmware available in this [folder](https://github.com/SMARTLAGOON/AlLoRa/tree/Dev/firmware/T3S3) and follow the instructions on how to flash it.
-    
+AlLoRa runs on MicroPython, with the library built into the firmware, so there is nothing to copy
+for the library itself. Download `AlLoRa-t3s3-sx127x-firmware.bin` (or
+`AlLoRa-t3s3-sx1262-firmware.bin`) from the latest release on the
+[Releases page](https://github.com/SMARTLAGOON/SMLG_AlLoRa/releases).
 
-#### Software:
+### Steps
 
-- For running examples, download the examples for the T3S3 [**Edge**](Edges/T3S3) and [**Hub**](Hubs/One-Edge/T3S3).
-- The rest is already in the [custom firmware](https://github.com/SMARTLAGOON/AlLoRa/tree/Dev/firmware).
-
-
-### Running the example:
-
-1.	Flash the custom firmware in both devices following the instructions in the [firmware folder](https://github.com/SMARTLAGOON/AlLoRa/tree/Dev/firmware/T3S3). 
-
-2.	We will start configuring the Edge first. Use [**ampy**](#installing-and-using-ampy) to “put” the files into the selected device. Upload the corresponding main and LoRa.json files like this:
-
-    ```bash
-    ampy --port /dev/tty.usbmodem1234561 put main.py 
-    ampy --port /dev/tty.usbmodem1234561 put LoRa.json #Configuration file for AlLoRa
-    ```
-3. In order to run the example, you need to register the mac address of the Edge in the Hub. You can find the mac address of the Edge when it boots up. It will be printed in the console. Use [**REPL**](#repl) to interact with MicroPython directly on the board. In a mac computer you can use:
+1. **Find each board's port.** Plug in one board and run:
 
     ```bash
-    screen /dev/tty.usbmodem1234561 115200
+    mpremote devs
     ```
 
-4. Once you access the REPL, you may need to reset the device to see the mac address. You can do this by pressing **Ctrl + D**. The mac address will be printed in the console. Copy it and paste it in the Hub's main.py file in line 17 of the provided example (node_mac_address = "XXXXXXXX"). 
-5. Use ampy to upload the Hub's main.py and LoRa.json files to the Hub device.
-6. With both devices configured, power them up and open two different terminals. Use the following commands to access the REPL of each device, replacing the port with the one corresponding to your device:
+    On a Mac the port looks like `/dev/cu.usbmodem1101`, on Linux like `/dev/ttyACM0`. Below,
+    `EDGE_PORT` and `HUB_PORT` stand for the two ports you find.
+
+2. **Flash the firmware on both boards.** Hold the **BOOT** button while you plug the board in,
+   then release it. Then:
 
     ```bash
-    screen /dev/tty.usbmodem1234561 115200
+    esptool.py --chip esp32s3 --port EDGE_PORT erase_flash
+    esptool.py --chip esp32s3 --port EDGE_PORT write_flash -z 0x0 AlLoRa-t3s3-sx127x-firmware.bin
     ```
-7. For a clean start, reset both devices by pressing **Ctrl + D** in the REPL.
-8. The devices should start communicating and executing the example code, where the Edge generates increasingly bigger files and the Hub polls it and saves the files in the Hub's memory. You can check the files in the Hub's memory using ampy or the REPL.
 
+    Unplug the board, plug it back in without the button, and do the same for the other board. The
+    port can change after flashing, so run `mpremote devs` again.
 
+3. **Load the Edge.** The Edge gets the program, its config, and a file to send in its `Outbox`
+   folder:
+
+    ```bash
+    echo "Hello from the Edge" > hello.txt
+    mpremote connect EDGE_PORT fs cp main.py :main.py
+    mpremote connect EDGE_PORT fs cp open/edge/AlLoRa.json :AlLoRa.json
+    mpremote connect EDGE_PORT fs mkdir Outbox
+    mpremote connect EDGE_PORT fs cp hello.txt :Outbox/hello.txt
+    ```
+
+4. **Load the Hub.** The Hub gets the same program, its own config, and `Nodes.json`, the list of
+   Edges it polls:
+
+    ```bash
+    mpremote connect HUB_PORT fs cp main.py :main.py
+    mpremote connect HUB_PORT fs cp open/hub/AlLoRa.json :AlLoRa.json
+    mpremote connect HUB_PORT fs cp open/hub/Nodes.json :Nodes.json
+    ```
+
+    Both boards run the same `main.py`. The `"node"` line in `AlLoRa.json` makes one an Edge and the
+    other a Hub.
+
+5. **Start both.** Open a console on each board, in two terminals:
+
+    ```bash
+    mpremote connect EDGE_PORT repl
+    ```
+
+    Press **Ctrl-D** in each to restart the board, Edge first. To leave the console, press
+    **Ctrl-]**.
+
+### What you should see
+
+Among other lines, the Edge prints its settings and waits for the Hub:
+
+```
+EDGE ready | MAC: ... | mode: open | session: 42
+EDGE serving from: Outbox
+```
+
+The Hub prints the Edge it polls, then starts the exchange:
+
+```
+HUB ready | MAC: ... | mode: open | endpoints: 1
+  polling src as 9eeff0dc for 30 s, then resting 60 s
+```
+
+Both have `"debug": true` in their config, so from here they print each step of the exchange. When
+the file is complete, the Hub saves it. Leave the console and look for it:
+
+```bash
+mpremote connect HUB_PORT fs ls :Results/9eeff0dc
+mpremote connect HUB_PORT fs cat :Results/9eeff0dc/hello.txt
+```
+
+`9eeff0dc` is the label the Hub gives this Edge, from the `mac_address` in `Nodes.json`. The file is
+also gone from the Edge's `Outbox`: the Edge deletes a file only once the Hub has confirmed it.
+
+That is a complete AlLoRa transfer. To send another file, copy it into the Edge's `Outbox`.
+
+### If nothing arrives
+
+- **A board prints `STOPPED:` and a reason.** Its config has a mistake, and the reason says which.
+- **The Hub polls but never hears the Edge.** Check that both `AlLoRa.json` files have the same
+  `freq`, `sf`, `bandwidth` and `coding_rate`, that both say `"session_id": 42`, and that both
+  antennas are on.
+- **You want to see every frame.** Set `"debug": true` inside the `connector` block. It is very
+  verbose.
+
+## Where to go next
+
+| Example | What it shows |
+|---|---|
+| [`v3_hello/secure`](v3_hello/secure) | The same transfer, encrypted. Each node gets its own identity. |
+| [`v3_hello/control`](v3_hello/control) | Signed commands: the Hub changes the Edge's radio settings over the air. |
+| [`v3_hello/pro`](v3_hello/pro) | The board's screen, SD card and LED, switched on from the config. |
+| [`v3_hello/serial`](v3_hello/serial) | An Edge whose files come from another device on a cable. |
+| [`Hubs/Many-Edges`](Hubs/Many-Edges) | A Hub on a Raspberry Pi or a computer, polling many Edges. |
+| [`Adapters`](Adapters) | A radio board for a device with no radio of its own. |
+| [`custom_command`](custom_command) | Your own command, signed by the Hub and run beside AlLoRa. |
+
+The [`v3_hello` README](v3_hello/README.md) explains the config file in full: where files come
+from, where they go, and what has to match on both boards.
 
 ---
-#### Installing and Using ampy
+#### Using mpremote
 <details>
-<summary>You can interact with the file system of the board using Adafruit’s ampy tool.</summary>
+<summary>The few mpremote commands these examples use.</summary>
 
-First, ensure it is installed:
+List the files on the board:
 ```bash
-pip3 install adafruit-ampy
+mpremote connect PORT fs ls
 ```
-Then, list the files on the board:
+Copy a file onto the board, or back from it:
 ```bash
-ampy --port /dev/tty.usbmodem1234561 ls
+mpremote connect PORT fs cp main.py :main.py
+mpremote connect PORT fs cp :Results/9eeff0dc/hello.txt hello.txt
 ```
-Retrieve a file from the board:
+Open the board's console (the MicroPython REPL). **Ctrl-D** restarts the board, **Ctrl-C** stops
+the running program, and **Ctrl-]** leaves the console:
 ```bash
-ampy --port /dev/tty.usbmodem1234561 get boot.py > boot.py
+mpremote connect PORT repl
 ```
-This command downloads boot.py from the board and saves it to your current directory.
 
-More info about how ampy works here: [MicroPython Basics: Load Files & Run Code](https://learn.adafruit.com/micropython-basics-load-files-and-run-code/file-operations)
+We use `mpremote` rather than `ampy`: on a board with native USB, like the T3S3, `ampy` hangs
+instead of copying. More in the
+[mpremote documentation](https://docs.micropython.org/en/latest/reference/mpremote.html).
 </details>
-
----
-#### Accessing the REPL
-<details>
-  <summary>Access the REPL (Read-Eval-Print Loop) to interact with MicroPython directly on the board.</summary>
-
-#### For macOS:
-
-Using screen:
-```bash
-screen /dev/cu.usbmodem1234561 115200
-```
-To exit screen, press Ctrl-A followed by Ctrl-\.
-
-### For Linux:
-
-Using picocom (or similar):
-```bash
-picocom /dev/ttyUSB0 -b 115200
-```
-Make sure to replace /dev/ttyUSB0 with the actual port number found earlier. To exit picocom, press Ctrl-A followed by Ctrl-X.
-
-Use Ctrl-D to soft reboot the board and interact with Micropython
-
-With screen/picocom running, you should see the MicroPython prompt >>>. You can now type in Python commands and interact with the MicroPython environment on your board.
-</details>
-

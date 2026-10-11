@@ -20,9 +20,11 @@ readable on any two boards.
 
 ## What you should see
 
-The Edge prints its MAC and session on boot, then `file set:` and `file delivered` on a loop. The
-Hub prints `listening for the edge...`, then the file contents, and saves each one under
-`Results/<label>/`.
+The Edge prints `EDGE ready`, its MAC, `mode: open` and `session: 42`, then the folder it serves
+from. The Hub prints `HUB ready` and one `polling` line for the Edge in `Nodes.json`. With
+`"debug": true` both then print each step of the exchange, and the Hub saves each finished file
+under `Results/<label>/`, here `Results/9eeff0dc/`. The Edge deletes a file from `Outbox` once the
+Hub has confirmed it.
 
 ## Control commands in open mode
 

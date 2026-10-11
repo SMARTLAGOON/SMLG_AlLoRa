@@ -391,6 +391,16 @@ do the work:
   default, `Node_Control_Actuator`, waits until the transfer has finished before it acts, so the
   Edge can still send its final acknowledgement.
 
+<p align="center">
+  <img width="800" src="readme_assets/figures/control-artifact.svg"
+       alt="A signed command: 102 fixed bytes around its payload, checked field by field by the Edge">
+</p>
+
+A command is a small file, and the Hub sends it like any other. Its first 38 bytes say which format
+it uses, what kind of command it is, which Edge it is for, and its number. Then come the command's
+own data and a 64-byte signature over everything before it. The Edge keeps the highest number it has
+accepted, so a recorded command cannot be played back later.
+
 | Type | Means |
 |---|---|
 | `RF_CONFIG` (1) | change the node's radio settings, with a [trial](#-rf-configuration-and-the-trial) |
@@ -530,6 +540,16 @@ The Digital Endpoint moves through four states:
 
 4. **Final acknowledge.** A closing OK keeps both nodes in step. The source waits for it before it
    counts the file as delivered and moves on to the next one.
+
+<p align="center">
+  <img width="800" src="readme_assets/figures/downlink.svg"
+       alt="A downlink: the Hub grants the Edge the driving, the Edge pulls the file, and the Hub's next poll takes it back">
+</p>
+
+A downlink swaps the roles. Between two files, the Hub sends the Edge a **GRANT** in place of the
+first step, and from then on the Edge asks and the Hub answers. Once the Edge's final OK lands, the
+Hub polls again and everything is back to normal. If the Edge goes quiet halfway, the Hub stops
+waiting, polls anyway, and tries the downlink again later.
 
 ## → Packet structure
 
