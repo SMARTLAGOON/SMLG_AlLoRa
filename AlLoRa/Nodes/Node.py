@@ -246,6 +246,7 @@ class Node:
         # Hub-authority tie-break bookkeeping: the kind of the last frame that landed in the
         # reply slot, and how often this node yielded a delegated drive to the authority.
         self._last_reply_kind = None
+        self._last_reply_empty = False
         self.yield_count = 0
 
         # A control action deferred by a downlink sink (an RF-config switch or a reset). It must
@@ -1188,8 +1189,13 @@ class Node:
         # reply slot is the authority polling again: it reclaimed, so the delegation is
         # over. The Edge yields instantly and goes home; the abandoned pull simply re-runs
         # on a later GRANT with a fresh buffer. A permanent authority never yields.
-        if (self.home_role == "source" and self.current_role == "collector"
-                and self._last_reply_kind == Packet_v3.OK):
+        #
+        # An empty METADATA is the same poll from a Hub that has already met this endpoint,
+        # which is the usual case. It cannot be the Hub serving, because a METADATA that
+        # answers a request always carries the chunk size, length and name.
+        polled = (self._last_reply_kind == Packet_v3.OK
+                  or (self._last_reply_kind == Packet_v3.METADATA and self._last_reply_empty))
+        if (self.home_role == "source" and self.current_role == "collector" and polled):
             self.yield_count += 1
             if self.debug:
                 print("Yielding the collector role: the authority is polling again")
@@ -1509,8 +1515,10 @@ class Node:
         # drive uses it to hear the authority's contending poll and yield.
         if response_packet is None or isinstance(response_packet, dict):
             self._last_reply_kind = None
+            self._last_reply_empty = False
         else:
             self._last_reply_kind = response_packet.get_command()
+            self._last_reply_empty = not response_packet.get_payload()
 
         if self.status.subscribers:
             self.status['PSizeS'] = packet_size_sent

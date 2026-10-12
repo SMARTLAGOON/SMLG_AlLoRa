@@ -491,6 +491,35 @@ def test_the_closing_poll_never_retires_a_file_the_hub_failed_to_store(tmp_path)
         "the file the Hub failed to store was retired by the visit's closing poll"
 
 
+def test_edge_yields_to_the_hubs_metadata_poll_too(tmp_path):
+    # The same overlap after first contact, which is the normal case: a Hub that has met its
+    # endpoint polls it with METADATA, not OK. The request the Hub sends is an empty METADATA,
+    # which a Hub serving a file never sends (its METADATA always carries the chunk size,
+    # length and name), so it is the authority polling just as surely as an OK is.
+    from AlLoRa.Packet_v3 import Packet_v3
+
+    edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
+    edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn)
+    edge.downlink_stall_timeout = 30         # long enough that only a yield ends it in time
+
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 25},
+                              name="edge-serve", daemon=True)
+    server.start()
+    hub.listen_to_endpoint(endpoint, listening_time=2, save_file=True)     # first contact
+    assert endpoint.state == Digital_Endpoint.REQUEST_DATA_STATE
+
+    grant = Packet_v3(addressing="sid")
+    grant.set_session(SESSION_ID)
+    grant.set_grant(9)
+    hub_conn.transmit(grant.get_content())
+    hub.listen_to_endpoint(endpoint, listening_time=8, save_file=True)
+
+    assert edge.yield_count >= 1, "the Edge kept driving through the Hub's metadata polls"
+    assert edge.current_role == "source"
+    assert sink.received == []
+    server.join(timeout=25)
+
+
 # --- GRANT dedupe: ids retire on completion, and a reboot can't collide ------
 
 def test_regrant_after_failed_pull_is_honored(tmp_path):

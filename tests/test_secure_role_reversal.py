@@ -448,6 +448,29 @@ def test_secure_hub_authority_tie_break_edge_yields_to_poll(tmp_path):
 
 # --- GRANT dedupe under secure: two distinct mechanisms ----------------------
 
+def test_secure_edge_yields_to_the_hubs_metadata_poll_too(tmp_path):
+    # The poll a Hub sends after first contact is an empty METADATA. Sealed, its emptiness is
+    # only visible once the tag checks and the frame opens, so this pins that the yield still
+    # sees it.
+    edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
+    edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn)
+    edge.downlink_stall_timeout = 30
+
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 25},
+                              name="edge-serve", daemon=True)
+    server.start()
+    hub.listen_to_endpoint(endpoint, listening_time=2, save_file=True)     # first contact
+    assert endpoint.state == Digital_Endpoint.REQUEST_DATA_STATE
+
+    hub_conn.transmit(_sealed_grant(hub, 9))
+    hub.listen_to_endpoint(endpoint, listening_time=8, save_file=True)
+
+    assert edge.yield_count >= 1, "the Edge kept driving through the Hub's metadata polls"
+    assert edge.current_role == "source"
+    assert sink.received == []
+    server.join(timeout=25)
+
+
 def test_secure_duplicate_grant_after_completed_pull_is_ignored(tmp_path):
     # After a COMPLETED pull, a stray repeat of the same GRANT must not buy a second pull.
     # Under secure that splits into two independent defences, and both are worth pinning
