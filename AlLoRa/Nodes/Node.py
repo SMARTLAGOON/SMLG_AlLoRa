@@ -45,6 +45,9 @@ class Node:
     REFUSED = "refused"
     PENDING = "pending"
     UNREACHABLE = "unreachable"
+    # What a visit that brought no file met, beside UNREACHABLE: an endpoint that answered but
+    # had nothing to send.
+    IDLE = "idle"
 
     # ask_data's third answer: the peer replied to a chunk request by announcing what it is
     # serving, because it does not remember announcing the file being assembled. Neither a
@@ -1143,6 +1146,21 @@ class Node:
         # or swap the probe to the other config when a visit heard nothing.
         pass
 
+    def _liveness_visit_end(self, digital_endpoint, completed):
+        # Base: nothing to report. The Hub preset overrides this to say whether a visit that
+        # brought no file met an idle endpoint or an unreachable one.
+        pass
+
+    def _report_liveness(self, digital_endpoint, verdict):
+        # One line a reader can grep by the node's name, and the same word in the live status.
+        if self.debug:
+            print("{} ({}): {}".format(digital_endpoint.get_name(), digital_endpoint.get_label(),
+                                       "idle, nothing to send" if verdict == self.IDLE
+                                       else verdict))
+        if self.status.subscribers:
+            self.status['Status'] = verdict
+            self.status.notify()
+
     def _session_visit_end(self, digital_endpoint):
         # Base: nothing to check. The Hub preset overrides this to tear down a secure session
         # its endpoint has stopped being able to use, so the next visit re-handshakes. Reads
@@ -1703,6 +1721,9 @@ class Node:
             if self.perform_handshake(digital_endpoint) is None:
                 if self.debug:
                     print("Handshake failed with endpoint: ", label)
+                # Nothing answered the handshake, and the visit ends here, before the one
+                # that would otherwise say so.
+                self._report_liveness(digital_endpoint, self.UNREACHABLE)
                 return False
 
         t0 = time()
@@ -1834,6 +1855,11 @@ class Node:
                                     # Rewind to re-pull it whole next round instead.
                                     file.discard()
                                     digital_endpoint.state = Digital_Endpoint.REQUEST_DATA_STATE
+                                    # The peer answered: the chunk is here. Said now because
+                                    # the raise skips the round's own bookkeeping, and a visit
+                                    # that heard nothing ends with an OK poll, which is the
+                                    # very final-OK this branch exists not to send.
+                                    self._peer_alive_this_visit = True
                                     raise
                             final_ok = self.create_request(mac, digital_endpoint.get_mesh(),
                                                            sleep_mesh, digital_endpoint.session_id)
@@ -1922,6 +1948,10 @@ class Node:
         # visit, never starve other endpoints to chase one reconfig). No-op unless this is a
         # Hub with a live {new, old} trial for this endpoint.
         self._probe_visit_end(digital_endpoint, probe_heard, probe_completed)
+
+        # Did a visit that brought no file meet an idle endpoint or a missing one? Before the
+        # session check, because the poll it may send is evidence that check reads.
+        self._liveness_visit_end(digital_endpoint, probe_completed)
 
         # Also visit-scoped: is the secure session we hold for this endpoint still usable? A
         # peer that rebooted lost its half and cannot tell us, so the authority has to notice.

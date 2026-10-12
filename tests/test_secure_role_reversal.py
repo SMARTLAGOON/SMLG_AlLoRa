@@ -792,6 +792,49 @@ def test_secure_hub_polls_before_spending_a_session_and_drops_when_unanswered(tm
         "an unanswered connection poll must drop the session so the next visit re-handshakes"
 
 
+def test_secure_edge_that_lost_its_session_reads_unreachable_not_idle(tmp_path):
+    # The end-of-visit poll that tells an idle Edge from a missing one goes out sealed under
+    # the session this Hub holds. An Edge that rebooted has lost its half and cannot open it,
+    # so it must read as unreachable: an answer here would be a session that still works.
+    # And one such visit must not spend the session, so recovery keeps the pace it had.
+    edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
+    edge, hub, endpoint, _ = _make_pair(tmp_path, edge_conn, hub_conn,
+                                        session_recovery_after=2)
+    states = []
+    hub.register_subscriber(type("Log", (), {"update": lambda self, s:
+                                             states.append(s.get("Status"))})())
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 15},
+                              name="edge-serve", daemon=True)
+    server.start()
+
+    hub.listen_to_endpoint(endpoint, listening_time=3, save_file=True)
+    assert states[-1] == "idle", states[-5:]
+
+    edge.session_store.drop(SESSION_ID)          # the reboot: RAM-held session gone
+    hub.listen_to_endpoint(endpoint, listening_time=3, save_file=True)
+    server.join(timeout=20)
+
+    assert states[-1] == "unreachable", states[-5:]
+    assert hub.session_store.get(SESSION_ID) is not None, \
+        "one silent visit must not spend the session"
+
+
+def test_secure_visit_whose_handshake_goes_unanswered_ends_unreachable(tmp_path):
+    # Once a session is spent, every later visit to a dead Edge stops at the handshake. That
+    # visit must still say so, or the status keeps whatever the endpoint before it reported,
+    # under this endpoint's name.
+    edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
+    _, hub, endpoint, _ = _make_pair(tmp_path, edge_conn, hub_conn, pre_share=False)
+    states = []
+    hub.register_subscriber(type("Log", (), {"update": lambda self, s:
+                                             states.append(s.get("Status"))})())
+    hub.status['Status'] = "idle"                # what the endpoint visited before reported
+
+    hub.listen_to_endpoint(endpoint, listening_time=2, save_file=True)
+
+    assert states and states[-1] == "unreachable", states[-5:]
+
+
 def test_secure_session_teardown_clears_the_delegation_backoff(tmp_path):
     # Delegations that failed while the session was dead all failed for that one reason, so
     # the skip they earned is measuring a condition the teardown has just removed. If it

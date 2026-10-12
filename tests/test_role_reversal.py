@@ -461,6 +461,36 @@ def test_hub_authority_tie_break_edge_yields_to_poll(tmp_path):
     assert endpoint.state == Digital_Endpoint.REQUEST_DATA_STATE
 
 
+def test_the_closing_poll_never_retires_a_file_the_hub_failed_to_store(tmp_path):
+    # When the Hub's sink refuses a file whose last chunk has come in, the Hub sends no final
+    # OK, so the Edge keeps the file and it is pulled again. An OK at that moment IS the final
+    # OK. So a visit whose only answer was that chunk must not close with the connection poll.
+    edge_conn, hub_conn = _make_filtered_pair()
+    hub_sink = Flaky_sink()
+    edge, hub, endpoint, _ = _make_pair(tmp_path, edge_conn, hub_conn, data_sink=hub_sink)
+    edge.set_file(AlLoRa_File(name="reading.json", content=bytearray(b"x" * 40),
+                              chunk_size=edge.get_chunk_size()))
+    server = threading.Thread(target=edge.send_file, kwargs={"timeout": 30},
+                              name="edge-serve", daemon=True)
+    server.start()
+
+    hub_conn.drop_kind(CHUNK_KIND, count=-1)        # METADATA lands, no chunk request does
+    hub.listen_to_endpoint(endpoint, listening_time=2, save_file=True)
+    assert endpoint.state == Digital_Endpoint.PROCESS_CHUNK_STATE
+
+    hub_conn.drop_rules.clear()
+    edge_conn.drop_kind(METADATA_KIND, count=-1)    # the chunk lands; every re-ask after dies
+    hub.listen_to_endpoint(endpoint, listening_time=2, save_file=True)
+    assert hub_sink.failed == 1
+
+    edge_conn.drop_rules.clear()
+    hub.listen_to_endpoint(endpoint, listening_time=6, save_file=True, one_file=True)
+    server.join(timeout=30)
+
+    assert [name for name, _, _ in hub_sink.received] == ["reading.json"], \
+        "the file the Hub failed to store was retired by the visit's closing poll"
+
+
 # --- GRANT dedupe: ids retire on completion, and a reboot can't collide ------
 
 def test_regrant_after_failed_pull_is_honored(tmp_path):

@@ -1078,6 +1078,22 @@ class Hub(Node):
         can be commanding a node that was provisioned with a root, and that is exactly the
         half-provisioned rollout this diagnosis is for.
         """
+        if self._answers_poll(digital_endpoint):
+            if self.debug:
+                print("Endpoint {} answered a poll after refusing the command: it declined "
+                      "rather than went missing (check its signed provisioning)".format(
+                          digital_endpoint.session_id))
+            return self.REFUSED
+        if self.debug:
+            print("Endpoint {} answered neither the command nor a poll: report the link, "
+                  "not a refusal".format(digital_endpoint.session_id))
+        return self.UNREACHABLE
+
+    def _answers_poll(self, digital_endpoint):
+        """Whether the endpoint answers the connection poll, the one request an Edge always
+        answers. Asked up to `_DIAGNOSIS_POLLS` times and stopped at the first reply, so a
+        reachable endpoint costs one short exchange and one frame lost on a lossy link does
+        not read as a missing peer."""
         for _ in range(self._DIAGNOSIS_POLLS):
             poll = self.create_request(digital_endpoint.get_mac_address(),
                                        digital_endpoint.get_mesh(),
@@ -1085,15 +1101,8 @@ class Hub(Node):
                                        digital_endpoint.session_id)
             answered, _ = self.ask_ok(poll)
             if answered:
-                if self.debug:
-                    print("Endpoint {} answered a poll after refusing the command: it declined "
-                          "rather than went missing (check its signed provisioning)".format(
-                              digital_endpoint.session_id))
-                return self.REFUSED
-        if self.debug:
-            print("Endpoint {} answered neither the command nor a poll: report the link, "
-                  "not a refusal".format(digital_endpoint.session_id))
-        return self.UNREACHABLE
+                return True
+        return False
 
     @staticmethod
     def _is_control_ack(reply, prefix):
@@ -1343,6 +1352,25 @@ class Hub(Node):
             self._set_endpoint_rf(digital_endpoint, target)
             if self.debug:
                 print("RF probe swapped endpoint {} to {}".format(sid, target[:3]))
+
+    def _liveness_visit_end(self, digital_endpoint, completed):
+        # An Edge with nothing to send lets a METADATA request go by unanswered, which is right
+        # on the air and saves its airtime, but it makes a visit to an idle sensor and a visit
+        # to a cut cable leave the same lines here. So a visit that brought no file says which
+        # it met, in the live status and in one line a reader can grep by the node's name.
+        # Mid-file is neither: an Edge serving a file answers every chunk request it hears.
+        if completed or digital_endpoint.state == Digital_Endpoint.PROCESS_CHUNK_STATE:
+            return
+        # Before first contact every request of the visit already was the connection poll, so
+        # its silence is the answer and there is nothing left to ask.
+        if not self._peer_alive_this_visit \
+                and digital_endpoint.state == Digital_Endpoint.REQUEST_DATA_STATE:
+            # Nothing answered all visit, so ask. The session check reads this next, and an
+            # answer is exactly what it is asking for.
+            if self._answers_poll(digital_endpoint):
+                self._peer_alive_this_visit = True
+        self._report_liveness(digital_endpoint, self.IDLE if self._peer_alive_this_visit
+                              else self.UNREACHABLE)
 
     def _session_visit_end(self, digital_endpoint):
         # Decide whether the session held for this endpoint is still usable, and tear it down
