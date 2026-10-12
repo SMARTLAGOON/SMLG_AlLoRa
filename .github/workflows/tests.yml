@@ -1,0 +1,35 @@
+# Run the host test suite on every push and pull request, so a change that breaks the library is
+# caught before anyone flashes it onto a board.
+#
+# Four workers: many tests run real transfers over the loopback link against wall-clock timeouts,
+# and with one worker per core they starve each other and time out. Four keeps them green and
+# brings the suite from about 20 minutes to about 8.
+
+name: Tests
+
+on:
+  push:
+    branches: [main, v3]
+  pull_request:
+    branches: [main, v3]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install the test tools
+        run: |
+          set -eu
+          # The MicroPython compiler has to be the firmware's version, or its test skips.
+          MP=$(grep -m1 -oE 'micropython_ref: *v[0-9.]+' .github/workflows/build-firmware.yml | grep -oE '[0-9.]+$')
+          python -m pip install pytest pytest-xdist cryptography "mpy-cross==$MP.*"
+
+      - name: Run the suite
+        run: python -m pytest -q -n 4
