@@ -1,57 +1,41 @@
+# Flashing AlLoRa on a LilyGo T3S3
 
-# Flashing Micropython in LILYGO T3S3
+AlLoRa runs on MicroPython, with the library built into the firmware. Each release carries one
+firmware file per radio. Download the one for your board from the latest release on the
+[Releases page](https://github.com/SMARTLAGOON/SMLG_AlLoRa/releases):
 
-### 1. Activate Boot Mode on the LILYGO T3S3
+| Your T3S3 has | Download |
+|---|---|
+| an SX1276 radio | `AlLoRa-t3s3-sx127x-firmware.bin` |
+| an SX1262 radio | `AlLoRa-t3s3-sx1262-firmware.bin` |
 
-Before flashing, you need to activate the "boot mode":
+Both are built by CI from [`../targets`](../targets) when a release is published.
 
-- Hold down the "BOOT" button on the LILYGO T3S3 board.
-- While holding the "BOOT" button, plug the board into your computer.
-- Release the "BOOT" button once the board is connected.
+### 1. Put the board in boot mode
 
-### 2. Identify the Device Port
+Hold the **BOOT** button while you plug the board in, then release it.
 
-Locate the serial port of the connected board:
-
-#### For macOS:
+### 2. Find the board's port
 
 ```bash
-ls /dev/tty.*
+mpremote devs
 ```
 
-For Linux:
+On a Mac the port looks like `/dev/cu.usbmodem1101`, on Linux like `/dev/ttyACM0`.
+
+### 3. Erase the flash and write the firmware
+
 ```bash
-ls /dev/ttyUSB*
+esptool.py --chip esp32s3 --port PORT erase_flash
+esptool.py --chip esp32s3 --port PORT write_flash -z 0x0 AlLoRa-t3s3-sx127x-firmware.bin
 ```
 
-### 3. Erase the Flash Memory
+Replace `PORT` with the port you found, and use the `sx1262` file if that is your radio.
 
-Erase the existing flash memory on the device:
-```bash
-esptool.py --chip esp32s3 --port /dev/cu.usbmodem101 erase_flash
-```
-Replace /dev/cu.usbmodem101 with the actual port identified earlier.
+### 4. Restart the board
 
-### 4. Flash the Firmware
+Unplug the board and plug it back in without the button. The port can change after flashing, so
+run `mpremote devs` again.
 
-Flash the new firmware onto the LILYGO T3S3 board:
-```bash
-esptool.py --chip esp32s3 --port /dev/cu.usbmodem101 write_flash -z 0x0 build-ESP32_GENERIC_S3/firmware.bin
-```
-Again, replace /dev/cu.usbmodem101 with your actual port.
-
-### 5. Interact with the Board
-
-After flashing, reset the board. This may cause the serial port to change, so you’ll need to identify the board’s port again.
-
-Identify Board’s port
-
-For macOS:
-```bash
-ls /dev/tty.*
-```
-For Linux:
-```bash
-ls /dev/ttyUSB*
-```
-Note the port number as you will need it for the following steps.
+The [examples](../../examples/Readme.md) take it from there, starting with a first transfer
+between two boards.

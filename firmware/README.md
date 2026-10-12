@@ -18,14 +18,14 @@ firmware/
       boards/<BOARD>/      #     MicroPython board overlay: sdkconfig.board, mpconfigboard.*, manifest.py
       modules/             #     board helpers to freeze (lora32, lilygo_oled, utils)
   patches/                 # version-specific MicroPython source patches (see patches/README.md)
-  T3S3/                    # (legacy) flashing instructions + an old prebuilt .bin
+  T3S3/                    # how to flash a T3S3 with a release's .bin
 ```
 
 ## Building
 
 CI does it — a GitHub Actions workflow (`.github/workflows/build-firmware.yml`) builds every
-target in a matrix inside Espressif's ESP-IDF container and attaches each `firmware.bin` to the
-release. No local toolchain. Each matrix row pins the MicroPython + ESP-IDF versions for that
+target in a matrix inside Espressif's ESP-IDF container and attaches each one to the release as
+`AlLoRa-<target>-firmware.bin`. No local toolchain. Each matrix row pins the MicroPython + ESP-IDF versions for that
 target (they're coupled — a MicroPython release supports specific ESP-IDF versions).
 
 The freeze copies the **live** `AlLoRa/` tree at build time — including `AlLoRa/Links/` (the
