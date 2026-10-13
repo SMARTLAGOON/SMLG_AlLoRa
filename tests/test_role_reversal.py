@@ -280,7 +280,13 @@ def test_reclaim_on_lost_first_pull_then_recovery(tmp_path):
     # The reclaim timer fired at least once: delivery needed more than one GRANT
     # (the counter starts at a random byte, so count relative to it, mod 256).
     assert (hub._swap_id - first_swap_id) & 0xFF >= 2
-    assert [(n, c) for n, c, _ in sink.received] == [("relay.bin", payload)]
+    # At least one copy, not exactly one: on a loaded machine the 1.0 s reclaim timer can fire
+    # during a delivery, so the Hub grants again and the Edge reassembles a second whole copy.
+    # Measured 2026-10-13: two of 32 parallel runs got two correct copies. The secure twin of
+    # this case asserts the same thing for the same reason.
+    assert sink.received, "the file never arrived at all"
+    assert all((n, c) == ("relay.bin", payload) for n, c, _ in sink.received), \
+        "a delivered copy was not the file that was queued"
     assert hub.current_role == "collector"
     assert edge.current_role == "source"
     assert not hub.downlink_pending(endpoint)
