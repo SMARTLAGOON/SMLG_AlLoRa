@@ -4,10 +4,7 @@ from lilygo_oled import OLED
 
 # Base class for T3S3
 class T3S3Base:
-    # What this board physically has. The deployment says which of these it wants switched on,
-    # in the device section of its AlLoRa.json; this says what there is to switch on at all.
-    # Asking a board for a peripheral it does not have is a mistake worth hearing about, and
-    # these three flags are what makes that answerable without probing hardware.
+    # What this board has. The device section of AlLoRa.json says which of these to switch on.
     HAS_SCREEN = True
     HAS_SD = True
     HAS_LED = True
@@ -38,12 +35,8 @@ class T3S3Base:
         self.oled = OLED(self.i2c)
 
     def mount_sd(self, path=None):
-        """Mount the card and answer with the path it is mounted at.
-
-        Raises if the card cannot be mounted. Whether that is fatal is the caller's to decide:
-        a node whose outbound queue lives on the card has nothing to serve without it, while
-        one that only wanted somewhere to write logs can carry on.
-        """
+        """Mount the card and return its path. Raises if it cannot; the caller decides if that
+        is fatal."""
         from board.sd_manager import SD_manager
         if self.sd is None:
             self.sd = SD_manager(self, path=path)

@@ -15,13 +15,8 @@ gc.enable()
 
 
 def halt(reason, interval=10):
-    """Stop where somebody can read why. Written out here like everything else in this file.
-
-    MicroPython prints nothing for SystemExit and turns an uncaught one into a soft reset, so a
-    stop written as a raise would reboot the board into the same refusal, silently, forever. Say
-    it instead, and keep saying it, without handing control back to the runtime. Ctrl-C still
-    reaches the REPL from here. ../../main.py carries the same function for the same reason.
-    """
+    """Print the reason every few seconds, and never return. A SystemExit would soft-reset the
+    board in a silent loop, as ../../main.py explains. Ctrl-C still reaches the REPL."""
     while True:
         print("STOPPED:", reason)
         time.sleep(interval)
@@ -31,32 +26,25 @@ def halt(reason, interval=10):
 # `driver` key is not consulted at all.
 connector = SX127x_connector()
 
-# What the Edge serves: files waiting in this folder, streamed from where they lie rather than
-# held in RAM. An empty folder is a node with nothing to send yet; it answers polls and waits.
+# The Edge serves the files in this folder; empty means nothing to send yet.
 datasource = Disk_DataSource(queue_path="Outbox")
 
 edge = Edge(connector, config_file="AlLoRa.json", datasource=datasource)
 print("EDGE ready | MAC:", edge.MAC, "| mode:", edge.security_mode, "| session:", edge.session_id)
 
-# This file is the secure posture: an identity, and no control root. The generic program handles
-# all three by looking at what the node came up holding; here they are simply stated.
+# This file is the secure setup: an identity, and no control root.
 if edge.device_id is None:
     halt("This node has no identity. Set security_mode 'secure' plus identity_file "
          "in AlLoRa.json, or load the ../../open config instead.")
 if edge.control_root is not None:
     halt("This node holds a control root. Load the ../../control config instead.")
 
-# The one value that registers this node on its Hub. Its first 4 bytes address first contact, so
-# no session_id is hand-assigned the way the open pair needs. Stable across reboots for as long
-# as identity_file stays set and the file survives a reflash.
+# Register this on the Hub. It stays the same across reboots while identity_file is set.
 print("EDGE device_id (register this on the Hub):", edge.device_id.hex())
 print("EDGE serving from:", datasource.queue_path)
 
-# Queues the effect of a command rather than performing it, so the node applies it only once the
-# acknowledgement is on the air: switching the radio first would cost the Hub its confirmation.
-# Sealed frames authenticate the link itself, so a command that arrives here came from the node
-# that completed the handshake. It is not a signed artifact, and it does not survive being
-# relayed. That is ../../control.
+# Acts on commands from the Hub that completed the handshake, after acknowledging them. For
+# signed commands, see ../../control.
 edge.control_actuator = Node_Control_Actuator(edge)
 print("control: unsigned in-band commands are acted on")
 

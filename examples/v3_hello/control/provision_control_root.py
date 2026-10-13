@@ -30,10 +30,7 @@ def provision(base):
             root = Control_Root(f.read().strip())
         print("Found an existing control root at {}, keeping it.".format(hub_key))
     else:
-        # Written the way identity.key already stores a scalar, and written here rather than
-        # exported from Control_Root: that object exists to sign with the key, and giving it a
-        # method that hands the key back would make every node capable of exporting the fleet's
-        # authority. Provisioning is a tool's job, not the library's.
+        # Written here, not by Control_Root: the library never hands a signing key back out.
         priv = generate_private_key(os.urandom)
         root = Control_Root(priv)
         with open(hub_key, "w") as f:

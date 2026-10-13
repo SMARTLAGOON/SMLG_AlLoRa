@@ -9,12 +9,8 @@ from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Connectors.SX127x_connector import SX127x_connector
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 
-# Where to move the pair. `trial` is how many seconds the Edge holds this provisionally before
-# rolling itself back, and it wants to be longer than one poll rotation. What commits the trial
-# is the peer asking for a chunk later than the last one served, which is the first evidence a
-# full-payload frame was demodulated on the new settings; a bare reachability poll is not
-# evidence and does not commit. So the window has to be long enough for a visit to reach that
-# point, or it restores a configuration that was working.
+# Where to move the pair. `trial` is how many seconds the Edge waits for a transfer on the new
+# settings before rolling back, so make it longer than one round of visits.
 NEW_CONFIG = {"sf": 9, "trial": 300}
 
 gc.enable()
@@ -22,15 +18,13 @@ gc.enable()
 hub = Hub(SX127x_connector(), config_file="AlLoRa.json")
 print("HUB ready | MAC:", hub.MAC)
 
-# This Hub holds the signing half. Without it every command below goes out unsigned, a
-# provisioned Edge refuses all of them, and the run reads as a link problem.
+# Without the signing key, a provisioned Edge refuses every command and it looks like a bad link.
 if hub.control_root is None:
     raise SystemExit("This Hub has no control root, so it cannot sign a command. Add "
                      "control_root_file to AlLoRa.json and copy the signing half onto the "
                      "board.")
 
-# Register the Edge by the device_id it prints on boot, as in ../../secure. A signed artifact is
-# addressed to that same identity, so it is the one value this whole example turns on.
+# The device_id the Edge prints on boot. Signed commands are addressed to it.
 EDGE_DEVICE_ID = "<paste the Edge's device_id>"
 
 if EDGE_DEVICE_ID.startswith("<"):
@@ -38,40 +32,27 @@ if EDGE_DEVICE_ID.startswith("<"):
 
 endpoint = Digital_Endpoint(name="src", device_id=EDGE_DEVICE_ID, active=True)
 
-# 1. A safe boundary. One complete pull first, so the link is known good before it is moved and
-#    a failure afterwards means the new configuration, not the antenna. Commanding a retune part
-#    way through a transfer would also move the radio out from under it.
+# 1. One complete pull first, so a failure afterwards points at the new settings, not the link.
 print("pulling one file on the current configuration...")
 hub.listen_to_endpoint(endpoint, listening_time=60, save_file=True, one_file=True)
 
-# 2. One call moves both ends. The Edge applies the change after its acknowledgement is on the
-#    air, and this Hub follows it onto the same settings: a reconfiguration where only the far
-#    end moves is not a partial success, it is an endpoint this Hub can no longer hear.
-#
-#    The answer is one of four words, and each one sends you somewhere different. They are worth
-#    reading in full, because two of them used to be the same word and the wrong one cost a trip
-#    to a site: a node that heard the command and declined it looked exactly like a dead antenna.
+# 2. One call moves both ends: the Edge, and this Hub after it. The answer is one of four words.
 print("asking for", NEW_CONFIG)
 outcome = hub.ask_change_rf(endpoint, NEW_CONFIG)
 if outcome == Hub.ACCEPTED:
     print("acknowledged: the Edge is now on trial with the new configuration")
 elif outcome == Hub.PENDING:
-    # The expected answer here. A signed artifact is not acted on where it is handed over: it
-    # rides one of the pulls below, and the Edge decides afterwards, on its own.
+    # The expected answer here: the signed command reaches the Edge on one of the pulls below.
     print("artifact queued: it is delivered on one of the pulls below, and the probe below "
           "is what says whether the Edge took it")
 elif outcome == Hub.REFUSED:
-    # It answered a poll, so it is alive and listening. It heard the command and said no. With
-    # both ends provisioned that points at the root itself: a node checks against the root it
-    # was given, so an Edge carrying a different fleet's verifying half refuses every command
-    # this Hub signs. Compare the fingerprints, not the antenna.
+    # Alive, heard it, said no: usually the Edge holds another fleet's control root.
     print("refused: the Edge is there and declined the command; check its provisioning")
 else:
     print("unreachable: nothing answered at all, so the command was never considered")
 
-# 3. Keep polling. This is not idling: on the new configuration a completed transfer is what
-#    commits the Edge's trial, and if the new configuration cannot carry one, the Edge restores
-#    itself and these visits are what find it again on the old one.
+# 3. Keep polling: a transfer on the new settings ends the Edge's trial, and if none gets
+#    through, the Edge rolls back and these visits find it on the old settings.
 while True:
     hub.listen_to_endpoint(endpoint, listening_time=60, save_file=True, one_file=True)
     fallback = hub.endpoint_trial_old(endpoint)

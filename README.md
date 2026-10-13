@@ -33,6 +33,7 @@ Details of the protocol can be found in these articles:
   - [Firmware](#firmware)
   - [Tests](#tests)
 - [How does it work?](#how-does-it-work)
+  - [The config file](#-the-config-file)
   - [Communication logic](#-communication-logic)
   - [Packet structure](#-packet-structure)
   - [Identity and addressing](#-identity-and-addressing)
@@ -77,11 +78,11 @@ lowercase holds functions and constants; a capitalised one is named after the cl
 ### [Nodes](AlLoRa/Nodes)
 
 <img align="right" width="200" src="readme_assets/figures/toolbox-nodes.svg"
-     alt="AlLoRa toolbox: nodes (Edge, Hub, Digital Endpoint)">
+     alt="AlLoRa toolbox: nodes (Edge, Hub)">
 
 A node is the element in charge of the communication logic. There are two node types, named by
 where they sit in the deployment, not by which way the data goes: the **Edge** in the field, and
-the **Hub** that collects from it. The Hub keeps a **Digital Endpoint** for each of its Edges.
+the **Hub** that collects from it.
 
 <br clear="right">
 
@@ -99,7 +100,7 @@ file sent down has somewhere to land.
 1. **Instantiation:**
 
    - `connector`: the [Connector](#connectors-links-and-adapters) this node reaches LoRa through.
-   - `config_file`: the node's [`AlLoRa.json`](#the-config-file).
+   - `config_file`: the node's [`AlLoRa.json`](#-the-config-file).
    - `datasource` (optional): where the files to send come from. Without one, you hand files over
      yourself with `set_file`.
    - `data_sink` (optional): where a file the Hub sends ends up.
@@ -133,7 +134,7 @@ Edge or fifty, it is the same class.
 
    - `connector`, `config_file`: as for the Edge.
    - `nodes_file` (optional, default `"Nodes.json"`): the list of Edges to visit. See
-     Digital Endpoint below.
+     [The Edges it visits](#the-edges-it-visits-nodesjson) below.
    - `data_sink` (optional): where finished files go. The default saves them to disk.
    - `debug_hops` (optional, default `False`): record the path of each packet in mesh mode, on
      v2 links only. See [Mesh mode](#-mesh-mode).
@@ -156,18 +157,12 @@ hub = Hub(connector=connector, config_file="AlLoRa.json",
 hub.run(save_files=True)
 ```
 
-</details>
+#### The Edges it visits: `Nodes.json`
 
-<details>
-<summary><b>Digital Endpoint</b>: what the Hub knows about one Edge.</summary>
-
-#### [Digital_Endpoint.py](AlLoRa/Digital_Endpoint.py)
-
-The Digital Endpoint holds one Edge's name and address, its radio settings, how often to visit it,
-and the state of the transfer in progress. It also assembles the `AlLoRa_File` once every chunk
-has arrived. You rarely build one by hand: the Hub builds one per entry of `Nodes.json`.
-
-**Usage:** each entry of `Nodes.json` is one Edge:
+The Hub builds one [Digital Endpoint](AlLoRa/Digital_Endpoint.py) per active entry of `Nodes.json`. It
+holds that Edge's name and address, its radio settings, how often to visit it, and the state of
+the transfer in progress, and it assembles the `AlLoRa_File` once every chunk has arrived. You
+rarely build one by hand. Each entry is one Edge:
 
 ```json
 [
@@ -190,47 +185,18 @@ has arrived. You rarely build one by hand: the Hub builds one per entry of `Node
 - `wait_after_visit` (default 60 s): how long this Edge rests before the next visit.
 - `connector` (optional): this Edge's own radio settings, if they differ from the Hub's. Copy
   the `connector` block from the Edge's config; anything you leave out comes from the Hub's.
+- `protocol_version` (optional): `2` for an Edge still running v2 firmware. The Hub speaks v2 to
+  it for each visit, so one v3 Hub can serve a site part way through a reflash. Left out, the Edge
+  is polled in the Hub's own version. Register a v2 Edge by `mac_address`; an entry registered by
+  `device_id` cannot say `2`.
+
+A Hub that cannot serve an entry's version stops at boot, naming the entry: a `secure` Hub, a
+Hub whose radio has no MAC address (a serial or Wi-Fi bridge), or a v2 Hub given an entry that
+says `3`. Sending a file down to a v2 Edge raises a `ValueError`, and so does asking it to change
+radio settings from a v3 Hub.
 
 The Hub retunes to each Edge's settings before visiting it, so one Hub can serve Edges on
 different radio settings.
-
-</details>
-
-<details>
-<summary><b>The config file</b>: <code>AlLoRa.json</code>, read by every node.</summary>
-
-#### The config file
-
-Every node reads its settings from a JSON file, usually `AlLoRa.json`:
-
-```json
-{
-  "name": "S",
-  "protocol_version": 3,
-  "security_mode": "open",
-  "session_id": 42,
-  "mesh_mode": false,
-  "connector": {
-    "sf": 7,
-    "freq": 868,
-    "bandwidth": 125,
-    "coding_rate": 1,
-    "tx_power": 14
-  }
-}
-```
-
-- `protocol_version`: `3` for the v3 packets. Left out, the node speaks v2, so it can talk to an
-  older deployment.
-- `security_mode`: `"open"` (the default) or `"secure"`. See [Security](#-security).
-- `chunk_size` (optional): leave it out and the node uses the largest chunk its packets can carry.
-  If you set one that does not fit, the node lowers it at startup.
-- `mesh_mode` (default `false`): see [Mesh mode](#-mesh-mode).
-- `connector`: the radio settings, read by the Connector.
-
-The [one program](examples/v3_hello/main.py) in `examples/v3_hello` also reads `node`, the radio
-`driver`, and the `datasource` and `data_sink` blocks from this file, so an Edge and a Hub differ by
-one line of JSON. Its [README](examples/v3_hello) lists them.
 
 </details>
 
@@ -516,6 +482,46 @@ pulls the file, and then everything goes back to normal. We call the two jobs in
 default the Hub is the collector and the Edge is the source. The Hub stays in command in both
 directions.
 
+## → The config file
+
+Every node, Edge or Hub, reads its settings from one JSON file, usually `AlLoRa.json`: which
+packets it speaks, whether it is secure, and its radio settings. The sections below name the keys
+they use.
+
+<details>
+<summary>An example, and what each key does.</summary>
+
+```json
+{
+  "name": "S",
+  "protocol_version": 3,
+  "security_mode": "open",
+  "session_id": 42,
+  "mesh_mode": false,
+  "connector": {
+    "sf": 7,
+    "freq": 868,
+    "bandwidth": 125,
+    "coding_rate": 1,
+    "tx_power": 14
+  }
+}
+```
+
+- `protocol_version`: `3` for the v3 packets. Left out, the node speaks v2, so it can talk to an
+  older deployment.
+- `security_mode`: `"open"` (the default) or `"secure"`. See [Security](#-security).
+- `chunk_size` (optional): leave it out and the node uses the largest chunk its packets can carry.
+  If you set one that does not fit, the node lowers it at startup.
+- `mesh_mode` (default `false`): see [Mesh mode](#-mesh-mode).
+- `connector`: the radio settings, read by the Connector.
+
+The [one program](examples/v3_hello/main.py) in `examples/v3_hello` also reads `node`, the radio
+`driver`, and the `datasource` and `data_sink` blocks from this file, so an Edge and a Hub differ by
+one line of JSON. Its [README](examples/v3_hello) lists them.
+
+</details>
+
 ## → Communication logic
 
 <p align="center">
@@ -665,8 +671,9 @@ frame uses the third.
        alt="The v3 header layouts: 13, 9 and 6 bytes open, 8 bytes of overhead secure">
 </p>
 
-- **MAC:** the board's physical address. In v3 it is a label, a folder name, and the address for a
-  first contact with a node that might still be v2 (the 13-byte header).
+- **MAC:** the board's physical address. In v3 it is a label, a folder name, and, for an Edge
+  registered by MAC, the address of the secure handshake (the 13-byte header). In `open` its low
+  byte becomes the session id.
 - **device_id:** an Edge's v3 identity, the fingerprint of its public key (`SHA256(pubkey)`). It
   stays the same across reboots as long as `identity_file` is set. In `secure` the Hub does not
   yet check that an Edge holds the key behind it (see [Security](#-security)). A first
@@ -675,8 +682,9 @@ frame uses the third.
   6-byte header). It comes from the node's identity by default, and you can set it with
   `session_id` in the config.
 
-How the first frame is addressed follows how the Edge was registered in `Nodes.json`: by MAC, the
-Hub speaks a frame a v2 node understands; by `device_id`, it speaks v3.
+How the first frame is addressed follows how the Edge was registered in `Nodes.json`: by MAC or by
+`device_id`. Either way a v3 Hub speaks v3, unless the entry says `"protocol_version": 2` (see
+[The Edges it visits](#the-edges-it-visits-nodesjson) above).
 
 </details>
 
