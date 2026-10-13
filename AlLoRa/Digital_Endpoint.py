@@ -22,6 +22,14 @@ NO_ADDRESS = "00000000"
 LEGACY_CONFIG_KEYS = {"asking_frequency": "wait_after_visit"}
 
 
+class Version_conflict(ValueError):
+    """A roster entry asks for a protocol version its own registration or its Hub cannot speak.
+
+    Its own class because the roster loader treats an unreadable file as an empty roster and
+    carries on, and that is the wrong answer here: a Hub that boots polling nothing has hidden
+    a one-line configuration mistake behind a silent field."""
+
+
 def with_current_keys(config):
     """A config entry with every superseded key read under its current name.
 
@@ -112,6 +120,7 @@ class Digital_Endpoint:
                  session_id=None,
                  device_id=None,
                  extras=None,
+                 protocol_version=None,
                  debug=False):
         """
         Initializes a new Digital Endpoint with detailed control over its operational parameters.
@@ -137,6 +146,9 @@ class Digital_Endpoint:
           the Hub could not tell the two apart. One named block keeps them separable: the
           Hub writes it when a wish carries it, hands it back in its report, and never looks
           inside. A misspelling in there is visible on both sides rather than lost.
+        - protocol_version: 2 for a node still running v2 firmware, so a v3 Hub speaks v2 to it
+          for its visits. None, the default, polls it in the Hub's own version. A node
+          registered by device_id is v3 by what that registration is, and cannot say 2.
 
         RF settings are optional. State them in a `connector` block inside `config`, spelled as
         in the config (`freq`, `sf`, `bandwidth`, `coding_rate`, `tx_power`), so the peer's own
@@ -162,6 +174,7 @@ class Digital_Endpoint:
             self._read_rf(config)
             explicit_sid = config.get('session_id', session_id)
             raw_device_id = config.get('device_id', device_id)
+            protocol_version = config.get('protocol_version', protocol_version)
         else:
             self.name = name
             self.mac_address = mac_address[-8:]
@@ -184,6 +197,17 @@ class Digital_Endpoint:
         # explicit session_id overrides it (or the Collector reassigns it on a clash).
         self.device_id = bytes.fromhex(raw_device_id) if isinstance(raw_device_id, str) \
             else (bytes(raw_device_id) if raw_device_id is not None else None)
+        # Checked by value: a "2" typed as a string would otherwise fail a comparison later,
+        # inside the roster loader that reads any error as an empty file.
+        if protocol_version is not None and protocol_version not in (2, 3):
+            raise Version_conflict("endpoint {} says protocol_version {!r}; it is 2, 3, or "
+                                   "left out".format(self.name, protocol_version))
+        if self.device_id is not None and protocol_version == 2:
+            raise Version_conflict(
+                "endpoint {} is registered by device_id, which only a v3 node has, and also "
+                "says protocol_version {}".format(self.name, protocol_version))
+        self.protocol_version = protocol_version
+
         if explicit_sid is not None:
             self.session_id = explicit_sid
         elif self.device_id is not None:

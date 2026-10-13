@@ -7,8 +7,9 @@ import gc
 from os import urandom
 from json import loads, dumps
 from AlLoRa.Nodes.Node import Node
+from AlLoRa.Codec import build_codec
 from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids, \
-    label_for_config, with_current_keys, config_key_for, NO_ADDRESS
+    label_for_config, with_current_keys, config_key_for, NO_ADDRESS, Version_conflict
 from AlLoRa.DataSources.DataSource import DataSource
 from AlLoRa.Control.control_types import RF_CONFIG, IN_BAND, KNOWN
 from AlLoRa.File import AlLoRa_File
@@ -72,6 +73,11 @@ class Hub(Node):
                          data_sink=data_sink,
                          control_actuator=control_actuator,
                          home_role="collector")
+        # The version this Hub runs, which `protocol_version` returns to after a visit spoken in
+        # another one. The v2 codec for such visits is built on the first one and kept.
+        self._home_version = self.protocol_version
+        self._v2_codec = None
+        self._visit_own = None      # what a v2 visit swapped out, held only during one
         # The endpoints this Hub polls, registered from a Nodes.json-shaped file. Registration
         # fails soft: a Hub with none is a node with nothing to poll, not a boot failure.
         self.nodes_file = nodes_file
@@ -207,25 +213,56 @@ class Hub(Node):
             with open(path, "r") as f:
                 nodes_config = loads(f.read())
             held = set(ep.get_label() for ep in self.digital_endpoints)
+            fresh = []
             for node in nodes_config:
                 if node['active'] and label_for_config(node) not in held:
                     active_node = Digital_Endpoint(node)
-                    self.digital_endpoints.append(active_node)
+                    fresh.append(active_node)
                     held.add(active_node.get_label())
-                    if self.debug:
-                        print("Node {} ({}) added, listening {}s then resting {}s.".format(
-                            active_node.get_name(), active_node.get_label(),
-                            active_node.listening_time, active_node.wait_after_visit))
+            # Checked before any is added, so a refused file leaves the roster as it was.
+            self._refuse_versions(fresh)
+            for active_node in fresh:
+                self.digital_endpoints.append(active_node)
+                if self.debug:
+                    print("Node {} ({}) added, listening {}s then resting {}s.".format(
+                        active_node.get_name(), active_node.get_label(),
+                        active_node.listening_time, active_node.wait_after_visit))
             self._register_endpoints()
             return len(self.digital_endpoints)
+        except Version_conflict:
+            raise
         except Exception as e:
             if self.debug:
                 print("Could not load nodes from file: {}, error: {}".format(path, e))
             return False
 
     def set_digital_endpoints(self, digital_endpoints):
+        self._refuse_versions(digital_endpoints)
         self.digital_endpoints = digital_endpoints
         self._register_endpoints()
+
+    def _refuse_versions(self, endpoints):
+        # A v3 Hub speaks v2 for a v2 node's visit, which is enough to carry a v2 site through
+        # its reflash. It does so only where that is simple, and anything else is refused here,
+        # at boot, rather than turning into a node that is silently never heard:
+        #   - a v2 Hub has no v3 to offer;
+        #   - a secure Hub would open every v2 visit with a handshake v2 cannot answer;
+        #   - v2 frames are addressed by the Hub's MAC, and a tunnel bridge in v3 mode has none.
+        mac = self.connector.get_mac()[-8:]
+        for endpoint in endpoints:
+            version = endpoint.protocol_version
+            if version is None or version == self._home_version:
+                continue
+            if version > self._home_version:
+                reason = "this Hub runs protocol_version {}".format(self._home_version)
+            elif self.security_mode == 'secure':
+                reason = "a secure Hub cannot poll a v2 node"
+            elif mac == NO_ADDRESS:
+                reason = "this Hub's connector has no MAC address to send v2 frames from"
+            else:
+                continue
+            raise Version_conflict("endpoint {} says protocol_version {}, but {}".format(
+                endpoint.get_name(), version, reason))
 
     def _register_endpoints(self):
         # Give every endpoint a unique 1-byte sid, breaking any device_id[0] clash before
@@ -366,9 +403,58 @@ class Hub(Node):
             digital_endpoint.pacing = self._fresh_link_pacing()
         self.connector.pacing = self.pacing = digital_endpoint.pacing
         try:
+            self._speak_version_of(digital_endpoint)
             self._listen_for_visit(digital_endpoint, print_file_content, save_files)
         finally:
+            # Pacing goes back first: switching the version back republishes the frame size,
+            # which re-bounds whichever pacing the radio holds, and that must be the Hub's own
+            # rather than the link's. Otherwise a v2 link would hold v3 bounds between visits.
             self.connector.pacing, self.pacing = own_window, own_sleep
+            self._speak_own_version()
+
+    def _version_of(self, digital_endpoint):
+        return digital_endpoint.protocol_version or self._home_version
+
+    def _speak_version_of(self, digital_endpoint):
+        # A node still on v2 firmware is polled in v2 for its visit, so one Hub serves a fleet
+        # part way through a reflash. Every version branch in the drive loop reads
+        # `protocol_version` off the node and the framing reads the connector's codec, so
+        # moving those two moves the whole visit. The frame size is left to prepare_connector,
+        # which runs after the retune that decides it.
+        if self._version_of(digital_endpoint) != 2 or self._home_version == 2:
+            return
+        connector = self.connector
+        self._visit_own = (self.protocol_version, self.addressing, self.chunk_size,
+                           connector.protocol_version, connector.addressing, connector.codec)
+        if self._v2_codec is None:
+            self._v2_codec = build_codec(protocol_version=2, addressing='mac',
+                                         mesh_mode=self.mesh_mode, short_mac=self.short_mac,
+                                         my_mac=connector.get_mac())
+        self.protocol_version = connector.protocol_version = 2
+        self.addressing = connector.addressing = 'mac'
+        connector.codec = self._v2_codec
+
+    def prepare_connector(self, digital_endpoint):
+        ready = super().prepare_connector(digital_endpoint)
+        # v2 METADATA does not say how the file is cut, so the Hub reassembles at its own chunk
+        # size, as a v2 Hub always did. A v2 node clamps that to what fits beside its bigger
+        # header at its spreading factor (235 with long MACs, 10 at SF12), and so must the Hub,
+        # or every chunk lands misplaced. Done after the retune, which is what sets the SF.
+        if self._visit_own is not None:
+            self.chunk_size = min(self._visit_own[2], self.calculate_max_chunk_size())
+            self._publish_frame_size()
+        return ready
+
+    def _speak_own_version(self):
+        # The Hub's own codec object goes back, never a rebuilt one: a secure Hub holds its
+        # sessions on it, and a v2 visit in between must not cost every v3 node a handshake.
+        own, self._visit_own = self._visit_own, None
+        if own is None:
+            return
+        connector = self.connector
+        (self.protocol_version, self.addressing, self.chunk_size,
+         connector.protocol_version, connector.addressing, connector.codec) = own
+        self._publish_frame_size()
 
     def _fresh_link_pacing(self):
         """A link nobody has learned yet: the radio's current window bounds and the sleep
@@ -724,8 +810,9 @@ class Hub(Node):
                 print("Hub: the extras for node {} are a {}, not a block of keys; ignored"
                       .format(label, type(extras).__name__))
                 del wish["extras"]
-        changed = self._overlay_roster(nodes)
         held = {ep.get_label(): ep for ep in self.digital_endpoints}
+        self._drop_refused_enables(nodes, held)
+        changed = self._overlay_roster(nodes)
         retired = False
         for label, wish in nodes.items():
             endpoint = held.get(label)
@@ -743,9 +830,38 @@ class Hub(Node):
             changed = True
         if self.nodes_file and any(wish.get("active") and label not in held
                                    for label, wish in nodes.items()):
-            self.add_digital_endpoints(self.nodes_file)
+            try:
+                self.add_digital_endpoints(self.nodes_file)
+            except Version_conflict as e:
+                # A file edited by hand since boot. This runs inside the poll loop, which a
+                # refusal must not stop; the roster is left as it was, and it is said out loud.
+                print("Hub: roster not re-read: {}".format(e))
             changed = True
         return changed
+
+    def _drop_refused_enables(self, nodes, held):
+        # An inactive entry is never parsed at boot, so switching one on is the first time its
+        # protocol_version is checked. Checked here, before the file is written, so a refusal
+        # leaves the entry switched off on disk too and the next boot still comes up.
+        if not self.nodes_file:
+            return
+        try:
+            with open(self.nodes_file, "r") as f:
+                roster = loads(f.read())
+        except Exception:
+            return      # nothing to check against; _overlay_roster meets the same file
+        for entry in roster:
+            label = label_for_config(entry)
+            wish = nodes.get(label)
+            if not wish or not wish.get("active") or label in held:
+                continue
+            candidate = dict(entry)
+            candidate.update(wish)
+            try:
+                self._refuse_versions([Digital_Endpoint(candidate)])
+            except Version_conflict as e:
+                print("Hub: node {} left switched off: {}".format(label, e))
+                del wish["active"]
 
     def _retire_endpoint(self, endpoint):
         # Dropping the object is not enough: a reassembly in flight holds an open writer and a
@@ -882,12 +998,23 @@ class Hub(Node):
         except Exception as e:
             print("Hub: could not persist the management state ({})".format(e))
 
+    def _speaks_v2(self, digital_endpoint):
+        return self._version_of(digital_endpoint) < 3
+
+    def _refuse_v2_downlink(self, digital_endpoint):
+        # Delivery hands the Edge the collector role with a GRANT, which v2 firmware has no
+        # word for: refused at the call, not left to fail at every visit's boundary.
+        if self._speaks_v2(digital_endpoint):
+            raise ValueError("endpoint {} runs protocol_version 2, which cannot take a "
+                             "downlink".format(digital_endpoint.get_name()))
+
     def set_downlink_source(self, digital_endpoint, datasource):
         """Plug a live input boundary (e.g. an MQTT_DataSource) as this Edge's downlink:
         whatever it queues is delivered by delegation, exactly like queue_downlink files.
         Brought up here, at registration: a connect that must fail should fail at setup,
         loudly, not mid-drive-loop. Replaces the endpoint's previous source, so register
         before queueing anything."""
+        self._refuse_v2_downlink(digital_endpoint)
         datasource.prepare()
         self._downlink[digital_endpoint.session_id] = datasource
 
@@ -906,6 +1033,7 @@ class Hub(Node):
         refused here, at the call that made the mistake: left to the delegation boundary it
         would surface visits later, inside the drive loop, reading as a fault of the endpoint.
         """
+        self._refuse_v2_downlink(digital_endpoint)
         self._refuse_oversized_chunks(file)
         sid = digital_endpoint.session_id
         source = self._downlink.get(sid)
@@ -926,8 +1054,8 @@ class Hub(Node):
           * given `artifact`, it carries what a backend minted, untouched;
           * given neither, the change goes in band on the link itself, as a control frame.
 
-        The in-band route is selected by version as well: it speaks a v3 frame, so a v2 link
-        falls through to the legacy encoding instead. Selecting rather than configuring is the
+        The in-band route is selected by version as well: it speaks a v3 frame, so a Hub that
+        runs v2 itself falls through to the legacy encoding instead. Selecting rather than configuring is the
         point. A deployment does not choose how its control travels, it is told by what it was
         provisioned with, and a caller that could pick would be a caller that could pick wrong.
 
@@ -943,7 +1071,13 @@ class Hub(Node):
         and a prediction; and `False` covered both a peer that declined the command and a peer
         that was not there, which are the same silence on the air and opposite repairs on the
         ground. `pending` is settled later by the probe, readable through `rf_change_status`.
+
+        A v3 Hub refuses this for a node it polls in v2: both routes it has speak v3, and the
+        v2 one would have to run inside that node's visit. Retune such a node by hand.
         """
+        if self._home_version >= 3 and self._speaks_v2(digital_endpoint):
+            raise ValueError("endpoint {} runs protocol_version 2, and this v3 Hub cannot "
+                             "change its radio settings".format(digital_endpoint.get_name()))
         if artifact is None and self.control_root is None:
             if self.protocol_version >= 3:
                 outcome = self._ask_change_rf_in_band(digital_endpoint, new_config)
@@ -1435,6 +1569,8 @@ class Hub(Node):
         return source is not None and source.has_pending()
 
     def _maybe_delegate(self, digital_endpoint):
+        if self.protocol_version < 3:
+            return False    # a GRANT is a v3 frame; queueing for a v2 node is refused anyway
         sid = digital_endpoint.session_id
         source = self._downlink.get(sid)
         if source is None:
