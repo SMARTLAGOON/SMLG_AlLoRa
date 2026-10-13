@@ -862,6 +862,8 @@ class Hub(Node):
             except Version_conflict as e:
                 print("Hub: node {} left switched off: {}".format(label, e))
                 del wish["active"]
+            except Exception:
+                continue    # any other fault in the entry is the loader's to report and skip
 
     def _retire_endpoint(self, endpoint):
         # Dropping the object is not enough: a reassembly in flight holds an open writer and a

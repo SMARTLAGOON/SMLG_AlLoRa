@@ -157,6 +157,22 @@ def test_switching_on_an_entry_with_an_unreadable_version_does_not_stop_the_hub(
     assert [ep.get_name() for ep in hub.digital_endpoints] == ["new"]
 
 
+def test_switching_on_an_entry_with_a_broken_address_does_not_stop_the_hub(tmp_path,
+                                                                           monkeypatch):
+    # The version check builds the entry, so it meets other faults in it before the loader
+    # does. Those are the loader's to skip, as they were before the check existed.
+    now = [0]
+    monkeypatch.setattr(hub_module, "time", lambda: now[0])
+    monkeypatch.setattr(hub_module, "sleep", lambda s: now.__setitem__(0, now[0] + 1000))
+    hub = _hub(tmp_path, [_entry("new", NEW_MAC), _entry("bad", "aabbcczz", active=False)])
+    hub.listen_to_endpoint = lambda *a, **k: True
+    hub.submit_intent({"nodes": {"aabbcczz": {"active": True}}})
+
+    hub.run(timeout=3)
+
+    assert [ep.get_name() for ep in hub.digital_endpoints] == ["new"]
+
+
 def test_a_downlink_to_a_v2_node_is_refused_when_it_is_queued_or_plugged(tmp_path):
     hub = _hub(tmp_path, [_entry("old", OLD_MAC, protocol_version=2)])
     old = hub.digital_endpoints[0]
