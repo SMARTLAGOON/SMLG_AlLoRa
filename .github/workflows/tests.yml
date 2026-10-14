@@ -32,7 +32,9 @@ jobs:
           set -eu
           # The MicroPython compiler has to be the firmware's version, or its test skips.
           MP=$(grep -m1 -oE 'micropython_ref: *v[0-9.]+' .github/workflows/build-firmware.yml | grep -oE '[0-9.]+$')
-          python -m pip install pytest pytest-xdist cryptography "mpy-cross==$MP.*"
+          # The wizard's tests look for mpremote and esptool on the PATH; the serial examples import pyserial.
+          python -m pip install pytest pytest-xdist cryptography "mpy-cross==$MP.*" \
+            mpremote esptool pyserial
 
       - name: Run the suite
         run: python -m pytest -q -n 4
