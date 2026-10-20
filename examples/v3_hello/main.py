@@ -107,7 +107,25 @@ def build_data_sink(block, key_name="data_sink"):
     return MQTT_DataSink(**args)
 
 
-def build_datasource(block, key_name="datasource", queue_path=None, reserved=()):
+def source_block(config, where):
+    """The `data_source` block a config or roster entry names, or None. The old spelling
+    `datasource` is read as the same key forever, because field configs still say it, and a config
+    naming both stops the boot, since the two could disagree."""
+    block = config.get("data_source", None)
+    old = config.get("datasource", None)
+    if block is not None and old is not None:
+        raise SystemExit(
+            "{} names both data_source and datasource, which are the same key. Keep "
+            "data_source and remove datasource.".format(where))
+    return old if block is None else block
+
+
+def source_key(config):
+    """The spelling this config uses, so a message names the key the operator will search for."""
+    return "datasource" if "datasource" in config else "data_source"
+
+
+def build_datasource(block, key_name="data_source", queue_path=None, reserved=()):
     """The source this block names. A disk source without its own queue_path uses `queue_path`."""
     kind, args = _boundary_args(block, _SOURCE_KINDS, key_name, reserved=reserved)
     if kind in ("disk", "serial"):
@@ -288,23 +306,23 @@ def wire_downlink_sources(node):
 
     blocks = {}
     for entry in roster:
-        block = entry.get("datasource", None)
+        block = source_block(entry, "the Nodes.json entry for " + str(entry.get("name", "?")))
         if block:
-            blocks[label_for_config(entry)] = block
+            blocks[label_for_config(entry)] = (source_key(entry), block)
 
     wired = []
     for endpoint in node.digital_endpoints:
-        block = blocks.pop(endpoint.get_label(), None)
+        key, block = blocks.pop(endpoint.get_label(), (None, None))
         if not block:
             continue
         node.set_downlink_source(
-            endpoint, build_datasource(block, key_name="datasource for " + endpoint.get_name()))
+            endpoint, build_datasource(block, key_name=key + " for " + endpoint.get_name()))
         wired.append("{} serves downlink from {}".format(endpoint.get_name(), block["kind"]))
 
-    # An entry with a datasource that is not an endpoint: inactive, or its address was changed.
+    # An entry with a data_source that is not an endpoint: inactive, or its address was changed.
     for label in blocks:
         wired.append(
-            "WARNING: an entry labelled {} names a datasource but is not a registered endpoint, "
+            "WARNING: an entry labelled {} names a data_source but is not a registered endpoint, "
             "so nothing serves it. Check \"active\" and its address.".format(label))
     return wired
 
@@ -326,7 +344,8 @@ def build_node(config, config_file, connector):
     if node_type == "edge":
         from AlLoRa.Nodes.Edge import Edge
         # By default the Edge serves the files in its outbox folder; empty means nothing to send.
-        datasource = build_datasource(config.get("datasource", None) or {"kind": "disk"},
+        datasource = build_datasource(source_block(config, config_file) or {"kind": "disk"},
+                                      key_name=source_key(config),
                                       queue_path=config.get("queue_path", "Outbox"),
                                       reserved=("queue_path",))
 
@@ -345,10 +364,10 @@ def build_node(config, config_file, connector):
 
     if node_type == "hub":
         from AlLoRa.Nodes.Hub import Hub
-        if config.get("datasource", None):
+        if source_block(config, config_file):
             # A Hub's downlink differs per Edge, so the block goes in that Edge's Nodes.json entry.
             raise SystemExit(
-                "a Hub serves a different downlink to each Edge, so a datasource block belongs "
+                "a Hub serves a different downlink to each Edge, so a data_source block belongs "
                 "in that Edge's entry in Nodes.json, not at the top of this file.")
         sink_block = config.get("data_sink", None)
         return Hub(connector, config_file=config_file, nodes_file="Nodes.json",

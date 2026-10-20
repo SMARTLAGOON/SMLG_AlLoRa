@@ -19,7 +19,7 @@ Pair it with any Hub in this folder tree: the `open/hub` pair is the one it was 
 ## The block
 
 ```json
-"datasource": { "kind": "serial", "baudrate": 9600, "tx": 43, "rx": 44 }
+"data_source": { "kind": "serial", "baudrate": 9600, "tx": 43, "rx": 44 }
 ```
 
 Those three keys are the cable. Everything else has a default worth leaving alone until it is

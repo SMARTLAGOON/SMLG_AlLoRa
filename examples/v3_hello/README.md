@@ -44,9 +44,12 @@ you had before they existed: an Edge serves the folder at `queue_path`, and a Hu
 arrives under `result_path`.
 
 ```json
-"data_sink":  { "kind": "mqtt", "host": "10.0.0.4", "topic_prefix": "albufera" },
-"datasource": { "kind": "mqtt", "topics": ["sensors/#"] }
+"data_sink":   { "kind": "mqtt", "host": "10.0.0.4", "topic_prefix": "albufera" },
+"data_source": { "kind": "mqtt", "topics": ["sensors/#"] }
 ```
+
+A config written before 3.0 may spell the source key `datasource`. It is still read as the same
+key, and a config that names both stops the boot.
 
 A sink's `kind` is `disk`, `mqtt` or `http`; a source's is `disk`, `mqtt` or `serial`. Every other key
 inside the block is passed straight to that class, so what you leave out is whatever the class
@@ -71,7 +74,7 @@ The `serial` source is the other direction: a producer beside the board, feeding
 over a UART while the board keeps the protocol and the radio.
 
 ```json
-"datasource": { "kind": "serial", "baudrate": 9600, "tx": 43, "rx": 44 }
+"data_source": { "kind": "serial", "baudrate": 9600, "tx": 43, "rx": 44 }
 ```
 
 It is the disk outbox with something else filling it, so it takes every `disk` key as well and
@@ -86,7 +89,7 @@ whose `urequests` build takes no `timeout`, set `"timeout": null`.
 
 Two rules worth knowing before you write one:
 
-- **A Hub serves a different downlink to each Edge**, so its `datasource` block goes in that
+- **A Hub serves a different downlink to each Edge**, so its `data_source` block goes in that
   Edge's entry in `Nodes.json`, not at the top of the Hub's own config. A disk block there
   carries its own `queue_path`, because there is no outer key for it to fall back on.
 - **A node holding a control root cannot name a `data_sink`.** Its sink slot is the verify gate

@@ -11,7 +11,7 @@
     "board": "t3s3",
     "log_file": "/sd/logs/log.log"
   },
-  "datasource": {
+  "data_source": {
     "kind": "serial",
     "baudrate": 9600,
     "tx": 43,

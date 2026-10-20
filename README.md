@@ -544,7 +544,7 @@ they use.
 - `connector`: the radio settings, read by the Connector.
 
 The [one program](examples/v3_hello/main.py) in `examples/v3_hello` also reads `node`, the radio
-`driver`, and the `datasource` and `data_sink` blocks from this file, so an Edge and a Hub differ by
+`driver`, and the `data_source` and `data_sink` blocks from this file, so an Edge and a Hub differ by
 one line of JSON. Its [README](examples/v3_hello) lists them.
 
 </details>

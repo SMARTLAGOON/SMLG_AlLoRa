@@ -113,7 +113,7 @@ def test_naming_the_disk_source_explicitly_still_uses_the_top_level_queue_path(
     """`queue_path` stays the single home for the outbox folder: the block selects the class and
     the existing key says where it reads, so there is never a second place to look."""
     node = _build(tmp_path, monkeypatch,
-                  _config("edge", queue_path="Queue", datasource={"kind": "disk"}))
+                  _config("edge", queue_path="Queue", data_source={"kind": "disk"}))
     assert isinstance(node.datasource, Disk_DataSource)
     assert node.datasource.queue_path == "Queue"
 
@@ -124,7 +124,7 @@ def test_an_edge_can_be_fed_over_a_cable_by_naming_it(tmp_path, monkeypatch):
     composition and nothing implemented."""
     node = _build(tmp_path, monkeypatch,
                   _config("edge", queue_path="/sd/Outbox",
-                          datasource={"kind": "serial", "baudrate": 9600, "tx": 43, "rx": 44}))
+                          data_source={"kind": "serial", "baudrate": 9600, "tx": 43, "rx": 44}))
     assert isinstance(node.datasource, Serial_DataSource)
     assert node.datasource.baudrate == 9600
     assert (node.datasource.tx, node.datasource.rx) == (43, 44)
@@ -134,7 +134,7 @@ def test_a_serial_source_reads_the_same_outbox_key_as_a_disk_one(tmp_path, monke
     """It is the disk queue with a producer on the far end of a cable, so `queue_path` stays
     the one place the outbox folder is written."""
     node = _build(tmp_path, monkeypatch,
-                  _config("edge", queue_path="/sd/Outbox", datasource={"kind": "serial"}))
+                  _config("edge", queue_path="/sd/Outbox", data_source={"kind": "serial"}))
     assert node.datasource.queue_path == "/sd/Outbox"
     assert isinstance(node.datasource, Disk_DataSource)   # order and durability come with it
 
@@ -144,7 +144,70 @@ def test_a_mistyped_serial_key_stops_the_boot(tmp_path, monkeypatch):
     # talking at 115200: provisioned, silent, and with nothing to say about why.
     with pytest.raises(SystemExit):
         _build(tmp_path, monkeypatch,
+               _config("edge", data_source={"kind": "serial", "baud": 115200}))
+
+
+# --- the key is data_source, and the old spelling is read forever --------------------------
+
+def test_the_source_key_is_spelled_like_the_sink_key(tmp_path, monkeypatch):
+    node = _build(tmp_path, monkeypatch,
+                  _config("edge", queue_path="/sd/Outbox",
+                          data_source={"kind": "serial", "baudrate": 9600}))
+    assert isinstance(node.datasource, Serial_DataSource)
+
+
+def test_the_old_spelling_still_names_the_source(tmp_path, monkeypatch):
+    """The gnss-rig's field config says `datasource`, and so may any student copy. A key that
+    stops being read is a board that boots on the wrong source with nothing said."""
+    node = _build(tmp_path, monkeypatch,
+                  _config("edge", queue_path="/sd/Outbox",
+                          datasource={"kind": "serial", "baudrate": 9600}))
+    assert isinstance(node.datasource, Serial_DataSource)
+
+
+def test_a_mistake_in_the_old_spelling_is_reported_under_the_name_the_file_uses(
+        tmp_path, monkeypatch):
+    """The operator searches the file for the key the message names, so it must be theirs."""
+    with pytest.raises(SystemExit) as excinfo:
+        _build(tmp_path, monkeypatch,
                _config("edge", datasource={"kind": "serial", "baud": 115200}))
+    assert str(excinfo.value).startswith("datasource names 'baud'")
+
+
+def test_a_roster_entry_in_the_old_spelling_is_reported_under_that_name(tmp_path, monkeypatch):
+    nodes = [_entry("A", "aaaaaaaa", datasource={"kind": "disk", "queue_pth": "downlink/A"})]
+    node = _build(tmp_path, monkeypatch, _config("hub"), nodes=nodes)
+    with pytest.raises(SystemExit) as excinfo:
+        generic.wire_downlink_sources(node)
+    assert str(excinfo.value).startswith("datasource for A names 'queue_pth'")
+
+
+@pytest.mark.parametrize("node_type", ["edge", "hub"])
+def test_a_config_naming_both_spellings_stops_and_says_which_to_keep(
+        tmp_path, monkeypatch, node_type):
+    with pytest.raises(SystemExit) as excinfo:
+        _build(tmp_path, monkeypatch,
+               _config(node_type, data_source={"kind": "disk"}, datasource={"kind": "disk"}),
+               nodes=[])
+    message = str(excinfo.value)
+    assert "data_source" in message and "datasource" in message
+    assert "Keep data_source" in message
+
+
+def test_a_roster_entry_in_the_old_spelling_still_gets_its_downlink(tmp_path, monkeypatch):
+    nodes = [_entry("A", "aaaaaaaa", datasource={"kind": "disk", "queue_path": "downlink/A"})]
+    node = _build(tmp_path, monkeypatch, _config("hub"), nodes=nodes)
+    generic.wire_downlink_sources(node)
+    assert node._downlink[node.digital_endpoints[0].session_id].queue_path == "downlink/A"
+
+
+def test_a_roster_entry_naming_both_spellings_stops_the_boot(tmp_path, monkeypatch):
+    nodes = [_entry("A", "aaaaaaaa", datasource={"kind": "disk"},
+                    data_source={"kind": "disk"})]
+    node = _build(tmp_path, monkeypatch, _config("hub"), nodes=nodes)
+    with pytest.raises(SystemExit) as excinfo:
+        generic.wire_downlink_sources(node)
+    assert "Keep data_source" in str(excinfo.value)
 
 
 # --- the config can now select the other boundary ----------------------------------------
@@ -202,7 +265,7 @@ def test_keys_left_out_of_a_block_keep_the_classs_own_defaults(tmp_path, monkeyp
 
 def test_an_edge_can_serve_from_a_broker_instead_of_a_folder(tmp_path, monkeypatch):
     node = _build(tmp_path, monkeypatch,
-                  _config("edge", datasource={"kind": "mqtt", "topics": ["sensors/#"]}))
+                  _config("edge", data_source={"kind": "mqtt", "topics": ["sensors/#"]}))
     assert isinstance(node.datasource, MQTT_DataSource)
     # JSON has no tuples and the source keeps one.
     assert node.datasource.topics == ("sensors/#",)
@@ -293,14 +356,15 @@ def _entry(name, mac, **extra):
     return entry
 
 
-def test_a_datasource_at_the_top_of_a_hub_config_is_redirected_not_refused(
-        tmp_path, monkeypatch):
+@pytest.mark.parametrize("key", ["data_source", "datasource"])
+def test_a_data_source_at_the_top_of_a_hub_config_is_redirected_not_refused(
+        tmp_path, monkeypatch, key):
     """A Hub serves a different downlink to each Edge, so one source at the top of its own file
     would say every Edge is served the same thing. The halt names the file to write instead,
     which is the difference between "you cannot" and "not here"."""
     with pytest.raises(SystemExit) as excinfo:
         _build(tmp_path, monkeypatch,
-               _config("hub", datasource={"kind": "mqtt"}), nodes=[])
+               _config("hub", **{key: {"kind": "mqtt"}}), nodes=[])
     message = str(excinfo.value)
     assert "Nodes.json" in message
 
@@ -308,7 +372,7 @@ def test_a_datasource_at_the_top_of_a_hub_config_is_redirected_not_refused(
 def test_each_endpoint_gets_the_downlink_source_its_roster_entry_names(tmp_path, monkeypatch):
     """The case that made the key Edge-by-Edge rather than Hub-wide: different Edges are sent
     different artifacts, and `Hub._downlink` has always been keyed by session id."""
-    nodes = [_entry("A", "aaaaaaaa", datasource={"kind": "disk", "queue_path": "downlink/A"}),
+    nodes = [_entry("A", "aaaaaaaa", data_source={"kind": "disk", "queue_path": "downlink/A"}),
              _entry("B", "bbbbbbbb")]
     node = _build(tmp_path, monkeypatch, _config("hub"), nodes=nodes)
     notes = generic.wire_downlink_sources(node)
@@ -330,7 +394,7 @@ def test_an_entry_naming_a_source_that_is_not_a_registered_endpoint_is_reported(
     nothing."""
     nodes = [_entry("A", "aaaaaaaa"),
              _entry("Ghost", "cccccccc", active=False,
-                    datasource={"kind": "disk", "queue_path": "downlink/G"})]
+                    data_source={"kind": "disk", "queue_path": "downlink/G"})]
     node = _build(tmp_path, monkeypatch, _config("hub"), nodes=nodes)
     notes = generic.wire_downlink_sources(node)
     assert any("WARNING" in note and "cccccccc" in note for note in notes)
@@ -342,7 +406,7 @@ def test_a_roster_entry_carrying_a_boundary_block_survives_the_hubs_write_back(
     keeps keys the endpoint does not model. This is that guarantee, now load-bearing for a key
     that did not exist when it was written."""
     block = {"kind": "disk", "queue_path": "downlink/A"}
-    nodes = [_entry("A", "aaaaaaaa", datasource=block)]
+    nodes = [_entry("A", "aaaaaaaa", data_source=block)]
     node = _build(tmp_path, monkeypatch, _config("hub"), nodes=nodes)
 
     endpoint = node.digital_endpoints[0]
@@ -354,7 +418,7 @@ def test_a_roster_entry_carrying_a_boundary_block_survives_the_hubs_write_back(
     # The write-back really fired, so the survival below is a fact about the overlay and not
     # about a file nobody touched.
     assert written[0]["connector"]["sf"] == endpoint.sf
-    assert written[0]["datasource"] == block
+    assert written[0]["data_source"] == block
 
 
 # --- the library still knows none of this ------------------------------------------------
@@ -372,4 +436,5 @@ def test_no_boundary_dispatch_leaked_into_the_library():
             with open(os.path.join(folder, name)) as f:
                 body = f.read()
             assert '"data_sink"' not in body, os.path.join(folder, name)
+            assert '"data_source"' not in body, os.path.join(folder, name)
             assert '"datasource"' not in body, os.path.join(folder, name)
