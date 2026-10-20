@@ -47,19 +47,28 @@ class FakeWire:
             return 0, "", ""
         if "ALLORA_PROBE" in joined:
             return 0, "ALLORA_PROBE\n", ""
+        if "ALLORA_LAYOUT" in joined:
+            return 0, "ALLORA_LAYOUT:3\n", ""
         if "load_or_create_identity" in joined:
             return 0, "DEVID:{}\n".format(self.identities[port]), ""
-        if "fs cat" in joined or ("fs" in argv and "cat" in argv):
+        if "fs" in argv:
+            return self._filesystem(argv, port)
+        if "run" in argv:
+            return 0, self.verify_output.get(port, ""), ""
+        return 0, "", ""
+
+    def _filesystem(self, argv, port):
+        if "cat" in argv:
             name = argv[-1]
             have = self.existing.get(port, {})
             return (0, have[name], "") if name in have else (1, "", "no such file")
-        if "fs" in argv and "rm" in argv:
+        if "rm" in argv:
             name = argv[-1]
             if name in self.pushed.get(port, {}):
                 del self.pushed[port][name]
                 return 0, "", ""
             return 1, "", "OSError: [Errno 2] ENOENT"
-        if "fs" in argv and "cp" in argv:
+        if "cp" in argv:
             local, remote = argv[-2], argv[-1].lstrip(":")
             with open(local, "rb") as f:
                 raw = f.read()
@@ -71,9 +80,6 @@ class FakeWire:
             except UnicodeDecodeError:
                 content = raw
             self.pushed.setdefault(port, {})[remote] = content
-            return 0, "", ""
-        if "run" in argv:
-            return 0, self.verify_output.get(port, ""), ""
         return 0, "", ""
 
     def on(self, port, name):

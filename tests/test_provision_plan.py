@@ -76,6 +76,8 @@ class FakeWire:
             return 0, "", ""
         if "ALLORA_PROBE" in joined:
             return 0, "ALLORA_PROBE\n", ""
+        if "ALLORA_LAYOUT" in joined:
+            return 0, "ALLORA_LAYOUT:3\n", ""
         if "network" in joined:
             return 0, "MAC:{}\n".format(MACS[port]), ""
         if "load_or_create_identity" in joined:

@@ -144,6 +144,20 @@ def flash(board, fleet, result, firmware, label, allow_identity_loss=False,
     return True
 
 
+def refuse_an_older_library(board, result):
+    """Stop before writing anything to a board whose firmware predates the program we push.
+
+    The library is frozen into the firmware, and the generic program imports the 3.0 folders.
+    On an older build it would stop at boot with an ImportError, after every step reported ok.
+    """
+    if not board.has_current_library():
+        raise BoardError(
+            "the firmware on {} carries no AlLoRa 3.0 library (it is older, or has none), so "
+            "the program this wizard installs would stop at boot. Flash the 3.0 firmware build "
+            "first; nothing has been written to this board.".format(board.port))
+    result.step("library", "3.0, the program will boot on it")
+
+
 # The post-flash wait, in rounds. Short ones, because on this hardware the board coming back
 # by itself is the exception rather than the rule: the measured cost of a round is roughly its
 # probe count times `POST_FLASH_PROBE`, and every second of it is a second the operator spends
@@ -295,6 +309,7 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
     label = "edge"
     flash(board, fleet, result, firmware, label, allow_identity_loss=allow_identity_loss,
           expected_mac=mac, on_stall=on_stall)
+    refuse_an_older_library(board, result)
 
     config_path = _stage(fleet, "edge", CONFIG_NAME, json.dumps(config, indent=2) + "\n")
     board.write_remote(config_path, CONFIG_NAME)
@@ -393,6 +408,7 @@ def provision_hub(board, fleet, result, posture="secure", firmware=None, name=No
 
     flash(board, fleet, result, firmware, "hub", allow_identity_loss=allow_identity_loss,
           expected_mac=mac, on_stall=on_stall)
+    refuse_an_older_library(board, result)
 
     config_path = _stage(fleet, "hub", CONFIG_NAME, json.dumps(config, indent=2) + "\n")
     board.write_remote(config_path, CONFIG_NAME)

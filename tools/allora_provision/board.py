@@ -65,6 +65,14 @@ _IDENTITY_SNIPPET = (
 )
 
 
+# Imports a module that exists only in the 3.0 layout. The library is frozen into the firmware,
+# so this is the question "will the program we are about to push boot on this build".
+_LAYOUT_SNIPPET = (
+    "import AlLoRa.Data.Sources.Disk_DataSource\n"
+    "print('ALLORA_LAYOUT:3')\n"
+)
+
+
 class BoardError(RuntimeError):
     """Something the board or a tool said no to, phrased for whoever is at the bench."""
 
@@ -298,6 +306,18 @@ class Board:
             "the board at {} did not report a device_id. That usually means the firmware "
             "predates the secure path: AlLoRa is frozen into the image, so a library change "
             "only reaches the board through a fresh build.".format(self.port))
+
+    def has_current_library(self, timeout=60):
+        """Whether the AlLoRa this board carries has the 3.0 folders the pushed program imports."""
+        try:
+            out = self.exec(_LAYOUT_SNIPPET, timeout=timeout)
+        except BoardError as e:
+            # Only a failed import says the library is old. Anything else, such as a busy port,
+            # is passed on as it is: reflashing would not fix it.
+            if "ImportError" in str(e):
+                return False
+            raise
+        return "ALLORA_LAYOUT:3" in out
 
     # --- flashing -----------------------------------------------------------------------
 

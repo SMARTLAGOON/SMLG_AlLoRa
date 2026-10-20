@@ -62,6 +62,8 @@ class FakeWire:
             return 0, "", ""
         if "ALLORA_PROBE" in joined:
             return 0, "ALLORA_PROBE\n", ""
+        if "ALLORA_LAYOUT" in joined:
+            return 0, "ALLORA_LAYOUT:3\n", ""
         if "network" in joined:
             return 0, "MAC:{}\n".format(
                 "unknown" if port in self.unreadable else MACS[port]), ""
@@ -577,3 +579,32 @@ def test_declining_the_install_gives_the_command_rather_than_a_dead_end(tmp_path
     code, tail = _run(("n",), tmp_path / "fleet", FakeWire())
     assert code == 1
     assert "python3 tools/provision.py doctor --install" in tail
+
+
+class _OldLibraryWire(FakeWire):
+    """A board whose firmware froze the library before 3.0 moved it into its folders."""
+
+    def __init__(self, old_port, **kwargs):
+        FakeWire.__init__(self, **kwargs)
+        self.old_port = old_port
+
+    def run(self, argv, timeout=120, capture=True):
+        if self.old_port in argv and "ALLORA_LAYOUT" in " ".join(argv):
+            self.calls.append(list(argv))
+            return 1, "", "ImportError: no module named 'AlLoRa.Data'"
+        return FakeWire.run(self, argv, timeout=timeout, capture=capture)
+
+
+@pytest.mark.parametrize("old_port", [EDGE_PORT, HUB_PORT])
+def test_a_board_on_firmware_older_than_the_program_gets_nothing_written(
+        tmp_path, monkeypatch, old_port):
+    """The program imports the 3.0 folders, and the library is frozen into the firmware. Pushed
+    onto an older build it stops at boot with an ImportError, after every step said ok."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    wire = _OldLibraryWire(old_port)
+    code, tail = _run(_ALL_DEFAULTS, tmp_path / "fleet", wire)
+
+    assert code != 0
+    assert "firmware" in tail and "3.0" in tail
+    assert wire.on(old_port, "main.py") is None
+    assert wire.on(old_port, "AlLoRa.json") is None

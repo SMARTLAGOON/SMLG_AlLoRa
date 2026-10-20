@@ -102,6 +102,29 @@ def test_a_busy_port_is_reported_as_a_busy_port(monkeypatch):
     assert "holding the port" in str(excinfo.value)
 
 
+# --- the library the firmware carries ----------------------------------------------------
+
+def test_the_layout_probe_names_a_module_the_library_really_has():
+    """Moved without the probe, the check would refuse every board, current ones included."""
+    import importlib
+    from tools.allora_provision.board import _LAYOUT_SNIPPET
+    module = _LAYOUT_SNIPPET.split("\n")[0].split()[1]
+    importlib.import_module(module)
+
+
+def test_a_board_whose_import_fails_does_not_have_the_current_library():
+    runner = FakeRunner(default=(1, "", "ImportError: no module named 'AlLoRa.Data'"))
+    assert _board(runner).has_current_library() is False
+
+
+def test_a_board_that_fails_for_another_reason_is_not_told_to_reflash():
+    """A busy port is not old firmware, and reflashing would not fix it."""
+    runner = FakeRunner(default=(1, "", "could not enter raw repl"))
+    with pytest.raises(BoardError) as excinfo:
+        _board(runner).has_current_library()
+    assert "raw repl" in str(excinfo.value)
+
+
 # --- identity ----------------------------------------------------------------------------
 
 def test_the_identity_is_made_on_the_board_by_the_library_itself():
