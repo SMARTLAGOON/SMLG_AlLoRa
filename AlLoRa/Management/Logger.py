@@ -75,7 +75,7 @@ class Handler():
             .replace("%(time)s", "%s") \
             .replace("%(name)s", "%s") \
             .replace("%(fnname)s", "%s") \
-            + "\n" if fmt[-1] != '\n' else ''
+            + ("\n" if fmt[-1] != '\n' else '')
 
     def _msg(self, *args, level, name, fnname):
         if level < self.level:
