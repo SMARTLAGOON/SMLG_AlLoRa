@@ -343,17 +343,24 @@ class Board:
 
     # --- running ------------------------------------------------------------------------
 
-    def soft_reset(self, timeout=30):
-        """Restart the board into the program that was just pushed.
+    def start_program(self, timeout=30):
+        """Hard-reset the board so it boots into `main.py` and is left running it.
 
-        A soft reset rather than a hard one, so the native-USB port does not re-enumerate and
-        the board keeps the name the wizard has been addressing it by. Best-effort by nature:
-        the board goes away in the middle of the command, so the return code says little, and
-        what matters is that the REPL comes back.
+        The last thing a command does to a board. A soft reset issued through `mpremote exec`
+        comes back to the REPL without running `main.py`, because it is issued from mpremote's
+        raw REPL, and every later `mpremote` call stops whatever is running. Checked on a T3-S3 on 2026-10-20: the
+        port keeps its name across this reset. Nothing is asked of the board afterwards,
+        because asking would stop the program again.
+
+        False rather than an exception when it does not take, a timeout included: by now the
+        board's files are written, so a reset that failed is a tap on RESET, and the boards
+        after this one still have to be started.
         """
-        self._mpremote(["exec", "import machine; machine.soft_reset()"], timeout=timeout)
-        self._sleep(2)
-        return self.wait_for_repl(attempts=5, delay=1.0)
+        try:
+            code, _, _ = self._mpremote(["reset"], timeout=timeout)
+        except BoardError:
+            return False
+        return code == 0
 
     def run_script(self, local_path, timeout=300):
         """Run a local script on the board and return everything it printed.

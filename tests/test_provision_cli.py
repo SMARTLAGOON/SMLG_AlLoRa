@@ -143,6 +143,37 @@ def test_verify_drives_the_radio_the_boards_were_provisioned_with(tmp_path):
     assert "SX127x_connector" not in staged.read_text()
 
 
+def test_verify_on_a_mixed_pair_drives_each_radio_and_warns_about_neither(tmp_path, capsys):
+    """Found on the bench, 2026-10-20, through `setup`; `verify` had the same fault. The flag's
+    default was read as something the operator said, so a pair exactly as recorded was warned
+    about on every run."""
+    wire = FakeWire()
+    fleet_dir = tmp_path / "fleet"
+    assert _json_run(["edge", "--port", EDGE_PORT, "--radio", "sx1262"], wire, fleet_dir)[0] == 0
+    assert _json_run(["hub", "--port", HUB_PORT], wire, fleet_dir)[0] == 0
+    capsys.readouterr()
+
+    _, tail = _run(["verify", "--edge-port", EDGE_PORT, "--hub-port", HUB_PORT], wire, fleet_dir)
+
+    said = capsys.readouterr().out + tail
+    assert "registered as" not in said, said
+    staged = fleet_dir / "staging" / "verify"
+    assert "SX1262_connector" in (staged / "verify_edge.py").read_text()
+    assert "SX127x_connector" in (staged / "verify_hub.py").read_text()
+
+
+def test_a_session_id_that_does_not_fit_in_a_byte_is_refused_before_the_board_is_written(
+        tmp_path):
+    """It goes into a 1-byte header. The plan path checked the range; this one wrote 300 into
+    the config and the roster, and the node failed at its first packet."""
+    wire = FakeWire()
+    code, edge = _json_run(["edge", "--port", EDGE_PORT, "--posture", "open",
+                            "--session-id", "300"], wire, tmp_path / "fleet")
+    assert code == 1
+    assert "255" in edge["error"]
+    assert wire.on(EDGE_PORT, "AlLoRa.json") is None
+
+
 # --- the same boards, provisioned twice ---------------------------------------------------
 
 def test_reflashing_a_board_does_not_leave_the_hub_polling_a_phantom(tmp_path):
@@ -473,6 +504,45 @@ def test_a_clean_run_passes_every_check(tmp_path):
         "posture", "sealed", "transfer", "bytes intact"}
 
 
+def test_each_command_leaves_the_board_it_touched_running_its_program(tmp_path):
+    """A board at the REPL prompt is a node that does nothing until somebody presses RESET.
+
+    Found on the bench on 2026-10-20: `mpremote exec machine.soft_reset()` comes back to the
+    prompt without running `main.py`, so every "restart" this tool reported was a board
+    standing still. `mpremote reset` boots into the program.
+    """
+    def last_on(wire, port):
+        return [c for c in wire.calls if port in c][-1]
+
+    wire = FakeWire()
+    _run(["edge", "--port", EDGE_PORT], wire, tmp_path / "fleet")
+    assert last_on(wire, EDGE_PORT)[-1] == "reset"
+    _run(["hub", "--port", HUB_PORT], wire, tmp_path / "fleet")
+    assert last_on(wire, HUB_PORT)[-1] == "reset"
+    wire.verify_output = {EDGE_PORT: _EDGE_SIDE, HUB_PORT: _PASSING}
+    _run(["verify", "--edge-port", EDGE_PORT, "--hub-port", HUB_PORT, "--window", "5"],
+         wire, tmp_path / "fleet")
+    assert last_on(wire, EDGE_PORT)[-1] == "reset"
+    assert last_on(wire, HUB_PORT)[-1] == "reset"
+
+
+def test_the_proof_says_how_long_it_may_take_before_it_starts(tmp_path, capsys):
+    """The transfer runs for up to the whole window with nothing printed, and a first-time
+    operator watching a silent terminal took it for a hang."""
+    wire = FakeWire()
+    _run(["edge", "--port", EDGE_PORT], wire, tmp_path / "fleet")
+    _run(["hub", "--port", HUB_PORT], wire, tmp_path / "fleet")
+    wire.verify_output = {EDGE_PORT: _EDGE_SIDE, HUB_PORT: _PASSING}
+    capsys.readouterr()
+    code, _ = _run(
+        ["verify", "--edge-port", EDGE_PORT, "--hub-port", HUB_PORT, "--window", "125"],
+        wire, tmp_path / "fleet")
+    text = capsys.readouterr().out
+    assert code == 0, text
+    waiting = text.index("up to 3 minutes")
+    assert waiting < text.index("bytes intact")
+
+
 def test_a_transfer_that_delivered_the_wrong_bytes_is_not_a_pass(tmp_path):
     """A transfer that completed and delivered something else is not a transfer that worked."""
     wire = FakeWire()
@@ -564,6 +634,15 @@ def test_an_open_pair_is_addressed_by_the_session_id_both_ends_carry(tmp_path):
     assert len(roster) == 1
     assert "device_id" not in roster[0]
     assert roster[0]["session_id"] == 42
+
+
+def test_an_open_edge_with_no_mac_and_no_session_id_is_refused(tmp_path):
+    """Its address would come from the MAC, and nothing here could read one: the Hub would
+    poll sid 0 and the node would answer on something else."""
+    code, edge = _json_run(["edge", "--port", EDGE_PORT, "--posture", "open"], FakeWire(),
+                           tmp_path / "fleet")
+    assert code == 1
+    assert "--session-id" in edge["error"]
 
 
 def test_the_roster_the_wizard_wrote_boots_a_real_hub_in_either_posture(tmp_path):

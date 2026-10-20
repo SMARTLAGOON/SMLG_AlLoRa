@@ -18,6 +18,8 @@ and `verify_pair`, and if it ever grows its own copy of one of them, that is the
 """
 import io
 import json
+import shutil
+import subprocess
 
 import pytest
 
@@ -41,8 +43,9 @@ _PASSING_EDGE = "VERIFY:mode secure\n"
 class FakeWire:
     """Boards on the end of a pretend `mpremote`/`esptool`, told apart by their MAC."""
 
-    def __init__(self, ports=(EDGE_PORT, HUB_PORT), posture="secure"):
+    def __init__(self, ports=(EDGE_PORT, HUB_PORT), posture="secure", unreadable=()):
         self.ports = list(ports)
+        self.unreadable = set(unreadable)
         self.calls = []
         self.pushed = {}
         mode = "open" if posture == "open" else "secure"
@@ -60,7 +63,8 @@ class FakeWire:
         if "ALLORA_PROBE" in joined:
             return 0, "ALLORA_PROBE\n", ""
         if "network" in joined:
-            return 0, "MAC:{}\n".format(MACS[port]), ""
+            return 0, "MAC:{}\n".format(
+                "unknown" if port in self.unreadable else MACS[port]), ""
         if "load_or_create_identity" in joined:
             return 0, "DEVID:{}\n".format(DEVICE_IDS[port]), ""
         if "fs" in argv and "cat" in argv:
@@ -177,30 +181,87 @@ def test_a_single_board_is_half_a_deployment_and_says_so(tmp_path, monkeypatch):
     assert "needs two" in tail
 
 
-def test_the_open_posture_asks_for_the_number_both_ends_carry(tmp_path, monkeypatch):
-    """Open v3 is sid-addressed and there is no identity to derive an address from."""
+def test_the_open_posture_addresses_each_edge_by_its_mac_and_asks_no_number(
+        tmp_path, monkeypatch, capsys):
+    """An open node takes its sid from the low byte of its MAC, and the Hub derives the same one
+    from the MAC in its roster. A number typed by hand could only disagree with that."""
     _ports(monkeypatch, EDGE_PORT, HUB_PORT)
     wire = FakeWire(posture="open")
-    # posture=1 (open), edge, its hardware, the Hub's, session id 7, firmware, sf, freq,
-    # bandwidth, proceed
-    code, tail = _run(("1", "", "", "", "7", "", "", "", "", ""), tmp_path / "fleet", wire)
+    # posture=1 (open), edge, its hardware, the Hub's, firmware, sf, freq, bandwidth, proceed
+    code, tail = _run(("1",) + ("",) * 8, tmp_path / "fleet", wire)
 
-    assert code == 0, tail
-    assert json.loads(wire.on(EDGE_PORT, "AlLoRa.json"))["session_id"] == 7
-    assert json.loads(wire.on(HUB_PORT, "AlLoRa.json"))["session_id"] == 7
+    assert code == 0, capsys.readouterr().out + tail
+    assert "session_id" not in json.loads(wire.on(EDGE_PORT, "AlLoRa.json"))
+    assert "session_id" not in json.loads(wire.on(HUB_PORT, "AlLoRa.json"))
+    roster = json.loads(wire.on(HUB_PORT, "Nodes.json"))
+    assert [row["mac_address"] for row in roster] == [MACS[EDGE_PORT]]
+    assert "session_id" not in roster[0]
 
 
-def test_open_addressing_provisions_one_pair_and_says_why(tmp_path, monkeypatch, capsys):
-    """A silent cap would read as "it covered everything". This one is stated out loud."""
+def test_an_open_deployment_takes_several_edges_like_any_other(tmp_path, monkeypatch):
+    """Each Edge has a MAC of its own, so each has an address of its own."""
     _ports(monkeypatch, EDGE_PORT, HUB_PORT, THIRD_PORT)
     wire = FakeWire(ports=(EDGE_PORT, HUB_PORT, THIRD_PORT), posture="open")
-    # No "how many edges" question is asked at all in this posture.
-    code, tail = _run(("1", "", "", "", "", "1", "", "", "", "", ""), tmp_path / "fleet", wire)
+    # posture=open, 2 edges, edge 1, edge 2 (the third board, so the Hub is the one left),
+    # each one's hardware, the Hub's, firmware, sf, freq, bandwidth, proceed
+    code, tail = _run(("1", "2", "", "2") + ("",) * 8, tmp_path / "fleet", wire)
 
     assert code == 0, tail
-    said = capsys.readouterr().out
-    assert "one number shared by one pair" in said
-    assert len([e for e in _registry(tmp_path / "fleet") if e["role"] == "edge"]) == 1
+    roster = json.loads(wire.on(HUB_PORT, "Nodes.json"))
+    assert sorted(row["mac_address"] for row in roster) == sorted(
+        [MACS[EDGE_PORT], MACS[THIRD_PORT]])
+
+
+def test_flashing_is_offered_and_never_taken_by_pressing_enter(tmp_path, monkeypatch, capsys):
+    """A flash erases the board and its identity with it. Enter all the way keeps both."""
+    _images(monkeypatch, _image(tmp_path, "t3s3-sx127x"))
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    wire = FakeWire()
+    code, tail = _run(_ALL_DEFAULTS, tmp_path / "fleet", wire)
+
+    assert code == 0, capsys.readouterr().out + tail
+    assert wire.flashed() == []
+
+
+def test_choosing_to_flash_says_the_board_comes_back_as_a_new_node(tmp_path, monkeypatch,
+                                                                   capsys):
+    _images(monkeypatch, _image(tmp_path, "t3s3-sx127x"))
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    _run(("", "", "", "", "1", "", "", "", "n"), tmp_path / "fleet", FakeWire())
+    assert "new device_id" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+def test_a_fleet_git_would_commit_is_refused_before_the_first_question(tmp_path, monkeypatch,
+                                                                      capsys):
+    """Refused at the end, the operator loses every answer they gave to get there."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    code, tail = _run((), tmp_path / "fleet", FakeWire())
+
+    assert code == 1
+    assert "would commit" in capsys.readouterr().out + tail
+
+
+def test_a_board_whose_mac_cannot_be_read_is_refused_before_the_questions(tmp_path,
+                                                                         monkeypatch):
+    """A board is named by its MAC in the plan, so one without a MAC cannot be in a plan."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    code, tail = _run((), tmp_path / "fleet", FakeWire(unreadable=(HUB_PORT,)))
+
+    assert code == 1
+    assert "could not read the MAC" in tail
+    assert HUB_PORT in tail
+
+
+def test_a_third_board_with_no_mac_is_left_out_and_the_pair_goes_ahead(tmp_path, monkeypatch,
+                                                                       capsys):
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT, THIRD_PORT)
+    wire = FakeWire(ports=(EDGE_PORT, HUB_PORT, THIRD_PORT), unreadable=(THIRD_PORT,))
+    code, tail = _run(_ALL_DEFAULTS, tmp_path / "fleet", wire)
+
+    assert code == 0, capsys.readouterr().out + tail
+    assert wire.pushed.get(THIRD_PORT) is None
 
 
 def test_a_second_edge_is_registered_under_a_name_of_its_own(tmp_path, monkeypatch):
@@ -270,6 +331,117 @@ def test_a_mixed_pair_is_provisioned_with_each_end_on_its_own_radio(tmp_path, mo
     assert registry["edge"]["radio"] == "sx1262"
     assert registry["edge"]["board"] == "t3s3-epaper", "the name the operator gave, not the row"
     assert registry["hub"]["radio"] == "sx127x"
+
+
+def test_the_proof_on_a_mixed_pair_does_not_warn_that_the_hub_has_the_wrong_radio(
+        tmp_path, monkeypatch, capsys):
+    """Found on the bench, 2026-10-20: an SX1262 Edge and an SX127x Hub, transfer passed.
+
+    The proof was handed the Edge's radio as what both ends were expected to be, so it warned
+    that the Hub "was told sx1262". The warning is meant for boards that differ from their
+    record, and on a mixed pair it fired every time for a Hub that was exactly as recorded.
+    """
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    wire = FakeWire()
+    code, tail = _run(("", "", "4", "1", "", "", "", "", ""), tmp_path / "fleet", wire)
+
+    said = capsys.readouterr().out + tail
+    assert code == 0, said
+    assert "registered as" not in said, said
+
+
+def test_every_board_is_left_running_its_program_when_setup_ends(tmp_path, monkeypatch, capsys):
+    """Found on the bench, 2026-10-20: after "Done", both boards sat at the REPL prompt.
+
+    A soft reset issued through `mpremote exec` comes back to the REPL without running
+    `main.py`, and the proof runs under `mpremote run`, which leaves the board at the prompt
+    too. A hard reset is the one that boots into the program, so it is the last thing each
+    board is sent.
+    """
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    wire = FakeWire()
+    code, tail = _run(_ALL_DEFAULTS, tmp_path / "fleet", wire)
+
+    assert code == 0, capsys.readouterr().out + tail
+    for port in (EDGE_PORT, HUB_PORT):
+        last = [c for c in wire.calls if port in c][-1]
+        assert last[-1] == "reset", (port, last)
+
+
+class _ResetHangs(FakeWire):
+    """A board whose `mpremote reset` runs out its timeout, as when a monitor holds the port."""
+
+    def __init__(self, hanging, **kwargs):
+        FakeWire.__init__(self, **kwargs)
+        self.hanging = hanging
+
+    def run(self, argv, timeout=120, capture=True):
+        if self.hanging in argv and argv[-1] == "reset":
+            self.calls.append(list(argv))
+            from tools.allora_provision.board import BoardError
+            raise BoardError("mpremote did not finish within {}s".format(timeout))
+        return FakeWire.run(self, argv, timeout=timeout, capture=capture)
+
+
+def test_one_board_that_will_not_reset_does_not_keep_the_others_from_starting(
+        tmp_path, monkeypatch, capsys):
+    """Every phase finished. A slow reset on the first board is a tap on RESET for that board,
+    not a failed run and a Hub left at the prompt."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    wire = _ResetHangs(EDGE_PORT)
+    code, tail = _run(_ALL_DEFAULTS, tmp_path / "fleet", wire)
+
+    said = capsys.readouterr().out + tail
+    assert code == 0, said
+    assert [c for c in wire.calls if HUB_PORT in c][-1][-1] == "reset"
+    assert "Tap RESET" in said
+
+
+class _WriteFails(FakeWire):
+    """A board that refuses to take a file, which ends the phase that was writing to it."""
+
+    def __init__(self, failing, **kwargs):
+        FakeWire.__init__(self, **kwargs)
+        self.failing = failing
+
+    def run(self, argv, timeout=120, capture=True):
+        if self.failing in argv and "cp" in argv:
+            self.calls.append(list(argv))
+            return 1, "", "OSError: 28"
+        return FakeWire.run(self, argv, timeout=timeout, capture=capture)
+
+
+def test_a_run_that_stops_halfway_still_starts_the_boards_it_finished(tmp_path, monkeypatch):
+    """Edge 1 is provisioned and Edge 2 fails. Edge 1 is a finished node, and it was left at the
+    prompt because the reset only ran at the end of a run that succeeded."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT, THIRD_PORT)
+    wire = _WriteFails(THIRD_PORT, ports=(EDGE_PORT, HUB_PORT, THIRD_PORT))
+    # posture, 2 edges, edge 1, edge 2 (the third board), each one's hardware, the Hub's,
+    # firmware, sf, freq, bandwidth, proceed
+    code, tail = _run(("", "2", "", "2") + ("",) * 8, tmp_path / "fleet", wire)
+
+    assert code == 1, tail
+    assert [c for c in wire.calls if EDGE_PORT in c][-1][-1] == "reset"
+    assert all(c[-1] != "reset" for c in wire.calls if HUB_PORT in c), \
+        "the Hub was never provisioned, so it is not restarted into whatever it held"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+def test_a_new_deployment_folder_git_would_commit_is_refused_before_the_questions(
+        tmp_path, monkeypatch, capsys):
+    """The first folder was checked before the first question; the one named for a new
+    deployment was checked only after "Proceed?", and every answer was lost."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("fleet/\n")
+    (tmp_path / "fleet").mkdir()
+    (tmp_path / "fleet" / "fleet.json").write_text(json.dumps(
+        [{"name": "S", "role": "edge", "posture": "secure", "device_id": "aa" * 32}]))
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    # a new deployment, in the folder offered
+    code, tail = _run(("2", ""), tmp_path / "fleet", FakeWire())
+
+    assert code == 1, tail
+    assert "would commit" in capsys.readouterr().out + tail
 
 
 def test_a_board_with_no_build_for_its_target_keeps_what_it_runs(tmp_path, monkeypatch, capsys):

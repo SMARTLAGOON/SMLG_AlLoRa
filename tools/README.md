@@ -1,4 +1,4 @@
-# `tools/` — the provisioning wizard
+# `tools/`: the provisioning wizard
 
 Host-side code. CPython only, never frozen into firmware: the manifest freezes `AlLoRa/`, so
 nothing here reaches a board.
@@ -295,13 +295,13 @@ what it kept:
 [2/3] Hub roster on /dev/cu.usbmodem101
       kept        S on sf 9, freq 869, bandwidth 125, as this Hub has it
       Nodes.json  1 row(s) written, 1 left as the Hub has them
-      restart     polling the roster it was just given
 ```
 
-The restart is what makes the new row take effect: a Hub registers its endpoints once, from the
-file it read at boot. It also closes the read-modify-write window, because `mpremote` interrupts
-the running program to reach the filesystem, so the Hub is stopped from the read through to the
-write and cannot settle a trial into the copy being replaced.
+A Hub registers its endpoints once, from the file it read at boot, so the new row takes effect
+when the Hub restarts. The run ends with a reset of every board it finished, which is what
+starts `main.py` again, so the Hub is polling the new roster when the command returns. Until
+then the Hub is stopped: `mpremote` interrupts the running program to reach the filesystem, so
+it cannot settle a trial into the copy being replaced between the read and the write.
 
 **Three files, three lifetimes, and no conflict between them:** the plan (your machine,
 *intent*), `fleet.json` (your machine, *record*), `Nodes.json` (on the Hub board, *live*, and

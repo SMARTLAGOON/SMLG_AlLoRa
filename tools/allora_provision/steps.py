@@ -236,6 +236,37 @@ def _clear_stale_root(board, result):
     return False
 
 
+def _open_address(session_id, mac):
+    """The 1-byte address an open node answers on: the number it was given, or its MAC's last."""
+    if session_id is not None:
+        return session_id
+    return int(mac[-2:], 16) if mac else None
+
+
+def _refuse_taken_open_address(fleet, config, mac):
+    """Stop before an open Edge takes an address another open Edge in this fleet holds.
+
+    Checked against the fleet rather than only against the run, because the clash that matters
+    is usually with a node provisioned last month: the Hub's roster would carry two rows on one
+    address and poll them as one node. The node's own earlier record, found by its name or its
+    MAC, is the slot it is about to update, not a clash.
+    """
+    address = _open_address(config.get("session_id"), mac)
+    for entry in fleet.entries():
+        if entry.get("role") != "edge" or entry.get("device_id"):
+            continue
+        if entry.get("name") == config["name"] or (mac and entry.get("mac") == mac):
+            continue
+        if _open_address(entry.get("session_id"), entry.get("mac")) == address:
+            raise BoardError(
+                "this Edge would answer on address {:02x}, which '{}' in {} already answers on. "
+                "An open node's address is the last byte of its MAC unless --session-id says "
+                "otherwise, so the Hub could not tell the two apart. Use the secure posture, "
+                "where each node is addressed by its own identity, or give one of them a "
+                "different --session-id.".format(address, entry.get("name", "?"),
+                                                 fleet.registry_path))
+
+
 def provision_edge(board, fleet, result, posture="secure", firmware=None, name=None,
                    rf=None, session_id=None, radio="sx127x", allow_identity_loss=False,
                    on_stall=None, board_model=DEFAULT_BOARD):
@@ -248,13 +279,23 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
             "here.".format(board.port))
     mac = board.mac()
     result.step("port", "{} (MAC {})".format(board.port, mac or "unknown"))
+    if posture == "open" and session_id is None and not mac:
+        raise BoardError(
+            "an open node is addressed by the last byte of its MAC, and the MAC of the board on "
+            "{} could not be read. Pass --session-id with a number from 0 to 255, and the same "
+            "one to the Hub, or use the secure posture.".format(board.port))
+
+    # Built before the flash: a config the builder refuses is refused while the board still
+    # holds what it held, rather than after the erase.
+    config = build_lora_json(role="edge", posture=posture, driver=radio, name=name, rf=rf,
+                             session_id=session_id, board=board_model)
+    if posture == "open":
+        _refuse_taken_open_address(fleet, config, mac)
 
     label = "edge"
     flash(board, fleet, result, firmware, label, allow_identity_loss=allow_identity_loss,
           expected_mac=mac, on_stall=on_stall)
 
-    config = build_lora_json(role="edge", posture=posture, driver=radio, name=name, rf=rf,
-                             session_id=session_id, board=board_model)
     config_path = _stage(fleet, "edge", CONFIG_NAME, json.dumps(config, indent=2) + "\n")
     board.write_remote(config_path, CONFIG_NAME)
     result.step(CONFIG_NAME, "{} posture, {} radio on a {}".format(posture, radio,
@@ -304,9 +345,10 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
     board.write_remote(payload_path, queue_path + "/" + PAYLOAD_NAME)
     result.step(PAYLOAD_NAME, "{} bytes queued in {}".format(PAYLOAD_LEN, queue_path))
 
-    # An open node is addressed by the session id its config carries, a secure one by the
-    # fingerprint the board proved it holds. Registering an open node with an empty device_id
-    # would be neither: the Hub reads it as a zero-length identity and raises at boot.
+    # An open node is addressed by its MAC, or by the session id its config carries when one was
+    # given; a secure one by the fingerprint the board proved it holds. Registering an open node
+    # with an empty device_id would be neither: the Hub reads it as a zero-length identity and
+    # raises at boot.
     entry = fleet.register(name=config["name"], role="edge",
                            device_id=device_id, posture=posture,
                            session_id=config.get("session_id"),
@@ -317,14 +359,8 @@ def provision_edge(board, fleet, result, posture="secure", firmware=None, name=N
                                                 "tx_power")})
     result.step("registered", "{} in {}".format(entry["name"], fleet.registry_path))
 
-    # Restart into what was just pushed. Without this the board is provisioned on disk and
-    # still running whatever it ran before, which is the difference between a node that is set
-    # up and a node that is working.
-    if board.soft_reset():
-        result.step("restart", "running the new main.py")
-    else:
-        result.warn("the board did not answer after the restart. Tap RESET once; the files are "
-                    "already on it, so nothing needs re-running.")
+    # Not restarted here. The board is still at the REPL, and the caller's last step is the
+    # hard reset that starts `main.py` (`start_programs`), after anything else it asks of it.
     result.set(role="edge", port=board.port, posture=posture, device_id=device_id,
                fleet=fleet.path, config=config)
     return result
@@ -351,12 +387,13 @@ def provision_hub(board, fleet, result, posture="secure", firmware=None, name=No
             "needs nothing about the Hub, so registration only runs one way: provision the "
             "Edge first.".format(fleet.registry_path))
 
-    flash(board, fleet, result, firmware, "hub", allow_identity_loss=allow_identity_loss,
-          expected_mac=mac, on_stall=on_stall)
-
     config = build_lora_json(role="hub", posture=posture, driver=radio, name=name, rf=rf,
                             session_id=session_id, on_site_root=on_site_root,
                             board=board_model)
+
+    flash(board, fleet, result, firmware, "hub", allow_identity_loss=allow_identity_loss,
+          expected_mac=mac, on_stall=on_stall)
+
     config_path = _stage(fleet, "hub", CONFIG_NAME, json.dumps(config, indent=2) + "\n")
     board.write_remote(config_path, CONFIG_NAME)
     result.step(CONFIG_NAME, "{} posture, {} radio on a {}".format(posture, radio,
@@ -408,14 +445,7 @@ def provision_hub(board, fleet, result, posture="secure", firmware=None, name=No
                            on_notice=result.warn)
     result.step("registered", "{} in {}".format(entry["name"], fleet.registry_path))
 
-    # Restart into what was just pushed. Without this the board is provisioned on disk and
-    # still running whatever it ran before, which is the difference between a node that is set
-    # up and a node that is working.
-    if board.soft_reset():
-        result.step("restart", "running the new main.py")
-    else:
-        result.warn("the board did not answer after the restart. Tap RESET once; the files are "
-                    "already on it, so nothing needs re-running.")
+    # Not restarted here, for the reason given at the end of `provision_edge`.
     result.set(role="hub", port=board.port, posture=posture, device_id=device_id,
                on_site_root=on_site_root, edges=len(edges), fleet=fleet.path, config=config)
     return result
@@ -527,17 +557,11 @@ def update_hub_roster(board, fleet, result, names):
             "The rows above were not rewritten. This Hub edits its own roster when a node "
             "accepts a retune, so its copy is what those Edges are actually listening on, and "
             "the fleet registry is only what they were issued.")
-    # A Hub registers its endpoints once, from the file it reads at boot, so a roster written
-    # under a running Hub changes nothing until it restarts. The restart is also what closes
-    # the read-modify-write window: `mpremote` interrupts the running program to reach the
-    # filesystem, so the Hub is stopped from the read through to the write and cannot settle a
-    # trial into the copy being replaced.
-    if board.soft_reset():
-        result.step("restart", "polling the roster it was just given")
-    else:
-        result.warn("the Hub did not answer after the restart. The roster is already written, "
-                    "so tap RESET once and it will register from it; until then the Hub is "
-                    "still polling the roster it booted with.")
+    # A Hub registers its endpoints once, from the file it reads at boot, so the new roster
+    # takes effect at the caller's closing hard reset (`start_programs`). Until then the Hub is
+    # stopped: `mpremote` interrupted the running program to reach the filesystem, so it is
+    # stopped from the read through to the write and cannot settle a trial into the copy being
+    # replaced.
     result.set(role="hub", port=board.port, fleet=fleet.path,
                added=added, replaced=replaced,
                kept=[entry.get("name") for entry in kept], roster=roster)
@@ -557,7 +581,7 @@ def parse_verify_lines(text):
     return facts
 
 
-def verify_pair(edge_board, hub_board, fleet, result, posture="secure", radio="sx127x",
+def verify_pair(edge_board, hub_board, fleet, result, posture="secure", radio=None,
                 window=120):
     """Phase 3. Drive one real transfer and check what actually happened.
 
@@ -570,13 +594,12 @@ def verify_pair(edge_board, hub_board, fleet, result, posture="secure", radio="s
     listening while the other talks, and the Edge starts first so the Hub's first poll finds
     somebody there.
     """
-    # The radio each board was actually provisioned with, not the one this command was told.
-    # `allora verify` defaults its flag to sx127x, so verifying a pair provisioned as sx1262
-    # would drive the wrong driver on both boards and report a link failure. The registry is the
-    # record of what was written, so it answers instead, and the flag is the fallback for a pair
-    # this machine did not provision.
-    edge_radio = _registered_radio(fleet, "edge", radio, result)
-    hub_radio = _registered_radio(fleet, "hub", radio, result)
+    # The radio each board was actually provisioned with, not one radio for the pair. Driving
+    # the wrong driver reports a link failure, and a mixed pair needs a different one on each
+    # end. The registry is the record of what was written, so it answers; `radio` is what the
+    # operator said, if anything, and the fallback for a pair this machine did not provision.
+    edge_radio = _registered_radio(fleet, "edge", edge_board, radio, result)
+    hub_radio = _registered_radio(fleet, "hub", hub_board, radio, result)
 
     edge_script = _stage(fleet, "verify", "verify_edge.py",
                          render_template("verify_edge.py", radio=edge_radio, window=window))
@@ -601,6 +624,10 @@ def verify_pair(edge_board, hub_board, fleet, result, posture="secure", radio="s
         except BoardError as e:
             outputs[key] = (1, "", str(e))
 
+    minutes = -(-window // 60)
+    result.note("      sending a file from the Edge to the Hub over the radio. This can take "
+                "up to {} minute{}, with nothing printed until it ends.".format(
+                    minutes, "" if minutes == 1 else "s"))
     edge_thread = threading.Thread(target=_run, args=("edge", edge_board, edge_script))
     hub_thread = threading.Thread(target=_run, args=("hub", hub_board, hub_script))
     edge_thread.start()
@@ -659,25 +686,45 @@ def _registered_edge(fleet, role, board):
     return entries[-1] if entries else None
 
 
-def _registered_radio(fleet, role, fallback, result):
-    """The radio this role was provisioned with, per the fleet registry.
+def start_programs(boards, result):
+    """Leave each board running `main.py`: the last step of every command that touched one.
 
-    Falls back to what the caller asked for when the registry has no entry, which is the case
-    for a pair provisioned somewhere else. A disagreement is reported rather than resolved
-    silently: it means the boards in front of the operator are not the ones this fleet
-    describes, and that is worth knowing before a failed transfer is blamed on the antenna.
+    Until this ran, a command ended with its boards at the REPL prompt, which is a node that
+    does nothing until somebody presses RESET.
+    """
+    for board in boards:
+        if board.start_program():
+            result.step("running", "{} restarted into main.py".format(board.port))
+        else:
+            result.warn("{} did not take the reset. Tap RESET once to start it; the files are "
+                        "already on it.".format(board.port))
+
+
+def _registered_radio(fleet, role, board, asked, result):
+    """The radio the board in this role was provisioned with, per the fleet registry.
+
+    The entry on this board's port first, so a fleet of Edges on different radios answers for
+    the Edge actually being verified; then the role's latest entry. Falls back to what the
+    operator asked for, or sx127x, when the registry has none, which is the case for a pair
+    provisioned somewhere else.
+
+    A disagreement with what the operator said is reported rather than resolved silently: it
+    means the boards in front of them are not the ones this fleet describes, worth knowing
+    before a failed transfer is blamed on the antenna. Nothing said is not a disagreement, so a
+    flag left at no value never warns about a pair that is exactly as recorded.
     """
     try:
         entries = [e for e in fleet.entries() if e.get("role") == role and e.get("radio")]
     except Exception:
-        return fallback
-    if not entries:
-        return fallback
-    registered = entries[-1]["radio"]
-    if registered != fallback:
+        entries = []
+    on_port = [e for e in entries if e.get("port") == board.port]
+    if not (on_port or entries):
+        return asked or "sx127x"
+    registered = (on_port or entries)[-1]["radio"]
+    if asked and registered != asked:
         result.warn(
             "the {} is registered as {} and this run was told {}. Verifying on {}, which is "
-            "what it was provisioned with.".format(role, registered, fallback, registered))
+            "what it was provisioned with.".format(role, registered, asked, registered))
     return registered
 
 

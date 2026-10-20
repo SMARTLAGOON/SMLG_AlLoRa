@@ -15,7 +15,7 @@ from tools.allora_provision.fleet import Fleet
 from tools.allora_provision.node_config import BOARDS, DEFAULT_BOARD, DEFAULT_RF, POSTURES
 from tools.allora_provision.result import FAILED, OK, Result, SKIPPED
 from tools.allora_provision.steps import (
-    RADIOS, provision_edge, provision_hub, verify_pair)
+    RADIOS, provision_edge, provision_hub, start_programs, verify_pair)
 
 DEFAULT_FLEET = "allora-fleet"
 
@@ -38,7 +38,8 @@ def _add_common(parser):
 
 def _add_radio(parser):
     parser.add_argument("--radio", default="sx127x", choices=sorted(RADIOS),
-                        help="which connector the board's program uses (default: sx127x)")
+                        help="which connector the board's program uses (default: sx127x; for "
+                             "verify, what the fleet recorded for each board)")
     for field in ("sf", "freq", "bandwidth", "coding_rate", "tx_power"):
         parser.add_argument("--" + field.replace("_", "-"), type=int, default=None,
                             help="radio {} (default: {})".format(field, DEFAULT_RF[field]))
@@ -65,7 +66,8 @@ def _add_node(parser):
                                            "keeps whatever it is running")
     parser.add_argument("--name", help="what to call this node")
     parser.add_argument("--session-id", type=int, dest="session_id",
-                        help="the 1-byte address an OPEN pair shares; secure pairs derive it")
+                        help="override an OPEN node's 1-byte address (default: the last byte "
+                             "of its MAC); secure nodes derive it from their identity")
     parser.add_argument("--allow-identity-loss", action="store_true", dest="allow_identity_loss",
                         help="flash even though this board's identity could not be saved")
 
@@ -130,6 +132,9 @@ def build_parser():
         "verify", help="drive one real transfer and check what actually happened")
     _add_common(verify)
     _add_radio(verify)
+    # No default: each board's radio comes from the fleet record, and a default here would read
+    # as the operator saying sx127x, which on a mixed pair contradicts one end every time.
+    verify.set_defaults(radio=None)
     verify.add_argument("--edge-port", dest="edge_port", required=True)
     verify.add_argument("--hub-port", dest="hub_port", required=True)
     verify.add_argument("--posture", default="secure", choices=list(POSTURES))
@@ -220,6 +225,7 @@ def cmd_edge(args, result, runner=None, sleep=None, **_):
                    name=args.name, rf=_rf_from(args), session_id=args.session_id,
                    radio=args.radio, allow_identity_loss=args.allow_identity_loss,
                    board_model=args.board_model)
+    start_programs([board], result)
     if result.data.get("device_id"):
         result.note("\nThe Hub needs this one value and nothing else:\n  {}\nIt is already in "
                     "{}, so `provision hub` will pick it up without you copying "
@@ -250,15 +256,20 @@ def cmd_hub(args, result, runner=None, sleep=None, **_):
                   radio=args.radio, on_site_root=args.on_site_root,
                   allow_identity_loss=args.allow_identity_loss,
                   board_model=args.board_model)
+    start_programs([board], result)
     return result
 
 
 def cmd_verify(args, result, runner=None, sleep=None, **_):
     fleet = Fleet(args.fleet)
     preflight(args, result, runner=runner)
-    verify_pair(Board(args.edge_port, runner=runner, sleep=sleep),
-                Board(args.hub_port, runner=runner, sleep=sleep),
-                fleet, result, posture=args.posture, radio=args.radio, window=args.window)
+    edge_board = Board(args.edge_port, runner=runner, sleep=sleep)
+    hub_board = Board(args.hub_port, runner=runner, sleep=sleep)
+    try:
+        verify_pair(edge_board, hub_board,
+                    fleet, result, posture=args.posture, radio=args.radio, window=args.window)
+    finally:
+        start_programs([edge_board, hub_board], result)
     return result
 
 

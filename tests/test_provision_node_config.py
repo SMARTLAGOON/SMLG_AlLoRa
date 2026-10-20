@@ -4,9 +4,9 @@ The posture is not a filename and not a flag the node discovers; it is what the 
 and every rule below exists because getting one of them wrong produces a board that looks
 provisioned and is not. Three the tests pin down:
 
-  * an open node has no identity to be addressed by, so it needs a hand-assigned `session_id`
-    that matches its peer, and a secure one must not carry one at all (the sid derives from
-    `device_id[0]`, and an override would fight it);
+  * an open node is addressed by the low byte of its MAC unless a `session_id` overrides it,
+    and a secure one must not carry one at all (the sid derives from `device_id[0]`, and an
+    override would fight it);
   * `identity_file` is what makes a node generate and keep an identity, so a secure config
     without it comes up with no `device_id`;
   * a control root on a node whose config still says open is the half-provisioned state the
@@ -36,11 +36,13 @@ def test_an_open_node_carries_the_session_id_that_addresses_it():
     assert "identity_file" not in config
 
 
-def test_an_open_node_without_a_session_id_is_refused():
-    """v3 open data transfer is sid-addressed and the two ends must agree. Defaulting the
-    value would produce a pair that cannot hear each other and no line saying why."""
-    with pytest.raises(ValueError):
-        build_lora_json(role="edge", posture="open")
+def test_an_open_node_without_a_session_id_takes_its_address_from_its_mac():
+    """The node derives its sid from the low byte of its own MAC, and the Hub derives the same
+    one from the MAC its roster carries. Writing a number here would only override that."""
+    config = build_lora_json(role="edge", posture="open")
+    assert config["security_mode"] == "open"
+    assert "session_id" not in config
+    assert "identity_file" not in config
 
 
 def test_the_control_posture_pins_the_root_on_the_node_that_verifies():

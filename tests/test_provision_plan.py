@@ -238,6 +238,73 @@ def test_two_edges_under_one_name_are_refused_because_a_name_is_a_slot():
     assert "one name is one node" in str(raised.value)
 
 
+def test_two_open_edges_whose_macs_end_in_the_same_byte_are_refused():
+    """An open node's address is the last byte of its MAC. Two Edges sharing it are one address,
+    and the Hub would hear whichever answered first."""
+    with pytest.raises(ValueError) as raised:
+        plan_module.validate(_plan_for(
+            [_node(mac="9eeff0dc", name="S1"), _node(mac="4a2744dc", name="S2")],
+            _node(mac="9eeff0e0"), posture="open"))
+    assert "dc" in str(raised.value) and "secure" in str(raised.value)
+
+
+def test_the_same_pair_is_fine_once_each_edge_has_an_identity():
+    plan_module.validate(_plan_for(
+        [_node(mac="9eeff0dc", name="S1"), _node(mac="4a2744dc", name="S2")],
+        _node(mac="9eeff0e0"), posture="secure"))
+
+
+def test_one_session_id_for_several_open_edges_is_refused():
+    """The run hands the plan's session_id to every Edge, so two Edges would carry one address,
+    the same collision as two MACs ending in one byte."""
+    with pytest.raises(ValueError) as raised:
+        plan_module.validate(_plan_for(
+            [_node(mac="9eeff0dc", name="S1"), _node(mac="4a2744f4", name="S2")],
+            _node(mac="9eeff0e0"), posture="open", session_id=42))
+    assert "session_id" in str(raised.value)
+
+
+def test_an_open_edge_added_on_the_address_of_one_already_in_the_fleet_is_refused(
+        tmp_path, monkeypatch):
+    """The plan holds one Edge, so nothing in it clashes. The clash is with the Edge the fleet
+    already holds, and the Hub's roster would carry two rows on one address."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    fleet_dir = tmp_path / "fleet"
+    code, tail = _setup(("1",) + ("",) * 8, fleet_dir, FakeWire(posture="open"))
+    assert code == 0, tail
+
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT, THIRD_PORT)
+    monkeypatch.setitem(MACS, THIRD_PORT, "4a2744dc")
+    wire = FakeWire(ports=(THIRD_PORT, HUB_PORT, EDGE_PORT), edge_port=THIRD_PORT,
+                    posture="open")
+    wire.place(HUB_PORT, "Nodes.json", _hub_roster(fleet_dir))
+    code, tail = _setup(_EXTEND_RUN, fleet_dir, wire)
+
+    assert code == 1, tail
+    assert "dc" in tail
+    assert wire.on(THIRD_PORT, "AlLoRa.json") is None, "the board was written before the refusal"
+    assert len(json.loads(wire.on(HUB_PORT, "Nodes.json"))) == 1
+
+
+@pytest.mark.parametrize("posture", ["secure", "control"])
+def test_a_session_id_on_a_node_with_an_identity_is_refused_before_a_board_is_touched(posture):
+    """Such a node derives its address from its identity. Refused by the config builder, that
+    came after the flash had already erased the board."""
+    with pytest.raises(ValueError) as raised:
+        plan_module.validate(_plan_for([_node(mac="aa")], _node(mac="bb"),
+                                       posture=posture, session_id=5))
+    assert "session_id" in str(raised.value)
+
+
+@pytest.mark.parametrize("sid", ["2e", "12", -1, 256, 1.5, True])
+def test_a_session_id_is_a_whole_number_from_0_to_255(sid):
+    """The board compares it as a number. A string of hex digits reaches it as a string."""
+    with pytest.raises(ValueError) as raised:
+        plan_module.validate(_plan_for([_node(mac="aa")], _node(mac="bb"),
+                                       posture="open", session_id=sid))
+    assert "session_id" in str(raised.value)
+
+
 def test_a_plan_naming_a_board_nobody_plugged_in_fails_before_anything_runs():
     doc = _plan_for([_node(mac="9eeff0dc")], _node(mac="9eeff0e0"))
     with pytest.raises(ValueError) as raised:
@@ -484,8 +551,8 @@ def test_a_posture_change_warns_and_guides_rather_than_refusing(tmp_path, monkey
                     posture="open")
     wire.place(HUB_PORT, "Nodes.json", _hub_roster(fleet_dir))
     capsys.readouterr()
-    code, tail = _setup(("", "1", "y", "3", "", "", "", "", "", "", "", "", ""),
-                        fleet_dir, wire)
+    # extend, open, go on, one Edge, the third option, then every default to proceed
+    code, tail = _setup(("", "1", "y", "", "3") + ("",) * 8, fleet_dir, wire)
 
     said = capsys.readouterr().out
     assert "this deployment is secure, and you have asked for open" in said

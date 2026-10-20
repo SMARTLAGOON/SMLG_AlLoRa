@@ -1,7 +1,7 @@
 """Builds a board's `AlLoRa.json` from its placement (Edge or Hub) and its posture.
 
-An open node has no identity, and both ends need the same 1-byte session address. A secure node
-makes its identity on first boot and is registered by `device_id`. Control is secure plus a control
+An open node has no identity and is addressed by the low byte of its MAC. A secure node makes
+its identity on first boot and is registered by `device_id`. Control is secure plus a control
 root. Bad combinations are refused, not defaulted: each makes a board that looks set up and is not.
 """
 
@@ -199,15 +199,22 @@ def _check_placement(role, posture, driver, board, on_site_root):
             "given it holds the key that signs for the whole fleet, and refuses to boot.")
 
 
+def check_session_id(session_id):
+    """Refuse a session id that does not fit the 1-byte header it is carried in."""
+    if (isinstance(session_id, bool) or not isinstance(session_id, int) or
+            not 0 <= session_id <= 255):
+        raise ValueError(
+            "session_id must be a whole number from 0 to 255, or left out, not {!r}. Left out, "
+            "an open node takes the last byte of its MAC.".format(session_id))
+    return session_id
+
+
 def _addressing_keys(posture, session_id):
-    """How this node is addressed: a hand-assigned number, or an identity it generates."""
+    """How this node is addressed: by its MAC, by an identity it generates, or by a number."""
     if posture == "open":
-        if session_id is None:
-            raise ValueError(
-                "an open node needs a session_id, and both ends need the same one: open v3 "
-                "data transfer is sid-addressed and there is no identity to derive the "
-                "address from.")
-        return {"session_id": session_id}
+        # Left out, the node takes the low byte of its own MAC, and the Hub derives the same
+        # one from the MAC in its roster. A number written here overrides both ends.
+        return {} if session_id is None else {"session_id": check_session_id(session_id)}
     if session_id is not None:
         raise ValueError(
             "a secure node derives its session id from device_id[0]; setting session_id would "

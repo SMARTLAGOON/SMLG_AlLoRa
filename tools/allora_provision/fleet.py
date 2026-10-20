@@ -131,7 +131,7 @@ class Fleet:
         return os.path.join(self.path, _STAGING_DIR)
 
     def ensure(self):
-        self._refuse_if_git_would_commit_keys()
+        self.refuse_if_git_would_commit_keys()
         for directory in (self.path, self.backups_path, self.staging_path):
             if not os.path.isdir(directory):
                 os.makedirs(directory)
@@ -362,8 +362,13 @@ class Fleet:
         for entry in self.entries():
             if entry.get("role") != "edge":
                 continue
-            roster.append({k: entry[k] for k in _ROSTER_KEYS
-                           if k in entry and entry[k] is not None and entry[k] != ""})
+            row = {k: entry[k] for k in _ROSTER_KEYS
+                   if k in entry and entry[k] is not None and entry[k] != ""}
+            # An open node is registered by its MAC: the Hub derives its sid from the MAC's low
+            # byte, as the node does. A secure node is registered by its fingerprint only.
+            if "device_id" not in row and entry.get("mac") and "mac_address" not in row:
+                row["mac_address"] = entry["mac"]
+            roster.append(row)
         return json.dumps(roster, indent=2) + "\n"
 
     # --- identity backups ---------------------------------------------------------------
@@ -407,7 +412,7 @@ class Fleet:
 
     # --- the git guard ------------------------------------------------------------------
 
-    def _refuse_if_git_would_commit_keys(self):
+    def refuse_if_git_would_commit_keys(self):
         """Stop before the first key is written if the repo around the fleet would commit it.
 
         The normal place to run the wizard is the operator's own deployment repo, and nothing

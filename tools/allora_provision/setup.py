@@ -15,7 +15,7 @@ from tools.allora_provision.node_config import (BOARD_ALIASES, BOARD_TABLE, DEFA
                                                 DEFAULT_RF, POSTURES, check_pair, radios_for)
 from tools.allora_provision.result import OK, SKIPPED
 from tools.allora_provision.steps import (PAYLOAD_LEN, provision_edge, provision_hub,
-                                           update_hub_roster, verify_pair)
+                                           start_programs, update_hub_roster, verify_pair)
 
 # Where a build lands. Searched rather than named so the operator never types a path that
 # changes with every CI run.
@@ -27,8 +27,8 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 # consequences of `control` are printed by the phase that provisions it; this is the sentence
 # that gets the choice right.
 _POSTURE_HELP = {
-    "open": "no identity, no encryption. Both ends share a number you assign.",
-    "secure": "each node generates an identity and proves it. Frames are sealed.",
+    "open": "no identity, no encryption. Each node is addressed by its MAC.",
+    "secure": "each node gets its own identity, and every frame is encrypted and checked.",
     "control": "secure, plus a pinned root: the node then takes only signed commands.",
 }
 
@@ -81,7 +81,7 @@ class Prompt:
     # --- asking things ------------------------------------------------------------------
 
     def _ask(self, question, default=None):
-        suffix = " [{}]: ".format(default) if default is not None else ": "
+        suffix = " (Enter for {}): ".format(default) if default is not None else ": "
         self._out.write("  " + question + suffix)
         self._out.flush()
         try:
@@ -257,8 +257,7 @@ def deployment_defaults(entries):
     every default the way to break the deployment, which is the wrong shape for a wizard whose
     every question can be answered with Enter.
     """
-    defaults = {"posture": "secure", "radio": "sx127x", "board": DEFAULT_BOARD, "rf": {},
-                "session_ids": []}
+    defaults = {"posture": "secure", "radio": "sx127x", "board": DEFAULT_BOARD, "rf": {}}
     for entry in entries:
         if entry.get("posture"):
             defaults["posture"] = entry["posture"]
@@ -266,8 +265,6 @@ def deployment_defaults(entries):
             defaults["radio"] = entry["radio"]
         if entry.get("board"):
             defaults["board"] = entry["board"]
-        if entry.get("session_id") is not None:
-            defaults["session_ids"].append(entry["session_id"])
         if entry.get("role") != "edge":
             continue
         block = entry.get("connector") or {}
@@ -393,18 +390,9 @@ def ask_posture(prompt, known, entries, extending):
     return posture
 
 
-def ask_edges(prompt, boards, posture, extending):
+def ask_edges(prompt, boards, extending):
     """How many Edges this run provisions and which boards they are, and what is left over."""
     most = len(boards) - 1
-    if posture == "open":
-        # An open pair is addressed by a number both ends carry, assigned by hand. Handing out
-        # several of those is a scheme, and the wizard does not invent one: it does the pair.
-        if most > 1:
-            prompt.bullet("open addressing is one number shared by one pair, so this run "
-                          "provisions a single Edge. `provision edge --session-id` takes the "
-                          "others, or use the secure posture, where the address derives from "
-                          "the identity.")
-        most = 1
     edges = 1 if most <= 1 else prompt.number(
         "How many Edge nodes {}?".format(
             "are you adding" if extending else "in this deployment"),
@@ -467,14 +455,6 @@ def ask_each_board(prompt, chosen, first):
     return hardware
 
 
-def ask_session_id(prompt, known):
-    """The number an open pair shares, defaulting to one this fleet has not handed out."""
-    taken = set(known["session_ids"])
-    free = next(n for n in range(1, 256) if n not in taken)
-    return prompt.number("Which session id should the pair share?", default=free,
-                         low=0, high=255)
-
-
 def ask_firmware(prompt, images, hardware, extending):
     """Whether to flash, and then which image each board gets. Returns that lookup.
 
@@ -482,19 +462,22 @@ def ask_firmware(prompt, images, hardware, extending):
     with the build for its own target or with nothing: offering one image for the whole run is
     how a mixed pair gets the wrong radio's firmware with every step reporting success.
     """
+    # Keeping is the default even with a build on disk. A flash erases the board, its identity
+    # with it, so it is something the operator picks rather than something Enter does.
     flashing = prompt.choose(
         "Flash firmware, or keep what the boards run?",
         [(True, "flash the newest build on this machine for each board"),
          (False, "keep what the boards are running  (no flash, nothing erased)")],
-        default=0 if images else 1)
+        default=1)
 
     def firmware_for(pair):
         return image_for(target_of(*pair), images) if flashing else None
 
     if not flashing:
         return firmware_for
-    prompt.bullet("a flash erases the board: its identity is backed up into the fleet first, "
-                  "and each board takes a couple of minutes.")
+    prompt.bullet("a flash erases the board. A secure or control node comes back with a new "
+                  "device_id, which the fleet registers, and any old key is kept in the fleet's "
+                  "backups folder. Each board takes a couple of minutes.")
     if extending:
         prompt.bullet("only the Edges above are flashed. The Hub is not: extending it changes "
                       "one row in its roster and nothing else.")
@@ -519,16 +502,15 @@ def ask_rf(prompt, known, extending):
 def ask_plan(prompt, boards, images, fleet_path, mode="scratch", entries=()):
     """Everything the run needs, settled before anything is touched.
 
-    Posture is asked first because it constrains the rest: it decides whether a session id is
-    needed, whether a control root is minted, and -- since open addressing is one number handed
-    to one pair -- how many Edges this command is willing to provision in a run.
+    Posture is asked first because it is the choice the rest of the deployment is built around:
+    it decides whether nodes get an identity and whether a control root is minted.
     """
     entries = list(entries)
     known = deployment_defaults(entries)
     extending = mode == "extend"
 
     posture = ask_posture(prompt, known, entries, extending)
-    chosen, remaining = ask_edges(prompt, boards, posture, extending)
+    chosen, remaining = ask_edges(prompt, boards, extending)
     names = ask_names(prompt, chosen, entries, extending)
     edge_hardware = ask_each_board(
         prompt, chosen,
@@ -541,12 +523,11 @@ def ask_plan(prompt, boards, images, fleet_path, mode="scratch", entries=()):
     hub_hardware = _registered_hardware(entries, "hub") if extending else \
         ask_hardware(prompt, hub, default=edge_hardware[-1])
 
-    session_id = ask_session_id(prompt, known) if posture == "open" else None
     firmware_for = ask_firmware(prompt, images, edge_hardware + [hub_hardware], extending)
     rf = ask_rf(prompt, known, extending)
 
     return plan_module.build(
-        mode=mode, fleet=fleet_path, posture=posture, rf=rf, session_id=session_id,
+        mode=mode, fleet=fleet_path, posture=posture, rf=rf,
         edges=[{"mac": board["mac"], "name": name, "board": hardware[0],
                 "radio": hardware[1], "firmware": firmware_for(hardware)}
                for board, name, hardware in zip(chosen, names, edge_hardware)],
@@ -625,7 +606,7 @@ def _stall_prompt(prompt):
         prompt.say("")
         prompt.bullet("the board on {} is still silent, and a reset over the wire did not "
                       "bring it back.".format(port))
-        prompt.pause("Tap RESET once on that board -- once only -- then press Enter.")
+        prompt.pause("Tap RESET on that board once, only once, then press Enter.")
     return on_stall
 
 
@@ -660,39 +641,45 @@ def run_plan(plan, boards, result, prompt=None, runner=None, sleep=None):
         return dict(radio=entry["radio"], board_model=entry["board"],
                     firmware=entry["firmware"])
 
-    provisioned = []
-    for index, edge in enumerate(plan["edges"], start=1):
-        port = ports[edge["mac"]]
-        stage(index, "Edge {} on {}".format(index, port))
-        board = Board(port, runner=runner, sleep=sleep)
-        provision_edge(board, fleet, result, name=edge["name"],
-                       session_id=plan["session_id"], **dict(common, **hardware(edge)))
-        provisioned.append(board)
+    # Every board whose phase finished, in order. Started at the end however the run ends: a
+    # run that fails on its second Edge has a first Edge that is a finished node, and leaving
+    # it at the prompt is a node doing nothing until somebody presses RESET. A board whose own
+    # phase failed is not started into whatever half of the files it holds.
+    finished = []
+    try:
+        for index, edge in enumerate(plan["edges"], start=1):
+            port = ports[edge["mac"]]
+            stage(index, "Edge {} on {}".format(index, port))
+            board = Board(port, runner=runner, sleep=sleep)
+            provision_edge(board, fleet, result, name=edge["name"],
+                           session_id=plan["session_id"], **dict(common, **hardware(edge)))
+            finished.append(board)
 
-    hub_port = ports[plan["hub"]["mac"]]
-    hub_board = Board(hub_port, runner=runner, sleep=sleep)
-    if extending:
-        # The whole reason extend is its own mode. Adding a node changes one row in one file,
-        # and the full Hub phase rewrites four and restarts the board to do it -- over a
-        # deployment that is running, and over rows this Hub has settled in the field.
-        stage(len(plan["edges"]) + 1, "Hub roster on {}".format(hub_port))
-        # The plan's own names, not the ports the Edges came back on: a flashed board can
-        # re-enumerate onto a different path, and the name is the slot the registry keys by.
-        # An extend plan always names its Edges, which is what `free_edge_names` is for.
-        update_hub_roster(hub_board, fleet, result,
-                          set(edge["name"] for edge in plan["edges"]))
-    else:
-        stage(len(plan["edges"]) + 1, "Hub on {}".format(hub_port))
-        provision_hub(hub_board, fleet, result, name=plan["hub"]["name"],
-                      session_id=plan["session_id"],
-                      **dict(common, **hardware(plan["hub"])))
+        hub_port = ports[plan["hub"]["mac"]]
+        hub_board = Board(hub_port, runner=runner, sleep=sleep)
+        if extending:
+            # The whole reason extend is its own mode. Adding a node changes one row in one
+            # file, and the full Hub phase rewrites four and restarts the board to do it -- over
+            # a deployment that is running, and over rows this Hub has settled in the field.
+            stage(len(plan["edges"]) + 1, "Hub roster on {}".format(hub_port))
+            # The plan's own names, not the ports the Edges came back on: a flashed board can
+            # re-enumerate onto a different path, and the name is the slot the registry keys
+            # by. An extend plan always names its Edges, which is what `free_edge_names` is for.
+            update_hub_roster(hub_board, fleet, result,
+                              set(edge["name"] for edge in plan["edges"]))
+        else:
+            stage(len(plan["edges"]) + 1, "Hub on {}".format(hub_port))
+            provision_hub(hub_board, fleet, result, name=plan["hub"]["name"],
+                          session_id=plan["session_id"],
+                          **dict(common, **hardware(plan["hub"])))
+        finished.append(hub_board)
 
-    stage(total, "Proof: one real transfer")
-    # Each end's own radio, and `verify_pair` reads the registry for the settled answer: a
-    # mixed pair needs two different board-side scripts, and one radio for the run would build
-    # the Edge's script for the Hub's chip.
-    verify_pair(provisioned[0], hub_board, fleet, result,
-                posture=plan["posture"], radio=plan["edges"][0]["radio"])
+        stage(total, "Proof: one real transfer")
+        # `verify_pair` takes each end's radio from the registry, where this run has just
+        # written it: a mixed pair needs two different board-side scripts.
+        verify_pair(finished[0], hub_board, fleet, result, posture=plan["posture"])
+    finally:
+        start_programs(finished, result)
     return fleet
 
 
@@ -760,16 +747,37 @@ def _ask_fresh_fleet(prompt, taken):
     record of every node pinned to it; starting a second deployment on top of the first would
     leave the running nodes' authority in a directory that now describes somebody else.
     """
-    prompt.bullet("a new deployment needs its own directory: this one holds the control root "
-                  "the nodes above are pinned to, and mints under it.")
+    prompt.bullet("a new deployment gets its own folder. This one holds the keys and records "
+                  "of the nodes above, so it is left as it is.")
     while True:
-        path = prompt.text("Where should the new deployment live?",
+        path = prompt.text("Folder name for the new deployment",
                            default=taken.rstrip("/") + "-2")
         if Fleet(path).entries():
             prompt.bullet("{} already holds a deployment too. Name one that does not, or run "
                           "`provision setup` again and extend one of them.".format(path))
             continue
         return path
+
+
+def _with_a_mac(prompt, boards):
+    """The boards that can be named in a plan, refusing up front when that leaves too few.
+
+    A plan names a board by its MAC, so a board whose MAC could not be read cannot be in one.
+    Found after "Proceed?", it is a run that fails with every answer already given.
+    """
+    named = [board for board in boards if board["mac"]]
+    unread = [board["port"] for board in boards if not board["mac"]]
+    if not unread:
+        return named
+    if len(named) < 2:
+        raise BoardError(
+            "could not read the MAC of the board on {}, and a board is named by its MAC. "
+            "Unplug it and plug it back in, then run this again. If it still has no MAC, it is "
+            "not running MicroPython with WiFi support, which these boards need.".format(
+                ", ".join(unread)))
+    prompt.bullet("left out: {}. Its MAC could not be read, so it cannot be named in the "
+                  "plan.".format(", ".join(unread)))
+    return named
 
 
 def run(args, result, runner=None, sleep=None, ask=None, out=None):
@@ -781,10 +789,15 @@ def run(args, result, runner=None, sleep=None, ask=None, out=None):
     prompt.say("\n  Checking this machine")
     _machine_is_ready(prompt, result, runner=runner)
 
+    # Before the first question rather than at the first key written: refused after "Proceed?",
+    # the operator loses every answer they gave to get there.
+    Fleet(args.fleet).refuse_if_git_would_commit_keys()
+
     prompt.say("\n  Looking for boards")
     boards = look_for_boards(runner=runner)
     for board in boards:
         prompt.bullet(_label(board))
+    boards = _with_a_mac(prompt, boards)
     if len(boards) < 2:
         # Both ends are provisioned in one run because the Hub is registered against the
         # Edge's fingerprint: one board is half a deployment, and the half it is missing is
@@ -800,6 +813,8 @@ def run(args, result, runner=None, sleep=None, ask=None, out=None):
     mode = ask_mode(prompt, entries)
     if mode == "scratch" and entries:
         fleet_path = _ask_fresh_fleet(prompt, fleet_path)
+        # Asked of the folder the run will actually write, for the same reason as above.
+        Fleet(fleet_path).refuse_if_git_would_commit_keys()
         entries = []
 
     plan = ask_plan(prompt, boards, firmware_images(), fleet_path, mode=mode, entries=entries)

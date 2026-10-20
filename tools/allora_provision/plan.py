@@ -7,7 +7,7 @@ its board exists, with no MAC; `apply` refuses it then. Radio settings are per r
 import json
 import os
 
-from tools.allora_provision.node_config import DRIVERS, check_pair
+from tools.allora_provision.node_config import DRIVERS, check_pair, check_session_id
 
 VERSION = 1
 
@@ -102,6 +102,8 @@ def validate(doc):
             "cannot be both an Edge and the Hub, and a second Edge needs a second "
             "board.".format(", ".join(repeated)))
 
+    _validate_addressing(doc)
+
     names = [e.get("name") for e in edges if e.get("name")]
     clashing = sorted({name for name in names if names.count(name) > 1})
     if clashing:
@@ -111,6 +113,46 @@ def validate(doc):
             "would update the first one's record instead of adding its own.".format(
                 ", ".join(clashing)))
     return doc
+
+
+def _validate_addressing(doc):
+    """A session id the board can compare as a number, and no two open Edges on one address.
+
+    Checked here rather than left to the config builder, which refuses the same things only
+    after the run has flashed, and so erased, the first board.
+    """
+    session_id = doc.get("session_id")
+    if session_id is None:
+        if doc["posture"] == "open":
+            _refuse_shared_open_address(doc["edges"])
+        return
+    check_session_id(session_id)
+    if doc["posture"] != "open":
+        raise ValueError(
+            "session_id is for the open posture. A {} node derives its address from its "
+            "identity, so leave session_id out.".format(doc["posture"]))
+    if len(doc["edges"]) > 1:
+        raise ValueError(
+            "session_id {} would be given to all {} Edges, and the Hub could not tell them "
+            "apart. Leave it out and each open Edge takes the last byte of its own "
+            "MAC.".format(session_id, len(doc["edges"])))
+
+
+def _refuse_shared_open_address(edges):
+    """Two open Edges whose MACs end in the same byte would answer to one address."""
+    by_byte = {}
+    for edge in edges:
+        mac = (edge.get("mac") or "").lower()
+        if mac:
+            by_byte.setdefault(mac[-2:], []).append(mac)
+    shared = sorted((low, macs) for low, macs in by_byte.items() if len(macs) > 1)
+    if shared:
+        low, macs = shared[0]
+        raise ValueError(
+            "the Edges {} both end in {}. An open node's address is the last byte of its MAC, "
+            "so the Hub could not tell them apart. Use the secure posture, where each node is "
+            "addressed by its own identity, or put one of them in another deployment.".format(
+                " and ".join(macs), low))
 
 
 def _entries(doc):
