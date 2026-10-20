@@ -8,6 +8,10 @@ so we start with the smallest one: one file, from one board to another, over LoR
 
 ## Your first transfer
 
+This is the long way, every step by hand. The wizard does all of it in one command, from the
+repository's root: `python3 tools/provision.py setup` (see the
+[Quick start](../README.md#quick-start)).
+
 **Objective:** send a small file from an **Edge** to a **Hub** over LoRa, and find it saved on the
 Hub. It takes two boards and about fifteen minutes.
 

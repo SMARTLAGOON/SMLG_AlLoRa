@@ -80,6 +80,13 @@ and watch what happens. It pulls one file first so the link is known good, comma
 and keeps polling. Watch the Edge's serial for `Changing RF Config to:` and then, once a whole file has
 crossed on the new settings, `RF trial committed`.
 
+Unlike `main.py`, `retune.py` builds an SX127x radio by name and registers its Edge from a
+`device_id` you paste into it, not from `Nodes.json`. On an SX1262 Hub, change its connector
+import and the `Hub(...)` line to `SX1262_connector` from `AlLoRa.Connectors.SX1262_connector`.
+In the Hub's `AlLoRa.json`, set `"driver": "sx1262"` and add the board's pins to the `connector`
+block, as shown in [the SX1262 firmware notes](../../../firmware/targets/t3s3-sx1262/README.md):
+without them the radio falls back to the Heltec LoRa32 V3 pins.
+
 If the new configuration cannot carry a transfer, nobody has to intervene: the Edge holds it only
 for `trial` seconds, rolls back to the last configuration that worked, and the Hub's `{new, old}`
 probe finds it there. That undo is the reason a retune is safe to try at all.

@@ -368,6 +368,57 @@ def test_every_board_is_left_running_its_program_when_setup_ends(tmp_path, monke
         assert last[-1] == "reset", (port, last)
 
 
+def test_the_last_lines_say_where_to_put_a_file_and_where_it_lands(tmp_path, monkeypatch,
+                                                                  capsys):
+    """Benja's first run, 2026-10-19: it worked, and then it pointed at the fleet record and
+    said nothing about what to do with a running pair. The Hub files what arrives under the
+    Edge's label, not its name, so that is the folder the line has to give."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    code, tail = _run(_ALL_DEFAULTS, tmp_path / "fleet", FakeWire())
+
+    shown = capsys.readouterr().out + tail
+    assert code == 0, shown
+    assert "mpremote connect {} fs cp".format(EDGE_PORT) in shown
+    assert ":Outbox/" in shown
+    assert "Results/{}/".format(DEVICE_IDS[EDGE_PORT][:8]) in shown
+    assert "mpremote connect {} repl".format(HUB_PORT) in shown
+
+
+def test_the_folder_comes_from_the_newest_record_of_a_reflashed_board():
+    # A board reflashed into a new slot keeps its MAC and gets a new identity, and the old
+    # record stays in the registry ahead of the new one. The Hub files under the new label.
+    from tools.allora_provision.setup import Prompt, _next_steps
+    old, new = "aaaa0000" + "00" * 28, "bbbb1111" + "11" * 28
+    entries = [{"role": "edge", "name": "S", "mac": "9eeff0dc", "device_id": old},
+               {"role": "hub", "name": "R", "mac": "9eeff0e0", "device_id": "cc" * 32},
+               {"role": "edge", "name": "S2", "mac": "9eeff0dc", "device_id": new}]
+    plan = {"edges": [{"mac": "9eeff0dc", "name": "S2"}], "hub": {"mac": "9eeff0e0"}}
+    boards = [{"mac": "9eeff0dc", "port": EDGE_PORT}, {"mac": "9eeff0e0", "port": HUB_PORT}]
+    out = io.StringIO()
+
+    _next_steps(Prompt(out=out), plan, entries, boards)
+
+    assert "Results/bbbb1111/" in out.getvalue(), out.getvalue()
+
+
+def test_every_command_the_wizard_prints_runs_as_printed():
+    # There is no installed `provision` command: the tool is tools/provision.py.
+    import inspect
+    from tools.allora_provision import setup as setup_module
+    code = [line for line in inspect.getsource(setup_module).split('"""', 2)[2].splitlines()
+            if not line.lstrip().startswith("#")]
+    assert not [line for line in code if "`provision " in line]
+
+
+def test_an_open_edge_s_files_land_under_its_mac(tmp_path, monkeypatch, capsys):
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    code, tail = _run(("1",) + ("",) * 8, tmp_path / "fleet", FakeWire(posture="open"))
+
+    shown = capsys.readouterr().out + tail
+    assert code == 0, shown
+    assert "Results/{}/".format(MACS[EDGE_PORT]) in shown
+
+
 class _ResetHangs(FakeWire):
     """A board whose `mpremote reset` runs out its timeout, as when a monitor holds the port."""
 
@@ -525,4 +576,4 @@ def test_declining_the_install_gives_the_command_rather_than_a_dead_end(tmp_path
     _tools(monkeypatch, ())
     code, tail = _run(("n",), tmp_path / "fleet", FakeWire())
     assert code == 1
-    assert "provision doctor --install" in tail
+    assert "python3 tools/provision.py doctor --install" in tail

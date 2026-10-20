@@ -7,15 +7,21 @@ RESET press if a new board stays silent. Questions go through an injected `Promp
 import os
 import sys
 
+from AlLoRa.Digital_Endpoint import label_for_config
 from tools.allora_provision import doctor as doctor_module
 from tools.allora_provision import plan as plan_module
 from tools.allora_provision.board import Board, BoardError, discover_boards
 from tools.allora_provision.fleet import Fleet
 from tools.allora_provision.node_config import (BOARD_ALIASES, BOARD_TABLE, DEFAULT_BOARD,
-                                                DEFAULT_RF, POSTURES, check_pair, radios_for)
+                                                DEFAULT_NAMES, DEFAULT_QUEUE_PATH,
+                                                DEFAULT_RESULT_PATH, DEFAULT_RF, POSTURES,
+                                                check_pair, radios_for)
 from tools.allora_provision.result import OK, SKIPPED
 from tools.allora_provision.steps import (PAYLOAD_LEN, provision_edge, provision_hub,
                                            start_programs, update_hub_roster, verify_pair)
+
+# How every command the wizard prints is typed. There is no installed `provision` command.
+CLI = "python3 tools/provision.py"
 
 # Where a build lands. Searched rather than named so the operator never types a path that
 # changes with every CI run.
@@ -29,7 +35,8 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 _POSTURE_HELP = {
     "open": "no identity, no encryption. Each node is addressed by its MAC.",
     "secure": "each node gets its own identity, and every frame is encrypted and checked.",
-    "control": "secure, plus a pinned root: the node then takes only signed commands.",
+    "control": "secure, plus signed commands: the Edge acts only on a command signed with "
+               "this deployment's key.",
 }
 
 _RADIO_HELP = {
@@ -385,8 +392,8 @@ def ask_posture(prompt, known, entries, extending):
             entry.get("name", "?"), entry.get("role", "?"), entry.get("posture", "?")))
     if not prompt.yes("Go on?", default=False):
         raise BoardError(
-            "nothing was changed. Run `provision setup` again and keep the {} posture to add "
-            "to this deployment as it is.".format(known["posture"]))
+            "nothing was changed. Run `{} setup` again and keep the {} posture to add "
+            "to this deployment as it is.".format(CLI, known["posture"]))
     return posture
 
 
@@ -708,9 +715,9 @@ def _machine_is_ready(prompt, result, runner=None):
     if not prompt.yes("Install {} now?".format(
             " and ".join(entry["tool"] for entry in missing))):
         raise BoardError(
-            "{} missing. `provision doctor --install` does this on its own, or install it "
+            "{} missing. `{} doctor --install` does this on its own, or install it "
             "by hand and run `setup` again.".format(
-                ", ".join(entry["tool"] for entry in missing)))
+                ", ".join(entry["tool"] for entry in missing), CLI))
     for entry in missing:
         requirement = next(r for r in doctor_module.REQUIREMENTS if r.key == entry["tool"])
         outcome = doctor_module.install(requirement, runner=runner)
@@ -723,21 +730,53 @@ def _machine_is_ready(prompt, result, runner=None):
     return True
 
 
-def _summarise(prompt, plan, fleet, result, plan_path):
+def _next_steps(prompt, plan, entries, boards):
+    """What to do with a pair that is now running, in commands that work as printed.
+
+    The Hub files what arrives under the Edge's off-air label, never under its name, so the
+    folder is worked out by the library's own rule rather than written here a second time.
+    Copying a file stops the Edge's program, so the copy ends with the reset that restarts it.
+    """
+    # The newest record: a reflashed board keeps its MAC, and its old record stays ahead.
+    edge = next((e for e in reversed(entries)
+                 if e.get("role") == "edge" and e.get("mac") == plan["edges"][0]["mac"]), None)
+    if edge is None:
+        return
+    label = label_for_config({"device_id": edge.get("device_id"), "mac_address": edge["mac"]})
+    edge_port = _find(boards, edge["mac"])["port"]
+    hub_port = _find(boards, plan["hub"]["mac"])["port"]
+    prompt.say("\n  Next")
+    prompt.bullet("to send a file, put it in the {}Edge's {}:".format(
+        "first " if len(plan["edges"]) > 1 else "", DEFAULT_QUEUE_PATH))
+    prompt.bullet("  mpremote connect {} fs cp my-file.txt :{}/my-file.txt + reset".format(
+        edge_port, DEFAULT_QUEUE_PATH))
+    prompt.bullet("the Hub saves it under {}/{}/, the label it gives this Edge.".format(
+        DEFAULT_RESULT_PATH, label))
+    prompt.bullet("to watch the Hub work (Ctrl-] leaves):")
+    prompt.bullet("  mpremote connect {} repl".format(hub_port))
+    prompt.bullet("if a port is gone, `{} ports` lists each board by MAC.".format(CLI))
+
+
+def _summarise(prompt, plan, fleet, result, plan_path, boards):
     prompt.say("\n  Done. {}".format(fleet.path))
-    for entry in fleet.entries():
+    entries = fleet.entries()
+    for entry in entries:
         prompt.bullet("{:<6} {:<5} {:<8} {}".format(
             entry.get("name", "?"), entry.get("role", "?"), entry.get("posture", "?"),
             entry.get("device_id", "") or "(no identity)"))
+    if any(e.get("name") == DEFAULT_NAMES.get(e.get("role")) for e in entries):
+        prompt.bullet("{} and {} are the names an Edge and a Hub get when nobody chose one. "
+                      "They are for people: nothing is addressed by them.".format(
+                          DEFAULT_NAMES["edge"], DEFAULT_NAMES["hub"]))
     if plan["posture"] == "control":
         prompt.bullet("the signing half of this deployment's root is in {}. It is the "
                       "authority: keep it off shared drives and out of git.".format(
                           fleet.root_key_path))
     prompt.bullet("that directory is the record of this deployment.")
-    prompt.bullet("`provision setup` again adds nodes to it, `provision fleet-show` reads it "
-                  "back.")
-    prompt.bullet("what this run did is written down in {}. `provision apply` runs it again, "
-                  "on the same boards, without the questions.".format(plan_path))
+    prompt.bullet("`{0} setup` again adds nodes to it, `{0} fleet-show` reads it back.".format(CLI))
+    prompt.bullet("what this run did is written down in {}. `{} apply` runs it again, on the "
+                  "same boards, without the questions.".format(plan_path, CLI))
+    _next_steps(prompt, plan, entries, boards)
 
 
 def _ask_fresh_fleet(prompt, taken):
@@ -754,7 +793,7 @@ def _ask_fresh_fleet(prompt, taken):
                            default=taken.rstrip("/") + "-2")
         if Fleet(path).entries():
             prompt.bullet("{} already holds a deployment too. Name one that does not, or run "
-                          "`provision setup` again and extend one of them.".format(path))
+                          "`{} setup` again and extend one of them.".format(path, CLI))
             continue
         return path
 
@@ -820,7 +859,8 @@ def run(args, result, runner=None, sleep=None, ask=None, out=None):
     plan = ask_plan(prompt, boards, firmware_images(), fleet_path, mode=mode, entries=entries)
     describe_plan(prompt, plan, boards)
     if not prompt.yes("Proceed?"):
-        raise BoardError("nothing was changed. Run `provision setup` again when you are ready.")
+        raise BoardError("nothing was changed. Run `{} setup` again when you are "
+                         "ready.".format(CLI))
 
     # Written before the first board is touched, because it is the record of what was
     # approved. A run that dies halfway leaves the plan behind, and `provision apply` picks it
@@ -838,13 +878,13 @@ def run(args, result, runner=None, sleep=None, ask=None, out=None):
         # that failed knows why it failed and not what surrounds it.
         prompt.say("")
         prompt.bullet("the nodes that were finished are recorded in {}. Fix what the step "
-                      "above says, then run `provision apply {}`: it adds to that fleet "
+                      "above says, then run `{} apply {}`: it adds to that fleet "
                       "rather than starting a new one, and asks nothing.".format(
-                          fleet_path, plan_path))
+                          fleet_path, CLI, plan_path))
         raise
     result.set(plan=plan, plan_path=plan_path, fleet=fleet.path)
     if result.ok:
-        _summarise(prompt, plan, fleet, result, plan_path)
+        _summarise(prompt, plan, fleet, result, plan_path, boards)
     return result
 
 

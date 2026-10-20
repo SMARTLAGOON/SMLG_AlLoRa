@@ -25,8 +25,35 @@ Details of the protocol can be found in these articles:
 
 * [AI*LoRa: Enabling Efficient Long-Range Communication with Machine Learning at the Edge](https://dl.acm.org/doi/10.1145/3641512.3690040)
 
+## Quick start
+
+Plug in two T3S3 boards and run, from the root of this repository:
+
+```bash
+python3 tools/provision.py doctor --install   # installs mpremote and esptool if they are missing
+python3 tools/provision.py setup
+```
+
+The wizard finds the boards, asks which one is the Edge and which the Hub, and asks for a
+posture: **open**, **secure**, or **control**, which is secure plus signed commands (see
+[Security](#-security)). It loads both boards, sends one real 1000-byte file to prove the link,
+and leaves both running. Its last lines say where to put a file on the Edge and where it lands on
+the Hub.
+
+Each board must already run MicroPython for the wizard to find it, so a new board needs one
+flash by hand first (step 2 of [Your first transfer](examples/Readme.md#your-first-transfer)).
+Put the AlLoRa firmware from the
+[Releases page](https://github.com/SMARTLAGOON/SMLG_AlLoRa/releases) under `firmware/`, and the
+wizard offers to flash it.
+
+What the wizard set up is written to `allora-fleet/`, in the folder you ran it from: the record of
+the deployment and, in the control posture, its signing key. Keep that folder, and keep it out of git.
+[`tools/README.md`](tools/README.md) has the wizard in full. To load the boards by hand instead,
+follow [Your first transfer](examples/Readme.md#your-first-transfer).
+
 ## Index
 
+- [Quick start](#quick-start)
 - [Folders](#folders)
   - [AlLoRa](#allora): Nodes, DataSources and DataSinks, Connectors, Control, core pieces
   - [Examples](#examples)
@@ -691,7 +718,9 @@ How the first frame is addressed follows how the Edge was registered in `Nodes.j
 ## → Security
 
 AlLoRa has two modes, picked with `security_mode` in the config: **open** (the default, no
-encryption) and **secure** (every frame encrypted and authenticated).
+encryption) and **secure** (every frame encrypted and authenticated). The wizard and the examples
+offer three postures: **open**, **secure**, and **control**, which is secure plus signed
+commands (see Commands below).
 
 <details>
 <summary>How the secure mode works, how to set it up, and what it does not protect.</summary>
@@ -744,6 +773,8 @@ signing half for the Hub and the checking half for the Edges. Both nodes then na
 `"control_root_file": "control_root.key"`. Signed commands need `secure` on both nodes, because a
 command names its Edge by `device_id`. Without a control root, the only command a Hub can send is
 a change of radio settings, unsigned, and any nearby radio can send one too. The [`control/`](examples/v3_hello/control) folder has the steps.
+Set up by hand that way, the Hub holds the key and signs. The [wizard](tools/README.md) keeps
+the key on your computer, in `allora-fleet/`, and the Hub passes the signed commands along.
 
 **What `secure` does not protect.** It is built for environmental monitoring, where the data is
 not secret but a forged command would be serious. Someone with a LoRa radio within range can:

@@ -25,8 +25,8 @@ repository's serial `DataSource` was written for.
 [`main.py`](main.py) here is the program every node runs, whichever posture and whichever
 placement. It reads `AlLoRa.json`, builds what that file names, and runs it, so an Edge and a Hub
 differ by one line of JSON rather than by two Python files. It is also the program the wizard
-pushes, so a deployment you set up by hand and one `allora setup` produces are the same
-deployment.
+pushes, so a deployment you set up by hand and one
+[`python3 tools/provision.py setup`](../../tools/README.md) produces are the same deployment.
 
 There was previously one `main.py` per side per posture, six near-copies, each naming its radio
 in its first import. That is what made an operator's radio choice unreachable: asking for an

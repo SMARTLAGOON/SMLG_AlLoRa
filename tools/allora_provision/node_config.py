@@ -144,11 +144,13 @@ def attachment(board, radio):
 # Where an Edge keeps the files it has not delivered yet. Internal flash by default, so a board
 # with no card works untouched and a board with one names its mount point instead.
 DEFAULT_QUEUE_PATH = "Outbox"
+# Where a Hub saves what arrives, one folder per Edge label under it.
+DEFAULT_RESULT_PATH = "Results"
 
 IDENTITY_FILE = "identity.key"
 CONTROL_ROOT_FILE = "control_root.key"
 
-_DEFAULT_NAMES = {"edge": "S", "hub": "R"}
+DEFAULT_NAMES = {"edge": "S", "hub": "R"}
 
 
 def merge_rf(overrides=None):
@@ -225,7 +227,7 @@ def _addressing_keys(posture, session_id):
 
 
 def build_lora_json(role, posture, driver="sx127x", name=None, rf=None, session_id=None,
-                    on_site_root=False, result_path="Results", chunk_size=None,
+                    on_site_root=False, result_path=DEFAULT_RESULT_PATH, chunk_size=None,
                     queue_path=DEFAULT_QUEUE_PATH, debug=True, board=DEFAULT_BOARD):
     """The config file for one board.
 
@@ -255,7 +257,7 @@ def build_lora_json(role, posture, driver="sx127x", name=None, rf=None, session_
     _check_placement(role, posture, driver, board, on_site_root)
 
     config = {
-        "name": name or _DEFAULT_NAMES[role],
+        "name": name or DEFAULT_NAMES[role],
         # What this board is. Presence of the key is the declaration: a bridge config carries
         # `adapter` instead, and neither is a value of the other. A config declaring nothing is
         # refused at boot rather than defaulted, because guessing here puts a node on the air in
