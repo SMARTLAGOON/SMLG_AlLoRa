@@ -672,8 +672,19 @@ def run_plan(plan, boards, result, prompt=None, runner=None, sleep=None):
             # The plan's own names, not the ports the Edges came back on: a flashed board can
             # re-enumerate onto a different path, and the name is the slot the registry keys
             # by. An extend plan always names its Edges, which is what `free_edge_names` is for.
-            update_hub_roster(hub_board, fleet, result,
-                              set(edge["name"] for edge in plan["edges"]))
+            writing = []
+            try:
+                update_hub_roster(hub_board, fleet, result,
+                                  set(edge["name"] for edge in plan["edges"]),
+                                  on_write=lambda: writing.append(True))
+            except BaseException:
+                # Reading the roster stopped the Hub's program, and a field Hub left at the
+                # prompt collects nothing until somebody drives out. Before the copy began it
+                # holds the files it ran on, so it is restarted; a copy cut short may have left
+                # half a Nodes.json, and a Hub started on that fails at boot instead.
+                if not writing:
+                    finished.append(hub_board)
+                raise
         else:
             stage(len(plan["edges"]) + 1, "Hub on {}".format(hub_port))
             provision_hub(hub_board, fleet, result, name=plan["hub"]["name"],

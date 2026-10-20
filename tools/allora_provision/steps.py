@@ -488,7 +488,7 @@ def _roster_on(board):
     return roster
 
 
-def update_hub_roster(board, fleet, result, names):
+def update_hub_roster(board, fleet, result, names, on_write=None):
     """Add or replace the rows for the Edges this run provisioned, and touch nothing else.
 
     This is the phase that extends a deployment already in the field. Adding an Edge changes
@@ -549,6 +549,9 @@ def update_hub_roster(board, fleet, result, names):
             entry.get("name", "?"), _rf_summary(entry)), status=SKIPPED)
 
     roster_path = _stage(fleet, "hub", "Nodes.json", json.dumps(roster, indent=2) + "\n")
+    if on_write:
+        # Told before the copy, because a copy cut short can leave half a file behind.
+        on_write()
     board.write_remote(roster_path, "Nodes.json")
     result.step("Nodes.json", "{} row(s) written, {} left as the Hub has them".format(
         len(incoming), len(kept)))

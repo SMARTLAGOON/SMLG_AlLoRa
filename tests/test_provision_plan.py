@@ -540,6 +540,53 @@ def test_a_hub_with_no_roster_is_not_a_hub_to_extend(tmp_path, monkeypatch):
     assert "holds no Nodes.json" in tail
 
 
+def test_a_hub_whose_roster_update_failed_is_still_left_running(tmp_path, monkeypatch):
+    """Reading the roster stops the Hub's program, and a failed update writes nothing.
+
+    So the Hub holds exactly the files it ran on before, and leaving it at the prompt is a
+    deployment that stopped collecting until somebody drives out to press RESET.
+    """
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    fleet_dir = tmp_path / "fleet"
+    _setup(_FIRST_RUN, fleet_dir, FakeWire())
+
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT, THIRD_PORT)
+    wire = FakeWire(ports=(THIRD_PORT, HUB_PORT, EDGE_PORT), edge_port=THIRD_PORT)
+    code, tail = _setup(_EXTEND_RUN, fleet_dir, wire)
+
+    assert code != 0, tail
+    assert [a for a in wire.calls if HUB_PORT in a][-1][-1] == "reset"
+    assert [a for a in wire.calls if THIRD_PORT in a][-1][-1] == "reset"
+
+
+class _CutCopyWire(FakeWire):
+    """A copy of the roster to the Hub that fails partway, as a timeout or Ctrl-C would."""
+
+    def run(self, argv, timeout=120, capture=True):
+        if HUB_PORT in argv and "cp" in argv and argv[-1] == ":Nodes.json":
+            self.calls.append(list(argv))
+            self.files[HUB_PORT]["Nodes.json"] = '[{"name": "S", "conn'
+            return 1, "", "timed out"
+        return FakeWire.run(self, argv, timeout=timeout, capture=capture)
+
+
+def test_a_hub_whose_roster_copy_failed_is_left_stopped(tmp_path, monkeypatch):
+    """A cut copy can leave half a Nodes.json. Started on it, the Hub fails at boot, while left at
+    the prompt it still holds the program, and the operator can re-run the wizard."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    fleet_dir = tmp_path / "fleet"
+    _setup(_FIRST_RUN, fleet_dir, FakeWire())
+
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT, THIRD_PORT)
+    wire = _CutCopyWire(ports=(THIRD_PORT, HUB_PORT, EDGE_PORT), edge_port=THIRD_PORT)
+    wire.place(HUB_PORT, "Nodes.json", _hub_roster(fleet_dir))
+    code, tail = _setup(_EXTEND_RUN, fleet_dir, wire)
+
+    assert code != 0, tail
+    assert all(a[-1] != "reset" for a in wire.calls if HUB_PORT in a)
+    assert [a for a in wire.calls if THIRD_PORT in a][-1][-1] == "reset"
+
+
 def test_a_posture_change_warns_and_guides_rather_than_refusing(tmp_path, monkeypatch, capsys):
     """Refusing would send the operator to reflash every board by hand, one at a time."""
     _ports(monkeypatch, EDGE_PORT, HUB_PORT)
