@@ -10,7 +10,7 @@ import json
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Packet import Packet
 
 SESSION_ID = 42
 
@@ -31,7 +31,7 @@ def _make_source(tmp_path):
 
 
 def _request(sid):
-    p = Packet_v3(addressing="sid")
+    p = Packet(addressing="sid")
     p.set_session(sid)
     p.ask_metadata()
     return p
@@ -47,7 +47,7 @@ def test_respond_hands_a_for_me_request_to_the_handler(tmp_path):
     assert got is not None
     assert len(seen) == 1
     assert seen[0].get_session() == SESSION_ID
-    assert seen[0].get_command() == Packet_v3.METADATA
+    assert seen[0].get_command() == Packet.METADATA
 
 
 def test_respond_does_not_hand_a_foreign_request_to_the_handler(tmp_path):

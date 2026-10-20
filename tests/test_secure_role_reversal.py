@@ -38,10 +38,10 @@ from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
-from AlLoRa.DataSinks.DataSink import DataSink
+from AlLoRa.Data.Sinks.DataSink import DataSink
 from AlLoRa.File import AlLoRa_File
-from AlLoRa.Security.handshake import initiator_hello, responder_accept, initiator_complete
-from AlLoRa.Security.ec_p256 import generate_private_key
+from AlLoRa.Protocol.Security.handshake import initiator_hello, responder_accept, initiator_complete
+from AlLoRa.Protocol.Security.ec_p256 import generate_private_key
 
 EDGE_MAC = "a1a1a1a1"
 HUB_MAC = "b2b2b2b2"
@@ -127,8 +127,8 @@ def _pre_shared_sessions(sid):
 
 
 def _grant_packet(swap_id):
-    from AlLoRa.Packet_v3 import Packet_v3
-    grant = Packet_v3(addressing="sid")
+    from AlLoRa.Protocol.Packet import Packet
+    grant = Packet(addressing="sid")
     grant.set_session(SESSION_ID)
     grant.set_grant(swap_id)
     return grant
@@ -630,7 +630,7 @@ def test_secure_uplink_still_normal_after_downlink_reversal(tmp_path):
 # same command forever.
 # =============================================================================
 
-from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
+from AlLoRa.Control.Control_Root_DataSink import Control_Root_DataSink
 from AlLoRa.Control.Node_Control_Actuator import Node_Control_Actuator
 from test_control_root_sink import (ENV_RF_CONFIG_VALID, ENV_RESET_VALID,
                                     CONTROL_ROOT_HEX, TARGET_DEVICE_ID)

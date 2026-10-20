@@ -7,8 +7,8 @@ broker-free; check() is the non-blocking pump the node loop calls — it never b
 radio loop.
 """
 
-from AlLoRa.DataSources.MQTT_DataSource import MQTT_DataSource
-from AlLoRa.DataSources.mqtt_naming import decode_name
+from AlLoRa.Data.Sources.MQTT_DataSource import MQTT_DataSource
+from AlLoRa.Data.mqtt_naming import decode_name
 
 
 class Fake_client:
@@ -104,7 +104,7 @@ def test_close_disconnects_an_owned_client_only():
 def test_loop_guard_drops_what_the_paired_sink_just_published():
     # Bridge deployments run a datasource and a sink against the SAME broker: the sink's
     # republish echoes back into the subscription and must not ship over the link again.
-    from AlLoRa.DataSources.Loop_guard import Loop_guard
+    from AlLoRa.Data.Loop_guard import Loop_guard
     guard = Loop_guard()
     guard.note("sensors/t", b"21.5")
     ds, client = _source(loop_guard=guard)
@@ -118,7 +118,7 @@ def test_loop_guard_drops_what_the_paired_sink_just_published():
 
 
 def test_loop_guard_forgets_oldest_beyond_capacity():
-    from AlLoRa.DataSources.Loop_guard import Loop_guard
+    from AlLoRa.Data.Loop_guard import Loop_guard
     guard = Loop_guard(cap=2)
     guard.note("t", b"1")
     guard.note("t", b"2")

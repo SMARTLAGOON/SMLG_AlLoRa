@@ -25,8 +25,8 @@ import pytest
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
-from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
-from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
+from AlLoRa.Data.Sources.Disk_DataSource import Disk_DataSource
+from AlLoRa.Control.Control_Root_DataSink import Control_Root_DataSink
 
 _EXAMPLES = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "examples", "v3_hello")
@@ -179,7 +179,7 @@ def test_a_node_with_no_root_acts_on_unsigned_commands(tmp_path, monkeypatch):
 
 
 def test_a_rooted_node_with_an_identity_verifies_against_the_root(tmp_path, monkeypatch):
-    from AlLoRa.Security.ec_p256 import generate_private_key, public_key_uncompressed
+    from AlLoRa.Protocol.Security.ec_p256 import generate_private_key, public_key_uncompressed
     import os as _os
     priv = generate_private_key(_os.urandom)
     with open(str(tmp_path / "control_root.key"), "w") as f:
@@ -198,7 +198,7 @@ def test_a_rooted_node_with_no_identity_halts_instead_of_looking_provisioned(
     """It could refuse unsigned commands and never verify a signed one, because a signed
     artifact is addressed to a device_id an open node does not have. Left running it looks
     provisioned and can never accept a command."""
-    from AlLoRa.Security.ec_p256 import generate_private_key, public_key_uncompressed
+    from AlLoRa.Protocol.Security.ec_p256 import generate_private_key, public_key_uncompressed
     import os as _os
     priv = generate_private_key(_os.urandom)
     with open(str(tmp_path / "control_root.key"), "w") as f:

@@ -14,7 +14,7 @@ test_chunk_size_one_store.py.
 
 
 def test_base_imports_and_constructs_on_cpython():
-    from AlLoRa.DataSources.DataSource import DataSource
+    from AlLoRa.Data.Sources.DataSource import DataSource
     ds = DataSource()
     assert ds.has_pending() is False
 
@@ -25,7 +25,7 @@ def _file(name, payload=b"x"):
 
 
 def _base(**kwargs):
-    from AlLoRa.DataSources.DataSource import DataSource
+    from AlLoRa.Data.Sources.DataSource import DataSource
     return DataSource(**kwargs)
 
 

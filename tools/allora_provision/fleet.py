@@ -10,8 +10,8 @@ import subprocess
 
 from AlLoRa.Digital_Endpoint import with_current_keys
 from AlLoRa.Control.Control_Root import Control_Root
-from AlLoRa.Security.ec_p256 import public_key_uncompressed
-from AlLoRa.Security.identity import device_id_from_pubkey
+from AlLoRa.Protocol.Security.ec_p256 import public_key_uncompressed
+from AlLoRa.Protocol.Security.identity import device_id_from_pubkey
 
 # The filename a board's config line names, on both node kinds. Same name for both halves on
 # purpose, exactly as `identity.key` already is: what the file *contains* decides whether the

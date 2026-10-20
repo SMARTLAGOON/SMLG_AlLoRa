@@ -17,12 +17,12 @@ from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Control.Control_Actuator import Control_Actuator
 from AlLoRa.Control.Control_Root import Control_Root
 from AlLoRa.Control.control_types import CUSTOM
-from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
+from AlLoRa.Control.Control_Root_DataSink import Control_Root_DataSink
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Packet import Packet
 from test_control_root_sink import CONTROL_ROOT_PRIV, TARGET_DEVICE_ID
 
 EDGE_MAC = "a1a1a1a1"
@@ -98,7 +98,7 @@ def test_a_signed_custom_is_handed_over_once_after_the_final_ok(tmp_path, monkey
         "the payload must arrive untouched, be queued once, and be handed over once"
     applied_at = events.index(marks[0])
     handed_at = events.index(marks[1])
-    assert events[handed_at - 1] == ("sent", Packet_v3.OK), \
+    assert events[handed_at - 1] == ("sent", Packet.OK), \
         "the hand-off must wait until the transfer's final OK is on the air"
-    assert any(e == ("sent", Packet_v3.OK) for e in events[applied_at:handed_at]), \
+    assert any(e == ("sent", Packet.OK) for e in events[applied_at:handed_at]), \
         "the final OK is sent after the gate forwards the command, not before"

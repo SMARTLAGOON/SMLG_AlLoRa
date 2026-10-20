@@ -19,7 +19,7 @@ import json
 import pytest
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
+from AlLoRa.Data.Sources.Disk_DataSource import Disk_DataSource
 from AlLoRa.File import AlLoRa_File, OnDemandFileReader
 from AlLoRa.Nodes.Edge import Edge
 

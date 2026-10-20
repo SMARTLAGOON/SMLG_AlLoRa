@@ -19,11 +19,11 @@ import json
 import pytest
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.DataSources.DataSource import DataSource
-from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
+from AlLoRa.Data.Sources.DataSource import DataSource
+from AlLoRa.Data.Sources.Disk_DataSource import Disk_DataSource
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Nodes.Edge import Edge
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Packet import Packet
 
 SESSION_ID = 42
 SOURCE_MAC = "a1a1a1a1"
@@ -61,14 +61,14 @@ def _file(name, payload):
 
 
 def _chunk_request(index):
-    packet = Packet_v3(addressing="sid")
+    packet = Packet(addressing="sid")
     packet.set_session(SESSION_ID)
     packet.ask_data(index)
     return packet
 
 
 def _metadata_request():
-    packet = Packet_v3(addressing="sid")
+    packet = Packet(addressing="sid")
     packet.set_session(SESSION_ID)
     packet.ask_metadata()
     return packet
@@ -86,7 +86,7 @@ def test_a_chunk_request_for_an_unannounced_file_is_answered_with_metadata(tmp_p
     reply, _ = source.response(_chunk_request(2))
 
     assert reply is not None, "silence stalls the collector; 0015 forbids it as a refusal"
-    assert reply.get_command() == Packet_v3.METADATA
+    assert reply.get_command() == Packet.METADATA
     assert reply.get_metadata()["FILENAME"] == "hello.bin"
 
 
@@ -111,7 +111,7 @@ def test_a_source_that_announced_the_file_serves_the_chunk(tmp_path):
     source.response(_metadata_request())            # the announcement it remembers
     reply, _ = source.response(_chunk_request(0))
 
-    assert reply.get_command() == Packet_v3.DATA
+    assert reply.get_command() == Packet.DATA
     assert reply.get_payload() == PAYLOAD[:CHUNK_SIZE]
 
 
@@ -128,7 +128,7 @@ def test_a_lost_re_announcement_does_not_let_the_next_request_through(tmp_path):
 
     for _ in range(3):
         reply, _ = source.response(_chunk_request(2))
-        assert reply.get_command() == Packet_v3.METADATA
+        assert reply.get_command() == Packet.METADATA
 
 
 # --- resume across a restart is the input boundary's to permit ----------------------------
@@ -149,7 +149,7 @@ def test_a_ram_queue_restarts_the_transfer_after_a_restart(tmp_path):
     source._pump_datasource()
     reply, _ = source.response(_chunk_request(2))
 
-    assert reply.get_command() == Packet_v3.METADATA
+    assert reply.get_command() == Packet.METADATA
 
 
 def _durable_queue(tmp_path):
@@ -181,7 +181,7 @@ def test_a_durable_queue_resumes_the_transfer_after_a_restart(tmp_path):
     rebooted._pump_datasource()
     reply, _ = rebooted.response(_chunk_request(2))
 
-    assert reply.get_command() == Packet_v3.DATA, (
+    assert reply.get_command() == Packet.DATA, (
         "a queue that still holds the file must continue the transfer, not restart it")
     assert reply.get_payload() == PAYLOAD[2 * CHUNK_SIZE:]
 

@@ -17,7 +17,7 @@ sys.path.insert(0, _HERE)
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector   # noqa: E402
 from AlLoRa.Control.Control_Root import Control_Root                  # noqa: E402
 from AlLoRa.Control.control_types import CUSTOM                       # noqa: E402
-from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink  # noqa: E402
+from AlLoRa.Control.Control_Root_DataSink import Control_Root_DataSink  # noqa: E402
 from AlLoRa.Digital_Endpoint import Digital_Endpoint                  # noqa: E402
 from AlLoRa.Nodes.Edge import Edge                                    # noqa: E402
 from AlLoRa.Nodes.Hub import Hub                                      # noqa: E402

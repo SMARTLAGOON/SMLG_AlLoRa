@@ -10,8 +10,8 @@ a back-compat shim that frames via the codec then transmits.
 The Loopback connector backs these with in-process queues, so they're testable on CPython.
 """
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Codec import V3OpenCodec
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Codec import V3OpenCodec
+from AlLoRa.Protocol.Packet import Packet
 
 
 def _pair():
@@ -19,12 +19,12 @@ def _pair():
 
 
 def _req(sid):
-    p = Packet_v3(addressing="sid"); p.set_session(sid); p.ask_metadata()
+    p = Packet(addressing="sid"); p.set_session(sid); p.ask_metadata()
     return p
 
 
 def _reply(sid):
-    p = Packet_v3(addressing="sid"); p.set_session(sid); p.set_ok()
+    p = Packet(addressing="sid"); p.set_session(sid); p.set_ok()
     return p
 
 
@@ -46,7 +46,7 @@ def test_listen_times_out_to_none():
 def test_send_shim_frames_via_the_codec_then_transmits():
     a, b = _pair()
     a.codec = V3OpenCodec(addressing="sid")     # the shim uses whatever codec is configured
-    p = Packet_v3(addressing="sid"); p.set_session(5); p.set_data(b"hi")
+    p = Packet(addressing="sid"); p.set_session(5); p.set_data(b"hi")
     assert a.send(p) is True
     wire, _ = b.listen(1.0)
     assert wire == p.get_content()              # send(packet) == transmit(codec.frame(packet))

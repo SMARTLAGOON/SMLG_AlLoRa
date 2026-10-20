@@ -1,7 +1,7 @@
 """Unit — Codec, the seam that speaks a Packet on the wire.
 
 Framing/version/posture and reply-matching used to be scattered across the Connector
-(`_new_response_packet` / `_response_matches`) and a parallel method-pair on Packet_v3
+(`_new_response_packet` / `_response_matches`) and a parallel method-pair on Packet
 (open `get_content`/`load` vs secure `get_secure_content`/`load_secure`). These pin the
 extracted seam: one `frame`/`deframe`/`match_spec` interface with an implementation per
 (version x posture), the secure pair folded inside `V3SecureCodec` as private mechanism.
@@ -13,17 +13,17 @@ are the end-to-end proof over the live engine; these are the focused unit checks
 """
 import pytest
 
-from AlLoRa.Codec import V2Codec, V3OpenCodec, V3SecureCodec, build_codec
-from AlLoRa.Packet import Packet
-from AlLoRa.Packet_v3 import Packet_v3
-from AlLoRa.Security.Session import Session
-from AlLoRa.Security.AEAD import detect_aead
+from AlLoRa.Protocol.Codec import V2Codec, V3OpenCodec, V3SecureCodec, build_codec
+from AlLoRa.Protocol.Packet_v2 import Packet_v2
+from AlLoRa.Protocol.Packet import Packet
+from AlLoRa.Protocol.Security.Session import Session
+from AlLoRa.Protocol.Security.AEAD import detect_aead
 
 
 # --- V2Codec (legacy MAC-addressed frame + checksum) ---------------------------------------
 
 def _v2(src, dst):
-    p = Packet(mesh_mode=False, short_mac=True)
+    p = Packet_v2(mesh_mode=False, short_mac=True)
     p.set_source(src)
     p.set_destination(dst)
     p.set_ok()
@@ -36,7 +36,7 @@ def test_v2_frame_deframe_round_trips():
     assert got is not None
     assert got.get_source() == "a1a1a1a1"
     assert got.get_destination() == "b2b2b2b2"
-    assert got.get_command() == Packet.OK
+    assert got.get_command() == Packet_v2.OK
 
 
 def test_v2_deframe_rejects_garbage():
@@ -68,7 +68,7 @@ def test_v2_match_spec_matches_on_the_wire():
 # --- V3OpenCodec (sid-addressed typed frame + 24-bit integrity) ----------------------------
 
 def _v3_data(sid, chunk):
-    p = Packet_v3(addressing="sid")
+    p = Packet(addressing="sid")
     p.set_session(sid)
     p.set_data(chunk)
     return p
@@ -79,7 +79,7 @@ def test_v3_open_frame_deframe_round_trips():
     got = codec.deframe(codec.frame(_v3_data(7, b"hello")))
     assert got is not None
     assert got.get_session() == 7
-    assert got.get_command() == Packet_v3.DATA
+    assert got.get_command() == Packet.DATA
     assert got.get_payload() == b"hello"
 
 
@@ -92,10 +92,10 @@ def test_v3_open_deframe_rejects_corrupt_integrity():
 
 def test_v3_match_spec_is_by_session():
     codec = V3OpenCodec(addressing="sid")
-    req = Packet_v3(addressing="sid"); req.set_session(9); req.ask_metadata()
+    req = Packet(addressing="sid"); req.set_session(9); req.ask_metadata()
     spec = codec.match_spec(req)
-    reply_ok = Packet_v3(addressing="sid"); reply_ok.set_session(9); reply_ok.set_ok()
-    reply_bad = Packet_v3(addressing="sid"); reply_bad.set_session(3); reply_bad.set_ok()
+    reply_ok = Packet(addressing="sid"); reply_ok.set_session(9); reply_ok.set_ok()
+    reply_bad = Packet(addressing="sid"); reply_bad.set_session(3); reply_bad.set_ok()
     assert spec.matches(reply_ok) is True
     assert spec.matches(reply_bad) is False
 
@@ -104,7 +104,7 @@ def test_v3_match_spec_matches_on_the_wire():
     # The sid is cleartext at wire offset 0, so the reply-match runs on the prefix — keyless,
     # and identical for open and secure frames.
     codec = V3OpenCodec(addressing="sid")
-    req = Packet_v3(addressing="sid"); req.set_session(9); req.ask_metadata()
+    req = Packet(addressing="sid"); req.set_session(9); req.ask_metadata()
     spec = codec.match_spec(req)
     assert spec.matches_wire(codec.frame(_v3_data(9, b"x"))) is True
     assert spec.matches_wire(codec.frame(_v3_data(3, b"x"))) is False
@@ -136,7 +136,7 @@ def test_secure_frame_deframe_round_trips():
     got = recv_codec.deframe(send_codec.frame(_v3_data(SID, b"reading")))
     assert got is not None
     assert got.get_session() == SID
-    assert got.get_command() == Packet_v3.DATA
+    assert got.get_command() == Packet.DATA
     assert got.get_payload() == b"reading"
 
 
@@ -176,10 +176,10 @@ def test_secure_frame_without_a_session_is_a_wiring_error():
 # try-parses (secure sid first, then open MAC CTRL) with no new wire field.
 
 def _handshake_ctrl(src, dst, payload=b"ephemeral-pubkey"):
-    p = Packet_v3(addressing="mac")
+    p = Packet(addressing="mac")
     p.set_source(src)
     p.set_destination(dst)
-    p.set_kind(Packet_v3.CTRL)
+    p.set_kind(Packet.CTRL)
     p.set_payload(payload)
     return p
 
@@ -191,7 +191,7 @@ def test_secure_codec_frames_a_handshake_ctrl_open_not_sealed():
     assert codec.frame(hs) == hs.get_content()
     got = codec.deframe(codec.frame(hs))
     assert got is not None
-    assert got.get_command() == Packet_v3.CTRL
+    assert got.get_command() == Packet.CTRL
     assert got.get_payload() == b"ephemeral-pubkey"
     assert got.get_source() == "a1a1a1a1"
 
@@ -210,7 +210,7 @@ def test_secure_codec_disambiguates_secure_data_from_a_handshake_frame():
     assert got_secure is not None and got_secure.get_payload() == b"reading"
     # ...and an open MAC handshake frame addressed to it
     got_hs = recv_codec.deframe(_handshake_ctrl("a1a1a1a1", "b2b2b2b2").get_content())
-    assert got_hs is not None and got_hs.get_command() == Packet_v3.CTRL
+    assert got_hs is not None and got_hs.get_command() == Packet.CTRL
 
 
 def test_secure_codec_ignores_a_handshake_frame_for_someone_else():
@@ -240,9 +240,9 @@ DID = b"\xde\xad\xbe\xef"
 
 
 def _handshake_did(did=DID, payload=b"ephemeral-pubkey"):
-    p = Packet_v3(addressing="did")
+    p = Packet(addressing="did")
     p.set_did(did)
-    p.set_kind(Packet_v3.CTRL)
+    p.set_kind(Packet.CTRL)
     p.set_payload(payload)
     return p
 
@@ -253,7 +253,7 @@ def test_secure_codec_frames_a_did_handshake_open_not_sealed():
     assert codec.frame(hs) == hs.get_content()            # did-addressed -> framed open
     got = codec.deframe(codec.frame(hs))
     assert got is not None
-    assert got.get_command() == Packet_v3.CTRL
+    assert got.get_command() == Packet.CTRL
     assert got.get_did() == DID
     assert got.get_payload() == b"ephemeral-pubkey"
 
@@ -270,7 +270,7 @@ def test_secure_codec_disambiguates_secure_data_from_a_did_handshake():
     got_secure = recv_codec.deframe(send_codec.frame(_v3_data(SID, b"reading")))
     assert got_secure is not None and got_secure.get_payload() == b"reading"
     got_hs = recv_codec.deframe(_handshake_did().get_content())
-    assert got_hs is not None and got_hs.get_command() == Packet_v3.CTRL
+    assert got_hs is not None and got_hs.get_command() == Packet.CTRL
 
 
 def test_secure_codec_match_spec_routes_did_to_the_token():

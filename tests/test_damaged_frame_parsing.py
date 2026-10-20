@@ -27,10 +27,10 @@ deliberately and not a defect to patch. When it is taken, these counts are meant
 """
 import pytest
 
-from AlLoRa.Codec import V3OpenCodec
-from AlLoRa.Packet_v3 import Packet_v3
-from AlLoRa.Security.AEAD import detect_aead
-from AlLoRa.Security.Session import Session
+from AlLoRa.Protocol.Codec import V3OpenCodec
+from AlLoRa.Protocol.Packet import Packet
+from AlLoRa.Protocol.Security.AEAD import detect_aead
+from AlLoRa.Protocol.Security.Session import Session
 
 SID = 0x2A
 PAYLOAD = bytes((i * 7) % 256 for i in range(64))
@@ -40,7 +40,7 @@ SID_BYTE = 0
 VT_BYTE = 1
 FL_BYTE = 2
 INTEGRITY = (3, 4, 5)
-HEADER_SIZE = Packet_v3.HEADER_SIZE_SID_P2P
+HEADER_SIZE = Packet.HEADER_SIZE_SID_P2P
 
 KEY = bytes(range(32))                  # enc(16) || mac(16)
 SEND_PREFIX = bytes(range(10))
@@ -48,9 +48,9 @@ RECV_PREFIX = bytes(range(10, 20))
 
 
 def _chunk():
-    p = Packet_v3(addressing="sid")
+    p = Packet(addressing="sid")
     p.set_session(SID)
-    p.set_kind(Packet_v3.CHUNK)
+    p.set_kind(Packet.CHUNK)
     p.set_payload(PAYLOAD)
     return p
 
@@ -124,7 +124,7 @@ def test_one_flipped_bit_turns_a_chunk_into_metadata():
     parsed = V3OpenCodec(addressing="sid").deframe(damaged)
 
     assert parsed is not None
-    assert parsed.get_command() == Packet_v3.METADATA
+    assert parsed.get_command() == Packet.METADATA
     assert parsed.get_payload() == PAYLOAD      # the chunk's bytes, now read as metadata
 
 
@@ -151,7 +151,7 @@ def _opens(wire):
     # anti-replay window having already seen this counter.
     receiver = Session(sid=SID, key=KEY,
                        send_nonce_prefix=RECV_PREFIX, recv_nonce_prefix=SEND_PREFIX)
-    packet = Packet_v3(addressing="sid")
+    packet = Packet(addressing="sid")
     try:
         return bool(packet.load_secure(wire, receiver, detect_aead()))
     except Exception:
@@ -162,7 +162,7 @@ def test_the_sealed_posture_covers_its_header_too():
     # sid, version+kind and the anti-replay counter are the AEAD's AAD, so damage to any of
     # them breaks the tag. This is the hole the open posture has and this one does not.
     wire = _sealed_wire()
-    header = range(Packet_v3.SECURE_HEADER_SIZE_SID_P2P)
+    header = range(Packet.SECURE_HEADER_SIZE_SID_P2P)
 
     assert sum(1 for i in header for bit in range(8) if _opens(_flip(wire, i, bit))) == 0
 

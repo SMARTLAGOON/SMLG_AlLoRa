@@ -26,9 +26,9 @@ from math import ceil
 import pytest
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.DataSources.DataSource import DataSource
-from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
-from AlLoRa.DataSources.MQTT_DataSource import MQTT_DataSource
+from AlLoRa.Data.Sources.DataSource import DataSource
+from AlLoRa.Data.Sources.Disk_DataSource import Disk_DataSource
+from AlLoRa.Data.Sources.MQTT_DataSource import MQTT_DataSource
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Nodes.Edge import Edge
 from test_hub_endpoints import _make_hub, _node

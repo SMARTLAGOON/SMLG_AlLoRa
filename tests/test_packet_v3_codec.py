@@ -21,14 +21,14 @@ import struct
 
 import pytest
 
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Packet import Packet
 
 SRC = "a1a1a1a1"
 DST = "b2b2b2b2"
 
 
 def _fresh(addressing, mesh_mode=False):
-    return Packet_v3(mesh_mode=mesh_mode, addressing=addressing)
+    return Packet(mesh_mode=mesh_mode, addressing=addressing)
 
 
 # --- version + typed kind ---------------------------------------------------

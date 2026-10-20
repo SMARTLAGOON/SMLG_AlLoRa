@@ -26,12 +26,12 @@ import os
 import pytest
 
 from AlLoRa.File import AlLoRa_File
-from AlLoRa.DataSinks.DataSink import Reception
+from AlLoRa.Data.Sinks.DataSink import Reception
 from AlLoRa.Control.Control_Actuator import Control_Actuator
 from AlLoRa.Control.Node_Control_Actuator import Node_Control_Actuator
 from AlLoRa.Control.control_types import RF_CONFIG, RESET, MODEL, OTA, CUSTOM
-from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink, ENVELOPE_VERSION
-from AlLoRa.Security.ec_p256 import ecdsa_sign, public_key_uncompressed
+from AlLoRa.Control.Control_Root_DataSink import Control_Root_DataSink, ENVELOPE_VERSION
+from AlLoRa.Protocol.Security.ec_p256 import ecdsa_sign, public_key_uncompressed
 from test_config_persistence import _dying_open
 
 # --- the deployment's control root, and the artifacts it mints -----------------------------
@@ -537,7 +537,7 @@ def test_the_mark_persists_on_a_runtime_whose_sha256_has_no_hexdigest(monkeypatc
     replay = _artifact(tmp_path, _envelope(RF_CONFIG, RF_PAYLOAD, counter=5), name="replay.bin")
 
     monkeypatch.setattr(
-        "AlLoRa.DataSinks.Control_Root_DataSink.hashlib.sha256", _Micropython_sha256)
+        "AlLoRa.Control.Control_Root_DataSink.hashlib.sha256", _Micropython_sha256)
 
     actuator = _CapturingActuator()
     _sink(actuator, counter_file=mark).consume(first, Reception(source="hub"))

@@ -26,9 +26,9 @@ from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Control.Control_Root import Control_Root
 from AlLoRa.Control.Node_Control_Actuator import Node_Control_Actuator
 from AlLoRa.Control.control_types import RF_CONFIG
-from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
-from AlLoRa.DataSinks.DataSink import DataSink, Reception
-from AlLoRa.DataSources.DataSource import DataSource
+from AlLoRa.Control.Control_Root_DataSink import Control_Root_DataSink
+from AlLoRa.Data.Sinks.DataSink import DataSink, Reception
+from AlLoRa.Data.Sources.DataSource import DataSource
 from AlLoRa.File import AlLoRa_File
 from test_control_root_sink import (
     CONTROL_ROOT_PRIV, TARGET_DEVICE_ID, _CapturingActuator, _artifact,

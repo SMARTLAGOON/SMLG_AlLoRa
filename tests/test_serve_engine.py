@@ -12,8 +12,8 @@ import pytest
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.File import AlLoRa_File
-from AlLoRa.Packet import Packet
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Packet_v2 import Packet_v2
+from AlLoRa.Protocol.Packet import Packet
 
 SESSION_ID = 42
 EDGE_MAC = "a1a1a1a1"
@@ -67,14 +67,14 @@ def _make_v2_edge(tmp_path):
 
 
 def _request(kind_setter, *args):
-    packet = Packet_v3(addressing="sid")
+    packet = Packet(addressing="sid")
     packet.set_session(SESSION_ID)
     kind_setter(packet, *args)
     return packet
 
 
 def _chunk_request(index):
-    return _request(Packet_v3.ask_data, index)
+    return _request(Packet.ask_data, index)
 
 
 def _announce(edge):
@@ -82,8 +82,8 @@ def _announce(edge):
     # for a file it remembers announcing, so a setup that jumps straight to chunk requests
     # is answered with METADATA rather than data, which is correct behavior and not what
     # these tests are pinning.
-    reply, _ = edge.response(_request(Packet_v3.ask_metadata))
-    assert reply is not None and reply.get_command() == Packet_v3.METADATA
+    reply, _ = edge.response(_request(Packet.ask_metadata))
+    assert reply is not None and reply.get_command() == Packet.METADATA
     return edge
 
 
@@ -151,7 +151,7 @@ def test_v2_rf_change_while_idle_does_not_crash_serve(tmp_path):
     edge = _make_v2_edge(tmp_path)
     assert edge.file is None
 
-    request = Packet(mesh_mode=False, short_mac=True)
+    request = Packet_v2(mesh_mode=False, short_mac=True)
     request.set_source(HUB_MAC)
     request.set_destination(EDGE_MAC)
     request.set_change_rf({"sf": 8, "cks": 100})
@@ -236,9 +236,9 @@ def test_v3_poll_ok_mid_transfer_is_answered_not_final(tmp_path):
     # would retire it and the upload would silently vanish).
     edge = _served_edge(tmp_path, chunks_served=1)
 
-    reply, _ = edge.response(_request(Packet_v3.set_ok))
+    reply, _ = edge.response(_request(Packet.set_ok))
 
-    assert reply is not None and reply.get_command() == Packet_v3.OK
+    assert reply is not None and reply.get_command() == Packet.OK
     assert not edge.file.sent
 
 
@@ -247,7 +247,7 @@ def test_v3_final_ok_after_tail_chunk_finalizes_silently(tmp_path):
     # It ends the transfer and nobody listens for a reply, so none is sent.
     edge = _served_edge(tmp_path, chunks_served=3)
 
-    reply, _ = edge.response(_request(Packet_v3.set_ok))
+    reply, _ = edge.response(_request(Packet.set_ok))
 
     assert reply is None
     assert edge.file.sent
@@ -261,27 +261,27 @@ def test_v2_poll_ok_is_always_answered(tmp_path):
     edge.set_file(AlLoRa_File(name="up.bin", content=bytearray(bytes(500)),
                               chunk_size=edge.get_chunk_size()))
 
-    metadata_req = Packet(mesh_mode=False, short_mac=True)
+    metadata_req = Packet_v2(mesh_mode=False, short_mac=True)
     metadata_req.set_source(HUB_MAC)
     metadata_req.set_destination(EDGE_MAC)
     metadata_req.ask_metadata()
     reply, _ = edge.response(metadata_req)
-    assert reply is not None and reply.get_command() == Packet.METADATA
+    assert reply is not None and reply.get_command() == Packet_v2.METADATA
 
-    chunk_req = Packet(mesh_mode=False, short_mac=True)
+    chunk_req = Packet_v2(mesh_mode=False, short_mac=True)
     chunk_req.set_source(HUB_MAC)
     chunk_req.set_destination(EDGE_MAC)
     chunk_req.ask_data(0)
     reply, _ = edge.response(chunk_req)
     assert reply is not None
 
-    ok_req = Packet(mesh_mode=False, short_mac=True)
+    ok_req = Packet_v2(mesh_mode=False, short_mac=True)
     ok_req.set_source(HUB_MAC)
     ok_req.set_destination(EDGE_MAC)
     ok_req.set_ok()
     reply, _ = edge.response(ok_req)
 
-    assert reply is not None and reply.get_command() == Packet.OK
+    assert reply is not None and reply.get_command() == Packet_v2.OK
     assert edge.file.sent
 
 
@@ -344,7 +344,7 @@ def test_trial_does_not_commit_on_the_first_served_frame(tmp_path):
     # full max-payload chunk will land, so serving them must leave the trial armed.
     edge = _armed_edge_with_file(tmp_path)
 
-    edge.response(_request(Packet_v3.ask_metadata))
+    edge.response(_request(Packet.ask_metadata))
     edge.response(_chunk_request(0))
 
     assert edge.committed == 0, "a short first exchange must not commit the trial"
@@ -412,7 +412,7 @@ def test_trial_commits_on_the_final_ok_after_the_tail_chunk(tmp_path):
     edge.response(_chunk_request(0))
     assert edge.committed == 0, "serving the only chunk is not yet proof it was demodulated"
 
-    reply, _ = edge.response(_request(Packet_v3.set_ok))
+    reply, _ = edge.response(_request(Packet.set_ok))
 
     assert reply is None, "the final-OK after the tail is fire-and-forget (no reply)"
     assert edge.committed == 1, "the final-OK proves the file landed — commit"
@@ -426,9 +426,9 @@ def test_trial_holds_on_a_mid_transfer_ok_poll(tmp_path):
     edge = _armed_edge_with_file(tmp_path)
 
     edge.response(_chunk_request(0))
-    reply, _ = edge.response(_request(Packet_v3.set_ok))
+    reply, _ = edge.response(_request(Packet.set_ok))
 
-    assert reply is not None and reply.get_command() == Packet_v3.OK, "a poll gets its keepalive"
+    assert reply is not None and reply.get_command() == Packet.OK, "a poll gets its keepalive"
     assert edge.committed == 0, "a mid-transfer OK poll is not a full-exchange commit"
     assert edge.sf_trial, "the trial holds pending until a real full exchange resolves it"
 
@@ -480,7 +480,7 @@ def _held_trial_edge(tmp_path, window_s=1):
 def _metadata_poller(edge, stop, period=0.3):
     # The peer re-asks METADATA well inside the window, so the window alone never elapses.
     # Nothing drains the edge's outbox, which is the lost uplink that keeps it asking.
-    wire = edge.connector.codec.frame(_request(Packet_v3.ask_metadata))
+    wire = edge.connector.codec.frame(_request(Packet.ask_metadata))
 
     def keep_asking():
         while not stop.is_set():

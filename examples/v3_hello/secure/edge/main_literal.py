@@ -8,7 +8,7 @@ import time
 
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Connectors.SX127x_connector import SX127x_connector
-from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
+from AlLoRa.Data.Sources.Disk_DataSource import Disk_DataSource
 from AlLoRa.Control.Node_Control_Actuator import Node_Control_Actuator
 
 gc.enable()

@@ -7,7 +7,7 @@
 from serial.tools import list_ports
 
 from AlLoRa.Nodes.Hub import Hub
-from AlLoRa.Connectors.Serial_connector import Serial_connector, usb_reset
+from AlLoRa.Connectors.Split.Serial_connector import Serial_connector, usb_reset
 
 
 # The adapter's MAC, the four bytes its radio answers to. Set it to your board's.

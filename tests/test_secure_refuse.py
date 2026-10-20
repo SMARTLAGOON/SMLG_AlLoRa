@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-import AlLoRa.Security.AEAD as AEAD
+import AlLoRa.Protocol.Security.AEAD as AEAD
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 

@@ -15,7 +15,7 @@ import json
 import os
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.DataSources.Serial_DataSource import Serial_DataSource
+from AlLoRa.Data.Sources.Serial_DataSource import Serial_DataSource
 from AlLoRa.Nodes.Edge import Edge
 
 SESSION_ID = 42

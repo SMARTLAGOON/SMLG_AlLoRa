@@ -25,12 +25,12 @@ import json
 
 from AlLoRa.Control.Control_Root import Control_Root
 from AlLoRa.Control.control_types import RF_CONFIG
-from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
-from AlLoRa.DataSinks.DataSink import Reception
-from AlLoRa.DataSources.DataSource import DataSource
+from AlLoRa.Control.Control_Root_DataSink import Control_Root_DataSink
+from AlLoRa.Data.Sinks.DataSink import Reception
+from AlLoRa.Data.Sources.DataSource import DataSource
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Nodes.Node import Node
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Packet import Packet
 from test_control_root_sink import (
     CONTROL_ROOT_PRIV, OTHER_ROOT_PRIV, TARGET_DEVICE_ID, _CapturingActuator,
 )
@@ -160,7 +160,7 @@ def test_the_in_band_route_speaks_the_control_frame_a_v3_peer_listens_for(tmp_pa
     hub.ask_change_rf(endpoint, NEW_CONFIG)
 
     assert sent, "an open Hub must put the change on the air"
-    assert sent[0].get_command() == Packet_v3.CTRL, "an in-band command rides a CTRL frame"
+    assert sent[0].get_command() == Packet.CTRL, "an in-band command rides a CTRL frame"
     payload = sent[0].get_payload()
     assert payload[0] == 0x80 | RF_CONFIG, \
         "the prefix is the namespace bit plus the control type verbatim"
@@ -197,7 +197,7 @@ def test_an_echoed_prefix_is_the_acknowledgement(tmp_path):
     def _echo(packet):
         sent.append(packet)
         reply = hub.new_packet()
-        reply.set_kind(Packet_v3.CTRL)
+        reply.set_kind(Packet.CTRL)
         reply.set_payload(bytes([0x80 | RF_CONFIG]))
         return reply
 
@@ -243,7 +243,7 @@ def test_an_edge_that_heard_the_command_and_declined_is_reported_as_a_refusal(tm
     hub, endpoint, source = _hub(tmp_path)
 
     def _declines_control_but_is_alive(packet):
-        if packet.get_command() == Packet_v3.CTRL:
+        if packet.get_command() == Packet.CTRL:
             return None             # heard it, refused it, said nothing: the provisioned Edge
         reply = hub.new_packet()
         reply.set_ok()
@@ -263,7 +263,7 @@ def test_the_refusal_line_names_the_edge_the_way_every_other_hub_line_does(tmp_p
     hub.debug = True
 
     def _declines_control_but_is_alive(packet):
-        if packet.get_command() == Packet_v3.CTRL:
+        if packet.get_command() == Packet.CTRL:
             return None
         reply = hub.new_packet()
         reply.set_ok()
@@ -373,7 +373,7 @@ def test_an_acknowledged_in_band_change_is_not_rewritten_by_its_own_trial(tmp_pa
 
     def _echo(packet):
         reply = hub.new_packet()
-        reply.set_kind(Packet_v3.CTRL)
+        reply.set_kind(Packet.CTRL)
         reply.set_payload(bytes([0x80 | RF_CONFIG]))
         return reply
 
@@ -398,7 +398,7 @@ def test_one_lost_poll_does_not_turn_a_refusal_back_into_a_link_report(tmp_path)
     polls = []
 
     def _drops_the_first_poll(packet):
-        if packet.get_command() == Packet_v3.CTRL:
+        if packet.get_command() == Packet.CTRL:
             return None                     # the refusal: heard, declined, silent
         polls.append(packet)
         if len(polls) == 1:

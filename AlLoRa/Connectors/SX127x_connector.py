@@ -2,7 +2,7 @@ import time
 import ubinascii
 import network
 
-from AlLoRa.Packet import Packet
+from AlLoRa.Protocol.Packet_v2 import Packet_v2
 from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.utils.debug_utils import print
 

@@ -59,7 +59,7 @@ _MAC_SNIPPET = (
 # port is still re-enumerating, so it is routinely missed. It is also the same call the node
 # itself makes, so the fingerprint is the one the node will use, not a second opinion about it.
 _IDENTITY_SNIPPET = (
-    "from AlLoRa.Security.identity import load_or_create_identity\n"
+    "from AlLoRa.Protocol.Security.identity import load_or_create_identity\n"
     "from os import urandom\n"
     "print('DEVID:' + load_or_create_identity({path!r}, urandom)[2].hex())\n"
 )

@@ -11,7 +11,7 @@ This is receiver-local state only (no wire cost). The counter is per-*frame*: a
 legitimately retransmitted chunk rides a new frame with a new counter, so it is never a
 replay; only an attacker replaying captured bytes reuses a counter.
 """
-from AlLoRa.Security.Replay_window import Replay_window
+from AlLoRa.Protocol.Security.Replay_window import Replay_window
 
 
 def test_first_counter_is_accepted():

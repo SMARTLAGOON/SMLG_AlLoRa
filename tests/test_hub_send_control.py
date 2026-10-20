@@ -13,7 +13,7 @@ import pytest
 
 from AlLoRa.Control.Control_Root import Control_Root
 from AlLoRa.Control.control_types import CUSTOM, RESET, RF_CONFIG
-from AlLoRa.DataSinks.DataSink import Reception
+from AlLoRa.Data.Sinks.DataSink import Reception
 from test_control_root_sink import CONTROL_ROOT_PRIV, _CapturingActuator
 from test_hub_ask_change_rf import _gate, _hub
 from test_hub_endpoints import _make_hub, _node

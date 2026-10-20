@@ -7,7 +7,7 @@ logic lived scattered on the Connector with zero tests; extracting it into a pur
 radio-free policy object makes it unit-testable for the first time. These tests pin the
 exact behavior so the extraction is provably zero-behavior.
 """
-from AlLoRa.Pacing import Pacing
+from AlLoRa.Protocol.Pacing import Pacing
 
 
 def test_window_starts_at_max():

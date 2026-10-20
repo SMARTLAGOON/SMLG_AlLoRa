@@ -9,9 +9,9 @@ import os
 
 import pytest
 
-from AlLoRa.DataSinks.DataSink import Reception
+from AlLoRa.Data.Sinks.DataSink import Reception
 from AlLoRa.File import AlLoRa_File
-from AlLoRa.message_template import PLACEHOLDERS, Template, Unpublishable
+from AlLoRa.Data.Sinks.message_template import PLACEHOLDERS, Template, Unpublishable
 
 # 2026-09-28T10:00:03Z
 ARRIVAL_MS = 1790589603000
@@ -364,8 +364,8 @@ def test_the_renderer_does_not_know_where_a_message_goes():
     # Formatting a message is not sending it. If the renderer ever needs to know the
     # destination, the design is wrong: that belongs in the sink.
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "AlLoRa", "message_template.py")
-    banned = ("AlLoRa.DataSinks", "socket", "usocket", "requests", "urequests",
+                        "AlLoRa", "Data", "Sinks", "message_template.py")
+    banned = ("AlLoRa.Data.Sinks", "socket", "usocket", "requests", "urequests",
               "umqtt", "paho", "http", "urllib", "ssl")
     offenders = [name for name in _imports_of(path)
                  if any(name == b or name.startswith(b + ".") for b in banned)]

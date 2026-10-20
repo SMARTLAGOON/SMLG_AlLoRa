@@ -7,14 +7,14 @@ import gc
 from os import urandom
 from json import loads, dumps
 
-from AlLoRa.Packet import Packet
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Packet_v2 import Packet_v2
+from AlLoRa.Protocol.Packet import Packet
 from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.Status import Status
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Control.control_types import IN_BAND, CUSTOM, KNOWN as CONTROL_TYPES
-from AlLoRa.Pacing import Pacing
+from AlLoRa.Protocol.Pacing import Pacing
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, \
     ticks_add, ticks_diff
 from AlLoRa.utils.debug_utils import print
@@ -258,8 +258,8 @@ class Node:
     def _enable_secure(self):
         # Custody of secure Sessions (per-peer, keyed by sid) + the per-frame AEAD backend.
         # Imported lazily so an open-mode node never pulls in the crypto modules.
-        from AlLoRa.Security.Session_store import RAM_session_store
-        from AlLoRa.Security.AEAD import detect_aead
+        from AlLoRa.Protocol.Security.Session_store import RAM_session_store
+        from AlLoRa.Protocol.Security.AEAD import detect_aead
         self.session_store = RAM_session_store()
         self.aead = detect_aead()
         # A secure node always has a device_id: it is its wire identity (first-contact address
@@ -271,7 +271,7 @@ class Node:
         # No crypto backend. A configured-secure node must NOT silently run plaintext: the
         # operator believes the link is protected, so a silent degrade is the worst outcome.
         # It halts loudly, unless an explicit opt-in (tests / bring-up only) permits open.
-        from AlLoRa.Security.AEAD import unavailable_reason
+        from AlLoRa.Protocol.Security.AEAD import unavailable_reason
         reason = unavailable_reason()
         if self.config.get('allow_insecure_fallback', False):
             print("WARNING: secure mode requested but no AEAD backend, running OPEN (insecure),",
@@ -289,8 +289,8 @@ class Node:
         # RAM-only (fine for tests, but the device_id then changes each boot).
         if self.device_id is not None:
             return
-        from AlLoRa.Security.identity import (load_or_create_identity, device_id_from_pubkey)
-        from AlLoRa.Security.ec_p256 import generate_private_key, public_key_uncompressed
+        from AlLoRa.Protocol.Security.identity import (load_or_create_identity, device_id_from_pubkey)
+        from AlLoRa.Protocol.Security.ec_p256 import generate_private_key, public_key_uncompressed
         path = self.config.get('identity_file', None)
         if path:
             self.identity_priv, self.identity_pub, self.device_id = \
@@ -375,7 +375,7 @@ class Node:
                     "commands it sends and cannot do so with a verifying key. Provision the "
                     "private scalar (64 hex characters), or provision nothing here if the "
                     "artifacts are minted elsewhere and handed to ask_change_rf.".format(path))
-            from AlLoRa.Security.ec_p256 import decode_public_key
+            from AlLoRa.Protocol.Security.ec_p256 import decode_public_key
             try:
                 key = bytes.fromhex(material)
             except ValueError:
@@ -418,13 +418,13 @@ class Node:
         # codec puts it on the wire open. Addressed by device_id[:4] (v3, no MAC on the wire),
         # a single token stamped the same in both directions, or, for a MAC-registered peer,
         # by the retiring two-MAC shape.
-        p = Packet_v3(mesh_mode=self.mesh_mode, addressing=addressing)
+        p = Packet(mesh_mode=self.mesh_mode, addressing=addressing)
         if addressing == "did":
             p.set_did(token)
         else:
             p.set_source(self.MAC)
             p.set_destination(token)
-        p.set_kind(Packet_v3.CTRL)
+        p.set_kind(Packet.CTRL)
         p.set_payload(bytes([hs_kind]) + payload)
         return p
 
@@ -527,10 +527,10 @@ class Node:
         MAC addressing. Callers that need MAC fields (v2) set source/destination after.
         """
         if self.protocol_version >= 3:
-            packet = Packet_v3(mesh_mode=self.mesh_mode, addressing=self.addressing)
+            packet = Packet(mesh_mode=self.mesh_mode, addressing=self.addressing)
             packet.set_session(self.session_id)
             return packet
-        return Packet(self.mesh_mode, self.short_mac)
+        return Packet_v2(self.mesh_mode, self.short_mac)
 
     def is_for_me(self, packet):
         if self.protocol_version >= 3:
@@ -620,7 +620,7 @@ class Node:
 
         return packet
 
-    def send_response(self, response_packet: Packet):
+    def send_response(self, response_packet):
         if response_packet:
             if self.mesh_mode:
                 response_packet.set_id(self.generate_id())
@@ -639,7 +639,7 @@ class Node:
                 self.status['TimeBtw'] = time_reply
                 self.status.notify()
 
-    def forward(self, packet: Packet):
+    def forward(self, packet):
         try:
             if packet.get_mesh():
                 if self.debug:
@@ -777,7 +777,7 @@ class Node:
         if error is not None and self.debug:
             print("Error creating result path: {}".format(error))
         if self.data_sink is None:
-            from AlLoRa.DataSinks.Disk_DataSink import Disk_DataSink
+            from AlLoRa.Data.Sinks.Disk_DataSink import Disk_DataSink
             self.data_sink = Disk_DataSink(self.result_path)
         self._drive_ready = True
 
@@ -953,10 +953,10 @@ class Node:
             if packet:
                 if self.is_for_me(packet):
                     command = packet.get_command()
-                    if Packet.check_command(command):
-                        if command != Packet.OK:
+                    if Packet_v2.check_command(command):
+                        if command != Packet_v2.OK:
                             return True
-                        response_packet = Packet(self.mesh_mode, self.short_mac)
+                        response_packet = Packet_v2(self.mesh_mode, self.short_mac)
                         response_packet.set_source(self.MAC)
                         response_packet.set_destination(packet.get_source())
                         response_packet.set_ok()
@@ -998,7 +998,7 @@ class Node:
         INIT, make a fresh ephemeral key and return the HELLO (its public key); on WELCOME,
         derive + store the session and return the ACK. Returns the reply packet, or None on an
         unexpected message. A fresh ephemeral key per session means a reboot re-handshakes."""
-        from AlLoRa.Security.handshake import initiator_hello, initiator_complete
+        from AlLoRa.Protocol.Security.handshake import initiator_hello, initiator_complete
         payload = request.get_payload()
         # Answer in the same addressing the poll used: under my own device_id[:4] (v3), or
         # mirrored back to the poller's MAC (the retiring legacy shape).
@@ -1036,12 +1036,12 @@ class Node:
         # During a secure transfer the serve side may still get a first-contact handshake CTRL
         # (e.g. the peer re-handshaking); route those to the handshake, data to serving.
         kind = packet.get_command()
-        if kind == Packet_v3.GRANT:
+        if kind == Packet.GRANT:
             # A delegation from the authority. Never answered on the wire: the granted pull
             # itself is the acknowledgement, and only an Edge preset honors it.
             self._on_grant(packet)
             return
-        if kind == Packet_v3.CTRL:
+        if kind == Packet.CTRL:
             # Two vocabularies share the CTRL kind, told apart by bit 7 of the payload's first
             # byte: handshake kinds below it, control types at and above. Splitting them here
             # is what lets an unrecognised frame be dropped *as* the thing it claimed to be;
@@ -1077,7 +1077,7 @@ class Node:
         ack = self.new_packet()
         if packet.addressing == "sid":
             ack.set_session(packet.get_session())
-        ack.set_kind(Packet_v3.CTRL)
+        ack.set_kind(Packet.CTRL)
         # The prefix alone, no body: the commanding end already holds what it asked for, and
         # the type acked is what proves this node parsed the type that was sent.
         ack.set_payload(bytes([payload[0]]))
@@ -1191,8 +1191,8 @@ class Node:
         # An empty METADATA is the same poll from a Hub that has already met this endpoint,
         # which is the usual case. It cannot be the Hub serving, because a METADATA that
         # answers a request always carries the chunk size, length and name.
-        polled = (self._last_reply_kind == Packet_v3.OK
-                  or (self._last_reply_kind == Packet_v3.METADATA and self._last_reply_empty))
+        polled = (self._last_reply_kind == Packet.OK
+                  or (self._last_reply_kind == Packet.METADATA and self._last_reply_empty))
         if (self.home_role == "source" and self.current_role == "collector" and polled):
             self.yield_count += 1
             if self.debug:
@@ -1337,7 +1337,7 @@ class Node:
 
     def response(self, packet):
         command = packet.get_command()
-        if not Packet.check_command(command):
+        if not Packet_v2.check_command(command):
             return None, None
 
         v3 = self.protocol_version >= 3
@@ -1369,7 +1369,7 @@ class Node:
             response_packet.add_hop(self.name, self.connector.get_rssi(), 0)
             return response_packet, new_sf
 
-        if command == Packet.CHUNK:
+        if command == Packet_v2.CHUNK:
             if self.file is None:
                 # Nothing to serve: stay silent like a node that isn't serving yet. The
                 # poller times out and retries, exactly the pre-transfer behavior.
@@ -1421,7 +1421,7 @@ class Node:
                 self.file.report_SST(True)
             return response_packet, new_sf
 
-        if command == Packet.METADATA:    # handle for new file
+        if command == Packet_v2.METADATA:    # handle for new file
             # A metadata request heard on the new config proves the peer can still reach us:
             # hold the trial (a reachable-but-idle Edge must not roll back a good config just
             # because no data moved). A stalled CHUNK loop, by contrast, does not hold.
@@ -1445,7 +1445,7 @@ class Node:
                 self.status['Retransmission'] = self.file.retransmission
             return response_packet, new_sf
 
-        if command == Packet.OK:
+        if command == Packet_v2.OK:
             response_packet.set_ok()
             # An OK connection poll heard on the new config proves reachability: hold the trial
             # (superseded below if this turns out to be the fire-and-forget final-OK, which
@@ -1488,7 +1488,7 @@ class Node:
             if session_id is not None:
                 packet.set_session(session_id)
         else:
-            packet = Packet(self.mesh_mode, self.short_mac)
+            packet = Packet_v2(self.mesh_mode, self.short_mac)
             packet.set_source(self.connector.get_mac())
             packet.set_destination(destination)
         if mesh_active:
@@ -1497,7 +1497,7 @@ class Node:
                 packet.disable_sleep()
         return packet
 
-    def send_request(self, packet: Packet) -> Packet:
+    def send_request(self, packet):
         if self.mesh_mode and self.protocol_version < 3:   # v3 mesh uses seq, not a random id
             packet.set_id(self.generate_id())
             if self.debug_hops:
@@ -1549,8 +1549,8 @@ class Node:
         Session, or None if a round never lands. The peer authenticates nothing here: in
         `secure` this is confidentiality-only; the gateway accepts the peer by its registered
         identity, and the catastrophic downlink is guarded separately."""
-        from AlLoRa.Security.handshake import responder_accept
-        from AlLoRa.Security.ec_p256 import generate_private_key
+        from AlLoRa.Protocol.Security.handshake import responder_accept
+        from AlLoRa.Protocol.Security.ec_p256 import generate_private_key
         if self.static_priv is None:
             self.static_priv = generate_private_key(urandom)
 
@@ -1590,10 +1590,10 @@ class Node:
     @staticmethod
     def _is_hs(packet, hs_kind):
         # A valid handshake reply: a CTRL frame whose 1-byte type prefix matches.
-        return (packet is not None and packet.get_command() == Packet_v3.CTRL
+        return (packet is not None and packet.get_command() == Packet.CTRL
                 and packet.get_payload() and packet.get_payload()[0] == hs_kind)
 
-    def ask_ok(self, packet: Packet):
+    def ask_ok(self, packet):
         packet.set_ok()
         response_packet = self.send_request(packet)
         # A round that heard nothing back is an ordinary outcome on a lossy link, not an
@@ -1603,19 +1603,19 @@ class Node:
             return None, None
         if self.save_hops(response_packet):
             return  (1, "hop_catch.json"), response_packet.get_hop()
-        if response_packet.get_command() == Packet.OK:
+        if response_packet.get_command() == Packet_v2.OK:
             hop = response_packet.get_hop()
             return True, hop
         return None, None
 
-    def ask_metadata(self, packet: Packet):
+    def ask_metadata(self, packet):
         packet.ask_metadata()
         response_packet = self.send_request(packet)
         if response_packet is None:      # nothing came back
             return None, None
         if self.save_hops(response_packet):
             return  (1, "hop_catch.json"), response_packet.get_hop()
-        if response_packet.get_command() == Packet.METADATA:
+        if response_packet.get_command() == Packet_v2.METADATA:
             try:
                 metadata = response_packet.get_metadata()
                 self._wire_chunk_size = metadata.get("CHUNK_SIZE")  # v3 carries it; None for v2
@@ -1633,21 +1633,21 @@ class Node:
                 return None, None
         return None, None
 
-    def ask_data(self, packet: Packet, next_chunk):
+    def ask_data(self, packet, next_chunk):
         packet.ask_data(next_chunk)
         response_packet = self.send_request(packet)
         if response_packet is None:      # nothing came back
             return None, None
         if self.save_hops(response_packet):
             return b"0", response_packet.get_hop()
-        if response_packet.get_command() == Packet.METADATA:
+        if response_packet.get_command() == Packet_v2.METADATA:
             # The peer answered a request for a chunk by announcing what it is serving.
             # It does not remember announcing the file this reassembly is for, so the
             # bytes to continue with are not coming and asking again cannot produce them.
             # A third answer, distinct from the None that means nothing came back: that
             # one is a lost frame and is answered by re-asking the same index.
             return Node.RE_ANNOUNCED, response_packet.get_hop()
-        if response_packet.get_command() == Packet.DATA:
+        if response_packet.get_command() == Packet_v2.DATA:
             try:
                 chunk = response_packet.get_payload()
                 if self.mesh_mode:
@@ -1971,7 +1971,7 @@ class Node:
         # Freeze a completion record for the sink: identity + a final RF/quality snapshot, taken
         # now (the endpoint is reused for the next file). Every field is best-effort: a missing
         # RSSI/did must never break delivery, so each lookup is guarded.
-        from AlLoRa.DataSinks.DataSink import Reception
+        from AlLoRa.Data.Sinks.DataSink import Reception
         did = None
         try:
             did = digital_endpoint.get_did()
@@ -2033,7 +2033,7 @@ class Node:
         new_tx_power = new_config[4] if new_config[4] != config[4] else None
         new_chunk_size = new_config[5] if new_config[5] != self.chunk_size else None
         while True:
-            packet = Packet(self.mesh_mode, self.short_mac)
+            packet = Packet_v2(self.mesh_mode, self.short_mac)
             packet.set_destination(digital_endpoint.get_mac_address())
             changes = packet.set_change_rf({"freq": new_freq, "sf": new_sf,
                                             "bw": new_bw, "cr": new_cr,
@@ -2047,7 +2047,7 @@ class Node:
                     packet.disable_sleep()
             response_packet = self.send_request(packet)
             try:
-                if response_packet is not None and response_packet.get_command() == Packet.OK:
+                if response_packet is not None and response_packet.get_command() == Packet_v2.OK:
                     new_config = response_packet.get_config()
                     if self.debug:
                         print("OK and changing config to: ", new_config)

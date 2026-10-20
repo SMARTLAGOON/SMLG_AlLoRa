@@ -7,7 +7,7 @@ on CPython without a UART or a socket (the same trick the Loopback_connector pla
 """
 import threading
 
-from AlLoRa.Links.Loopback_link import Loopback_link
+from AlLoRa.Connectors.Split.Loopback_link import Loopback_link
 
 
 def test_rpc_delivers_the_request_and_returns_the_bridge_reply():

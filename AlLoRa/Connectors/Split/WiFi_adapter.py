@@ -1,0 +1,73 @@
+"""An Adapter that starts WiFi (access point or station) and talks to the logic board over HTTP.
+
+`network` is imported only when WiFi starts, so this file also loads on a computer.
+Usage: `WiFi_adapter(SX127x_connector()).run()`.
+"""
+from AlLoRa.Connectors.Split.Adapter import Adapter
+from AlLoRa.Connectors.Split.WiFi_link import WiFi_link
+from AlLoRa.utils.time_utils import sleep
+from AlLoRa.utils.debug_utils import print
+
+
+class WiFi_adapter(Adapter):
+
+    def setup_link(self, config):
+        self.mode = config.get('mode', 'client')          # 'client' or 'hotspot'
+        self.ssid = config.get('ssid', "AlLoRa-Adapter")
+        self.psw = config.get('psw', "AlLoRaWiFi")
+        self.host = config.get('host', "192.168.4.1")
+        self.port = config.get('port', 80)
+        self.ip = config.get('ip', '192.168.0.16')
+        self.subnet_mask = config.get('subnet_mask', '255.255.255.0')
+        self.gateway = config.get('gateway', '192.168.1.10')
+        self.DNS_server = config.get('DNS_server', '8.8.8.8')
+        self.wlan = None
+
+        self.init_wifi()
+        sleep(1)
+        # The network is up; the link owns the byte transport (bind/accept/recv/send) over it.
+        self.link = WiFi_link.bridge(host=self.host, port=self.port)
+
+    def init_wifi(self):
+        # Pycom boards drive WLAN through their own API; everything else uses the standard
+        # MicroPython network module. Imported here, not at module scope, so the file loads on
+        # a host that has neither.
+        try:
+            import pycom
+            from network import WLAN
+            pycom_board = True
+        except ImportError:
+            import network
+            pycom_board = False
+
+        if self.mode == 'hotspot':
+            if pycom_board:
+                self.wlan = WLAN()
+                self.wlan.init(mode=WLAN.AP, ssid=self.ssid, auth=(WLAN.WPA2, self.psw))
+            else:
+                self.wlan = network.WLAN(network.AP_IF)
+                self.wlan.active(True)
+                self.wlan.config(essid=self.ssid, password=self.psw)
+        elif self.mode == 'client':
+            if pycom_board:
+                self.wlan = WLAN()
+                self.wlan.init(mode=WLAN.STA)
+                self.connect()
+            else:
+                self.wlan = network.WLAN(network.STA_IF)
+                self.wlan.active(True)
+                self.connect()
+
+    def connect(self):
+        while not self.wlan.isconnected():
+            try:
+                self.wlan.connect(self.ssid, self.psw)
+                if self.debug:
+                    print("Connecting to WiFi...", end='')
+                while not self.wlan.isconnected():
+                    sleep(1)
+                    if self.debug:
+                        print(".", end='')
+            except Exception as e:
+                if self.debug:
+                    print("Exception connecting to WiFi:", e)

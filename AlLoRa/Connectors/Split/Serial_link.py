@@ -1,0 +1,319 @@
+"""A Link over a UART or USB cable. Each frame ends with the marker `<<END>>\\n`.
+
+`client()` is the computer end (pyserial), `bridge()` a board's UART, and `bridge_usb()` the USB
+console of a native-USB board. `text_safe` drops unprintable noise on the line; frames are JSON,
+so nothing real is lost.
+"""
+from AlLoRa.Connectors.Split.Link import Link
+from AlLoRa.utils.time_utils import current_time_ms as _now_ms, sleep_ms
+
+
+class _Stdio_port:
+    """The board's USB-CDC console, wrapped in the small port contract Serial_link expects.
+
+    On a native-USB board MicroPython's console is the USB CDC endpoint and there is no
+    `machine.UART` behind it, so `sys.stdin` / `sys.stdout` are the only handle on those bytes.
+    Wrapping them here means the USB tunnel reuses the framing the GPIO tunnel already proved
+    rather than restating it: USB-CDC is still sentinel-framed serial, only the port differs.
+
+    The REPL is not a competitor for these bytes. MicroPython runs `main.py` to completion
+    before it starts the REPL, so for as long as the Adapter's loop is running, stdin belongs
+    to the Adapter. Ctrl-C is left armed deliberately: a tunnel frame is printable ASCII plus
+    the sentinel and can never contain 0x03, so the only thing that can raise KeyboardInterrupt
+    is a human, and `Adapter.run()` catches it and falls back to the REPL. On a board whose data
+    port is also its console, that is the way back in.
+    """
+
+    # The console reports no byte count, so `any()` promises a batch and `read()` stops early
+    # when it dries up. Reading one byte per poll would work but costs a Python-level loop
+    # iteration per byte of every frame, and on-device CPU is a design invariant.
+    READ_BATCH = 64
+
+    def __init__(self, stdin=None, stdout=None):
+        import sys
+        _in = stdin if stdin is not None else sys.stdin
+        _out = stdout if stdout is not None else sys.stdout
+        # The console is a text stream; `.buffer` is its byte half. CPython always exposes it
+        # and MicroPython does on the ports that matter, but fall back rather than fail: a port
+        # that hands out bytes directly is just as good here.
+        self._in = getattr(_in, "buffer", _in)
+        self._out = getattr(_out, "buffer", _out)
+        import select
+        self._poll = select.poll()
+        self._poll.register(self._in, select.POLLIN)
+
+    def any(self):
+        return self.READ_BATCH if self._poll.poll(0) else 0
+
+    def read(self, n):
+        # Never block: take only what poll has already promised. A blocking console read would
+        # stall the Adapter's serve loop past its own timeout, which would make the bridge deaf
+        # to both the next request and to Ctrl-C.
+        out = bytearray()
+        while len(out) < n and self._poll.poll(0):
+            b = self._in.read(1)
+            if not b:
+                break
+            out.extend(b)
+        return bytes(out)
+
+    def write(self, data):
+        self._out.write(data)
+        # CPython buffers stdout, and a buffered reply is a reply the host never sees until the
+        # next one pushes it out. Not every MicroPython console object has flush, hence the probe.
+        flush = getattr(self._out, "flush", None)
+        if flush is not None:
+            flush()
+        return len(data)
+
+    def close(self):
+        pass
+
+
+class Serial_link(Link):
+
+    SENTINEL = b"<<END>>\n"
+
+    # A tunnel_codec frame is a flat JSON object, so it opens with `{` and contains no other.
+    # That is what lets a reader find where a frame *starts*; the sentinel only says where one
+    # ends. `tests/test_usb_adapter.py` holds the invariant so it cannot rot silently.
+    FRAME_START = b"{"
+
+    def __init__(self, port, sentinel=SENTINEL, poll_ms=5, text_safe=True):
+        self._sentinel = sentinel
+        self._poll_ms = poll_ms
+        self._text_safe = text_safe
+        self._buf = bytearray()
+        # Bytes discarded ahead of a frame start. Nonzero is not an error (a board that resets
+        # mid-session is normal), but a number that keeps climbing during a transfer means
+        # something on the far side is writing to the wire while the tunnel is using it.
+        self.preamble_dropped = 0
+        # How to build the port again, set by `client()` and by nothing else. A half that was
+        # handed a port it does not own (the bridge, and every test that builds one directly)
+        # cannot rebuild it and must say so rather than guess.
+        self._reopen_recipe = None
+        self._bind(port)
+
+    def _bind(self, port):
+        """Adopt a port and choose the availability probe for it.
+
+        Separate from `__init__` because a reopen swaps the port underneath a live link: the
+        probe is chosen from the port's own shape, so keeping the old one would leave the link
+        reading a descriptor that no longer exists.
+        """
+        self._port = port
+        # One availability probe, chosen once per port: pyserial exposes `in_waiting`,
+        # machine.UART exposes `any()`. Without either we fall back to a blocking 1-byte read.
+        if hasattr(port, "in_waiting"):
+            self._available = lambda: port.in_waiting
+        elif hasattr(port, "any"):
+            self._available = port.any
+        else:
+            self._available = None
+
+    # --- construction: the three physical ports a serial tunnel binds to ---------------------
+
+    @classmethod
+    def client(cls, serial_port, baud=9600, timeout=1, open_port=None, **kwargs):
+        """Logic-holder half over `pyserial` (imported lazily so the module loads without it).
+
+        This is also the host end of a *USB* tunnel, unchanged: a CDC board is an ordinary
+        serial device to the host, so only the path differs (`/dev/ttyACM0` on a Pi,
+        `/dev/cu.usbmodem*` on macOS). `baud` is honoured by a real UART and ignored by CDC,
+        which runs at USB speed whatever it is told.
+
+        `serial_port` may be a **callable** returning a path instead of a path. A native-USB
+        adapter that reboots re-enumerates, and can come back on a different device node, so a
+        fixed string is only correct for a wire that never moves (a Pi's own UART). Passing a
+        lookup — by MAC, by serial number — is what makes `reopen()` find the same board rather
+        than whatever now answers to the old path.
+
+        `open_port` replaces the pyserial construction itself, for callers that need a
+        differently-configured port and for tests that must not touch a real device.
+        """
+        def _open(path):
+            import serial
+            return serial.Serial(path, baud, timeout=timeout)
+
+        opener = open_port if open_port is not None else _open
+        link = cls(opener(_resolve(serial_port)), **kwargs)
+        link._reopen_recipe = (serial_port, opener)
+        return link
+
+    @classmethod
+    def bridge(cls, uartid=0, baud=9600, tx=None, rx=None, bits=8, parity=None, stop=1,
+               timeout=800, **kwargs):
+        """Bridge (Adapter) half over `machine.UART` (imported lazily; device-only)."""
+        from machine import UART
+        uart = UART(uartid, baud)
+        uart.init(baudrate=baud, tx=tx, rx=rx, bits=bits, parity=parity, stop=stop,
+                  timeout=timeout)
+        return cls(uart, **kwargs)
+
+    @classmethod
+    def bridge_usb(cls, stdin=None, stdout=None, **kwargs):
+        """Bridge (Adapter) half over the board's own USB-CDC console (device-only in practice;
+        `stdin`/`stdout` are injectable so the path is testable off-device).
+
+        The input direction is drained once here. A host that opened the port and started
+        talking while the board was still coming up has left bytes in front of the first real
+        request, and unlike the reply direction there is no `_resync` anchor to recover them:
+        they are simply stale.
+        """
+        link = cls(_Stdio_port(stdin=stdin, stdout=stdout), **kwargs)
+        link._flush_input()
+        return link
+
+    # --- Link contract -----------------------------------------------------------------------
+
+    def rpc(self, request, timeout=None):
+        # A fresh request supersedes anything still buffered from a request we already gave up
+        # on (the protocol layer retransmits, so a stale reply must not answer the new one).
+        #
+        # This reaches only what has already arrived. A bridge part-way through a `listen` or
+        # an `exchange` has not written its reply yet, so no flush can remove it and it lands
+        # after this one. Catching that is the call id's job, up in the client connector.
+        self._flush_input()
+        self._port.write(request + self._sentinel)
+        return self._read_frame(timeout)
+
+    def read_reply(self, timeout=None):
+        # Same framing as any other read; what differs is that nothing was sent to prompt it.
+        return self._read_frame(timeout)
+
+    def read_request(self, timeout=None):
+        return self._read_frame(timeout)
+
+    def write_reply(self, reply):
+        self._port.write(reply + self._sentinel)
+
+    # --- framing -----------------------------------------------------------------------------
+
+    def _read_frame(self, timeout):
+        """Accumulate bytes until the sentinel, then return the frame before it (the sentinel
+        and anything after it stay buffered for the next read). None once `timeout` elapses."""
+        deadline = None if timeout is None else _now_ms() + int(timeout * 1000)
+        s = self._sentinel
+        buf = self._buf
+        while True:
+            idx = buf.find(s)
+            if idx >= 0:
+                frame = bytes(buf[:idx])
+                # Rebuild the tail rather than trimming it in place: MicroPython's bytearray
+                # has no slice deletion, and `del buf[:n]` raises TypeError on a board. CPython
+                # accepts it, which is how every off-device test passed while the first frame
+                # ever to reach a bridge raised. Same reasoning as the `find`-over-`rfind`
+                # choice in _resync below: a call the device cannot make fails on every frame,
+                # so the tunnel does not work at all and only a board would say so.
+                buf = self._buf = bytearray(buf[idx + len(s):])
+                return self._resync(frame)
+            if deadline is not None and _now_ms() >= deadline:
+                return None
+            chunk = self._drain()
+            if chunk:
+                if self._text_safe:
+                    chunk = bytes(b for b in chunk if 32 <= b <= 126 or b in (10, 13))
+                buf.extend(chunk)
+                continue
+            sleep_ms(self._poll_ms)
+
+    def _resync(self, frame):
+        """Drop whatever the medium injected ahead of the frame.
+
+        The sentinel says where a frame ends, never where it starts, so anything the far side
+        wrote before it is still sitting in front of the JSON: an ESP-IDF boot line, a
+        MicroPython banner, a debug line from code that did not know the console was a wire.
+        `text_safe` cannot help, because all of that is perfectly printable. Without this the
+        preamble reaches the JSON parser and a good frame is thrown away as corrupt, costing a
+        retransmit and, at the head of a session, the whole handshake.
+
+        On a dedicated UART the case was rare enough to live with. On a USB bridge, whose
+        console *is* the tunnel, it happens on every single reset, which is why the fix belongs
+        here rather than in the USB path: the pin rig has the same latent bug, just less often.
+
+        Taking the *last* frame start rather than the first is what makes a preamble containing
+        a brace of its own recoverable; a real frame has exactly one.
+
+        The scan uses `find` rather than `rfind` on purpose. `find` is the call the sentinel
+        search above already makes, so the device has been running it since the first tunnel;
+        `rfind` would be the only one of its kind in the library, and a method that turns out to
+        be absent from a MicroPython build fails here on every frame, which is to say the tunnel
+        does not work at all and only a board would tell us. Not worth the four lines saved.
+        """
+        if frame[:1] == self.FRAME_START:
+            return frame          # already clean, which is what nearly every frame is
+        i = -1
+        at = 0
+        while True:
+            j = frame.find(self.FRAME_START, at)
+            if j < 0:
+                break
+            i = j
+            at = j + 1
+        if i <= 0:
+            # -1 is a frame with nothing frame-shaped in it, which is the caller's problem to
+            # report rather than ours to silently empty.
+            return frame
+        self.preamble_dropped += i
+        return frame[i:]
+
+    def _drain(self):
+        # Whatever is available right now, uniformly across pyserial / machine.UART / console.
+        if self._available is None:
+            b = self._port.read(1)     # no probe: lean on the port's own read timeout
+            return b or b""
+        n = self._available()
+        if not n:
+            return b""
+        b = self._port.read(n)
+        return b or b""
+
+    def _flush_input(self):
+        self._buf = bytearray()
+        while self._drain():
+            pass
+
+    def close(self):
+        try:
+            self._port.close()
+        except Exception:
+            pass
+
+    def reopen(self, attempts=10, delay=1.0):
+        """Rebuild the port after the far side went away and came back. True once it answers.
+
+        Over a Pi's own UART this is never needed: the port belongs to the Pi, so resetting the
+        board at the other end leaves the descriptor valid. Over USB the serial device *is* the
+        board, so a reset makes it re-enumerate and the open descriptor dies with it. That is
+        the whole difference between the two wirings, and this is the half of it that lives at
+        the link.
+
+        Bounded on purpose, and reported rather than raised. The first opens after a reset fail
+        on a board that is about to be fine, because the reset call returns before the host has
+        finished enumerating the device; giving up on the first refusal would call a healthy
+        board dead. Waiting forever is worse, because it hangs a node's visit loop on hardware
+        that may simply be gone. So: a fixed number of tries, then False, and the caller decides
+        what a dead adapter means for it.
+        """
+        if self._reopen_recipe is None:
+            return False
+        resolver, opener = self._reopen_recipe
+        self.close()
+        # Whatever was buffered belongs to the board that just went away. Half a frame from
+        # before the reboot, glued to the first frame after it, parses as neither.
+        self._buf = bytearray()
+        for attempt in range(attempts):
+            try:
+                self._bind(opener(_resolve(resolver)))
+                self._flush_input()
+                return True
+            except Exception:
+                pass
+            if attempt < attempts - 1:
+                sleep_ms(int(delay * 1000))
+        return False
+
+
+def _resolve(port):
+    """A device path, from either a path or a lookup that finds one. See `client`."""
+    return port() if callable(port) else port

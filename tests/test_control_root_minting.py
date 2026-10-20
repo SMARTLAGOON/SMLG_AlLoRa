@@ -15,8 +15,8 @@ import pytest
 
 from AlLoRa.Control.Control_Root import Control_Root
 from AlLoRa.Control.control_types import RF_CONFIG, RESET
-from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
-from AlLoRa.DataSinks.DataSink import Reception
+from AlLoRa.Control.Control_Root_DataSink import Control_Root_DataSink
+from AlLoRa.Data.Sinks.DataSink import Reception
 from test_control_root_sink import (
     CONTROL_ROOT_PRIV, OTHER_ROOT_PRIV, TARGET_DEVICE_ID, OTHER_DEVICE_ID, RF_PAYLOAD,
     _CapturingActuator, _artifact,

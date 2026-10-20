@@ -1,6 +1,6 @@
-from AlLoRa.Packet import Packet
-from AlLoRa.Pacing import Pacing
-from AlLoRa.Codec import build_codec
+from AlLoRa.Protocol.Packet_v2 import Packet_v2
+from AlLoRa.Protocol.Pacing import Pacing
+from AlLoRa.Protocol.Codec import build_codec
 import gc
 from math import ceil
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, sleep_ms
@@ -222,7 +222,7 @@ class Connector:
     def recv(self, focus_time=12):
         return None
 
-    def send(self, packet: Packet):
+    def send(self, packet: Packet_v2):
         # Back-compat: frame via the codec, then transmit the bytes. Connectors now override
         # transmit(wire); this keeps every send(packet) caller (Node.send_lora and up) working
         # and routes them through the same framing home.

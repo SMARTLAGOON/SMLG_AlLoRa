@@ -9,11 +9,11 @@ and must NOT pay that round trip.
 import struct
 import threading
 
-from AlLoRa.Codec import V2Codec, V3OpenCodec
+from AlLoRa.Protocol.Codec import V2Codec, V3OpenCodec
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
-from AlLoRa.Adapters.Adapter import Adapter
-from AlLoRa.Links.Loopback_link import Loopback_link
+from AlLoRa.Connectors.Split.Tunnel_connector import Tunnel_connector
+from AlLoRa.Connectors.Split.Adapter import Adapter
+from AlLoRa.Connectors.Split.Loopback_link import Loopback_link
 
 BRIDGE_MAC = "b2b2b2b2"
 PEER_MAC = "a1a1a1a1"

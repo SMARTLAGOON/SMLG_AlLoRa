@@ -17,7 +17,7 @@ import subprocess
 import pytest
 
 from AlLoRa.Control.Control_Root import Control_Root
-from AlLoRa.Security.ec_p256 import public_key_uncompressed
+from AlLoRa.Protocol.Security.ec_p256 import public_key_uncompressed
 from tools.allora_provision.fleet import (
     CONTROL_ROOT_NAME, Fleet, FleetWouldBeCommitted, PRIVATE_HEX_LEN, PUBLIC_HEX_LEN, classify_root_half)
 
@@ -349,7 +349,7 @@ def test_an_identity_backup_is_kept_under_the_fleet_and_never_overwritten(tmp_pa
 def test_a_backed_up_identity_reproduces_the_device_id_the_board_computes(tmp_path):
     """This is the check that makes a backup worth taking: the same scalar run through the
     library's own crypto on the laptop yields the fingerprint the operator registered."""
-    from AlLoRa.Security.identity import device_id_from_pubkey
+    from AlLoRa.Protocol.Security.identity import device_id_from_pubkey
 
     fleet = _fleet(tmp_path)
     path = fleet.backup_identity("abcd1234", ROOT_PRIV_HEX)

@@ -101,9 +101,9 @@ def build_data_sink(block, key_name="data_sink"):
             raise SystemExit(
                 "{}.kind is 'http' but the block names no url. It takes: {}.".format(
                     key_name, ", ".join(_SINK_KINDS["http"])))
-        from AlLoRa.DataSinks.HTTP_DataSink import HTTP_DataSink
+        from AlLoRa.Data.Sinks.HTTP_DataSink import HTTP_DataSink
         return HTTP_DataSink(**args)
-    from AlLoRa.DataSinks.MQTT_DataSink import MQTT_DataSink
+    from AlLoRa.Data.Sinks.MQTT_DataSink import MQTT_DataSink
     return MQTT_DataSink(**args)
 
 
@@ -133,11 +133,11 @@ def build_datasource(block, key_name="data_source", queue_path=None, reserved=()
         if queue_path is not None and "queue_path" not in args:
             args["queue_path"] = queue_path
         if kind == "serial":
-            from AlLoRa.DataSources.Serial_DataSource import Serial_DataSource
+            from AlLoRa.Data.Sources.Serial_DataSource import Serial_DataSource
             return Serial_DataSource(**args)
-        from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
+        from AlLoRa.Data.Sources.Disk_DataSource import Disk_DataSource
         return Disk_DataSource(**args)
-    from AlLoRa.DataSources.MQTT_DataSource import MQTT_DataSource
+    from AlLoRa.Data.Sources.MQTT_DataSource import MQTT_DataSource
     if "topics" in args:
         # JSON gives a list; the source keeps a tuple.
         args["topics"] = tuple(args["topics"])
@@ -238,7 +238,7 @@ def wire_device(config, node, board):
 
     log_file = device.get("log_file", None)
     if log_file:
-        from AlLoRa.Subscribers.Logger import Logger
+        from AlLoRa.Management.Logger import Logger
         node.register_subscriber(Logger(
             log_file=log_file,
             always_log_topics=["RSSI", "SNR", "Chunk", "PSizeS", "PSizeR",
@@ -278,7 +278,7 @@ def wire_control(node):
             "commands and never verify a signed one. Set security_mode 'secure' plus "
             "identity_file in the config to finish provisioning.")
 
-    from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
+    from AlLoRa.Control.Control_Root_DataSink import Control_Root_DataSink
     # The downlink sink IS the verify gate: only what it verifies against the provisioned root
     # reaches the actuator, and unsigned in-band commands are refused from here on.
     node.data_sink = Control_Root_DataSink(

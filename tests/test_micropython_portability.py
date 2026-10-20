@@ -15,20 +15,20 @@ import tokenize
 
 # Files frozen into the firmware and reached while running a secure node.
 _ON_DEVICE_SECURE = [
-    "AlLoRa/Security/ec_p256.py",
-    "AlLoRa/Security/kdf.py",
-    "AlLoRa/Security/AEAD.py",
-    "AlLoRa/Security/hmac_sha256.py",
-    "AlLoRa/Security/handshake.py",
-    "AlLoRa/Security/identity.py",
-    "AlLoRa/Security/Session.py",
-    "AlLoRa/Security/Session_store.py",
-    "AlLoRa/Security/Replay_window.py",
-    "AlLoRa/Codec.py",
+    "AlLoRa/Protocol/Security/ec_p256.py",
+    "AlLoRa/Protocol/Security/kdf.py",
+    "AlLoRa/Protocol/Security/AEAD.py",
+    "AlLoRa/Protocol/Security/hmac_sha256.py",
+    "AlLoRa/Protocol/Security/handshake.py",
+    "AlLoRa/Protocol/Security/identity.py",
+    "AlLoRa/Protocol/Security/Session.py",
+    "AlLoRa/Protocol/Security/Session_store.py",
+    "AlLoRa/Protocol/Security/Replay_window.py",
+    "AlLoRa/Protocol/Codec.py",
     "AlLoRa/Status.py",
     # The control path: the gate an Edge verifies with, the layout both ends share, and the
     # minting half, which the manifest freezes onto every node including ones that never sign.
-    "AlLoRa/DataSinks/Control_Root_DataSink.py",
+    "AlLoRa/Control/Control_Root_DataSink.py",
     "AlLoRa/Control/control_envelope.py",
     "AlLoRa/Control/Control_Root.py",
     "AlLoRa/Control/Control_Actuator.py",
@@ -38,18 +38,18 @@ _ON_DEVICE_SECURE = [
     "AlLoRa/Digital_Endpoint.py",
     # The MQTT bridge halves are frozen and reached on-device too (a bridge Edge runs
     # the datasource + sink pair against its local broker).
-    "AlLoRa/DataSources/DataSource.py",
-    "AlLoRa/DataSources/Disk_DataSource.py",
-    "AlLoRa/DataSources/MQTT_DataSource.py",
+    "AlLoRa/Data/Sources/DataSource.py",
+    "AlLoRa/Data/Sources/Disk_DataSource.py",
+    "AlLoRa/Data/Sources/MQTT_DataSource.py",
     # The cable a producer feeds an Edge over: frozen, and reached on every round of the
     # serve loop on the board it runs on.
-    "AlLoRa/DataSources/Serial_DataSource.py",
-    "AlLoRa/DataSources/mqtt_naming.py",
-    "AlLoRa/DataSources/Loop_guard.py",
-    "AlLoRa/DataSinks/DataSink.py",
-    "AlLoRa/DataSinks/MQTT_DataSink.py",
+    "AlLoRa/Data/Sources/Serial_DataSource.py",
+    "AlLoRa/Data/mqtt_naming.py",
+    "AlLoRa/Data/Loop_guard.py",
+    "AlLoRa/Data/Sinks/DataSink.py",
+    "AlLoRa/Data/Sinks/MQTT_DataSink.py",
     # Turns a finished file into the message a sink sends; any sink may use it, an Edge's too.
-    "AlLoRa/message_template.py",
+    "AlLoRa/Data/Sinks/message_template.py",
     # The all-or-nothing write itself, now on the send path too: a queued payload is
     # committed through it before the node will serve the file.
     "AlLoRa/utils/file_utils.py",

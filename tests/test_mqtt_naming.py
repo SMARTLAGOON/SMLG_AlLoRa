@@ -8,7 +8,7 @@ path separator.
 """
 import pytest
 
-from AlLoRa.DataSources.mqtt_naming import encode_name, decode_name, is_envelope
+from AlLoRa.Data.mqtt_naming import encode_name, decode_name, is_envelope
 
 
 def test_round_trip_preserves_topic_id_and_timestamp():

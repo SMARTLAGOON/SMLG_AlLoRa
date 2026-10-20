@@ -1,4 +1,4 @@
-from AlLoRa.Adapters.WiFi_adapter import WiFi_adapter
+from AlLoRa.Connectors.Split.WiFi_adapter import WiFi_adapter
 from AlLoRa.Connectors.LoPy4_connector import LoPy4_connector
 
 if __name__ == "__main__":

@@ -8,14 +8,14 @@ reply comes back — the CPython-testable core of the hardware tunnel.
 """
 import threading
 
-from AlLoRa import tunnel_codec
+from AlLoRa.Connectors.Split import tunnel_codec
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
-from AlLoRa.Adapters.Adapter import Adapter
+from AlLoRa.Connectors.Split.Tunnel_connector import Tunnel_connector
+from AlLoRa.Connectors.Split.Adapter import Adapter
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
-from AlLoRa.Links.Loopback_link import Loopback_link
-from AlLoRa.Codec import V3OpenCodec
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Connectors.Split.Loopback_link import Loopback_link
+from AlLoRa.Protocol.Codec import V3OpenCodec
+from AlLoRa.Protocol.Packet import Packet
 
 CONNCFG = {"name": "bridge", "sf": 7, "freq": 868, "bandwidth": 125, "coding_rate": 1,
            "tx_power": 14, "protocol_version": 3, "addressing": "sid", "timeout_delta": 0.1}
@@ -43,11 +43,11 @@ def _teardown(stop, pump):
 
 
 def _req(sid):
-    p = Packet_v3(addressing="sid"); p.set_session(sid); p.ask_metadata(); return p
+    p = Packet(addressing="sid"); p.set_session(sid); p.ask_metadata(); return p
 
 
 def _reply(sid):
-    p = Packet_v3(addressing="sid"); p.set_session(sid); p.set_ok(); return p
+    p = Packet(addressing="sid"); p.set_session(sid); p.set_ok(); return p
 
 
 def test_transmit_puts_opaque_bytes_on_the_far_radio():

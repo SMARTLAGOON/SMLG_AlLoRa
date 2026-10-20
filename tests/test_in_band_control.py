@@ -31,8 +31,8 @@ from AlLoRa.Control.control_types import IN_BAND, RF_CONFIG, RESET, CUSTOM
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
-from AlLoRa.Packet_v3 import Packet_v3
-from AlLoRa.Security.ec_p256 import public_key_uncompressed
+from AlLoRa.Protocol.Packet import Packet
+from AlLoRa.Protocol.Security.ec_p256 import public_key_uncompressed
 
 SESSION_ID = 42
 EDGE_MAC = "a1a1a1a1"
@@ -80,9 +80,9 @@ def _make_edge(tmp_path, **kwargs):
 
 def _control_frame(edge, prefix, body=b""):
     """The frame a Hub's in-band verb puts on the air, built the way the wire carries it."""
-    packet = Packet_v3(addressing="sid")
+    packet = Packet(addressing="sid")
     packet.set_session(SESSION_ID)
-    packet.set_kind(Packet_v3.CTRL)
+    packet.set_kind(Packet.CTRL)
     packet.set_payload(bytes([prefix]) + body)
     return edge.connector.codec.frame(packet)
 
@@ -123,7 +123,7 @@ def test_the_command_is_acknowledged_by_echoing_its_prefix(tmp_path):
 
     replies = _replies(peer, edge)
     assert len(replies) == 1, "an in-band command is answered exactly once"
-    assert replies[0].get_command() == Packet_v3.CTRL, "the ack rides a CTRL frame"
+    assert replies[0].get_command() == Packet.CTRL, "the ack rides a CTRL frame"
     assert replies[0].get_payload() == bytes([IN_BAND | RF_CONFIG]), \
         "the ack is the prefix alone"
 

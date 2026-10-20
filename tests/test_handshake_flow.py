@@ -14,7 +14,7 @@ from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Packet import Packet
 
 SOURCE_MAC = "a1a1a1a1"
 COLLECTOR_MAC = "b2b2b2b2"
@@ -72,9 +72,9 @@ def test_handshake_over_the_live_flow_yields_matching_sessions(tmp_path):
 
     # and a frame the Source seals opens at the Collector under those handshake sessions
     aead = source.aead
-    p = Packet_v3(addressing="sid")
+    p = Packet(addressing="sid")
     p.set_session(SESSION_ID)
     p.set_data(b"post-handshake reading")
-    got = Packet_v3(addressing="sid")
+    got = Packet(addressing="sid")
     assert got.load_secure(p.get_secure_content(session_i, aead), session_r, aead) is True
     assert got.get_payload() == b"post-handshake reading"

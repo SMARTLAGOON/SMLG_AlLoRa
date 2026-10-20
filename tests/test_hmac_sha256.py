@@ -13,7 +13,7 @@ that would be catastrophic to get wrong, which is that a faster MAC is still the
 import hashlib
 import hmac
 
-from AlLoRa.Security.hmac_sha256 import hmac_sha256, BLOCK_SIZE, DIGEST_SIZE
+from AlLoRa.Protocol.Security.hmac_sha256 import hmac_sha256, BLOCK_SIZE, DIGEST_SIZE
 
 
 def _reference(key, msg):

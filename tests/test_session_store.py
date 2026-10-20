@@ -8,8 +8,8 @@ by sid, and a custom store standing in for it through the identical get/put/drop
 """
 import pytest
 
-from AlLoRa.Security.Session import Session
-from AlLoRa.Security.Session_store import Session_store, RAM_session_store
+from AlLoRa.Protocol.Security.Session import Session
+from AlLoRa.Protocol.Security.Session_store import Session_store, RAM_session_store
 
 KEY = bytes(16)
 SEND_PREFIX = bytes(8)

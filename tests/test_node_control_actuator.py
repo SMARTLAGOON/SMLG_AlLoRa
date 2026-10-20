@@ -205,8 +205,8 @@ def test_verified_envelope_through_the_gate_reaches_the_actuator_and_queues(tmp_
     # RF_CONFIG envelope: the gate must verify it and hand the actuator the (type, payload), the
     # actuator must defer, and draining must apply exactly the config the signed envelope carried.
     from test_control_root_sink import ENV_RF_CONFIG_VALID, CONTROL_ROOT_HEX, TARGET_DEVICE_ID, _artifact
-    from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
-    from AlLoRa.DataSinks.DataSink import Reception
+    from AlLoRa.Control.Control_Root_DataSink import Control_Root_DataSink
+    from AlLoRa.Data.Sinks.DataSink import Reception
 
     # The gate keeps its replay mark beside itself unless told otherwise, so this accepts a real
     # artifact and writes one: give it somewhere of its own rather than the working tree.

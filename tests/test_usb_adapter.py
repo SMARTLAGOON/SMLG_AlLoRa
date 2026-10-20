@@ -21,13 +21,13 @@ import threading
 
 import pytest
 
-from AlLoRa import tunnel_codec
-from AlLoRa.Adapters.Adapter import Adapter
-from AlLoRa.Adapters.USB_adapter import USB_adapter, _File_sink
+from AlLoRa.Connectors.Split import tunnel_codec
+from AlLoRa.Connectors.Split.Adapter import Adapter
+from AlLoRa.Connectors.Split.USB_adapter import USB_adapter, _File_sink
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
-from AlLoRa.Links.Loopback_link import Loopback_link
-from AlLoRa.Links.Serial_link import Serial_link, _Stdio_port
+from AlLoRa.Connectors.Split.Tunnel_connector import Tunnel_connector
+from AlLoRa.Connectors.Split.Loopback_link import Loopback_link
+from AlLoRa.Connectors.Split.Serial_link import Serial_link, _Stdio_port
 from AlLoRa.utils import debug_utils
 
 CONNCFG = {"name": "bridge", "sf": 7, "freq": 868, "bandwidth": 125, "coding_rate": 1,
@@ -334,14 +334,14 @@ class _Opened:
 
 @pytest.fixture
 def opened(monkeypatch):
-    from AlLoRa.Links.Serial_link import Serial_link as SL
+    from AlLoRa.Connectors.Split.Serial_link import Serial_link as SL
     recorder = _Opened()
     monkeypatch.setattr(SL, "client", recorder)
     return recorder
 
 
 def test_the_tunnel_endpoint_is_read_from_the_connector_block(opened):
-    from AlLoRa.Connectors.Serial_connector import Serial_connector
+    from AlLoRa.Connectors.Split.Serial_connector import Serial_connector
     conn = Serial_connector()
     conn.config(dict(CONNCFG, serial_port="/dev/ttyACM0", baud=115200, timeout=2))
     assert opened.calls == [{"serial_port": "/dev/ttyACM0", "baud": 115200, "timeout": 2}]
@@ -351,7 +351,7 @@ def test_an_endpoint_written_outside_the_connector_block_never_arrives(opened):
     # The failure this guards: `serial_port` at the top level of LoRa.json rather than inside
     # `connector`. The node passes only the sub-block, so the connector opens /dev/ttyAMA3 and
     # the run dies looking like a cabling fault.
-    from AlLoRa.Connectors.Serial_connector import Serial_connector
+    from AlLoRa.Connectors.Split.Serial_connector import Serial_connector
     conn = Serial_connector()
     conn.config(dict(CONNCFG))                      # no serial_port in the block at all
     assert opened.calls[0]["serial_port"] == "/dev/ttyAMA3"
@@ -361,7 +361,7 @@ def test_a_hub_boots_its_tunnel_from_the_connector_block(tmp_path, opened):
     # End to end through the real config path a bench run uses, which is what
     # docs/hw-artifacts/v3-tunnel-usb/hub_lora.json is shaped for.
     from AlLoRa.Nodes.Hub import Hub
-    from AlLoRa.Connectors.Serial_connector import Serial_connector
+    from AlLoRa.Connectors.Split.Serial_connector import Serial_connector
     cfg = tmp_path / "hub_lora.json"
     cfg.write_text(json.dumps({
         "name": "R", "chunk_size": 200, "mesh_mode": False, "short_mac": True,

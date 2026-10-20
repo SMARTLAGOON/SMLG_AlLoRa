@@ -22,8 +22,8 @@ from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.File import AlLoRa_File
-from AlLoRa.Security.handshake import initiator_hello, responder_accept, initiator_complete
-from AlLoRa.Security.ec_p256 import generate_private_key
+from AlLoRa.Protocol.Security.handshake import initiator_hello, responder_accept, initiator_complete
+from AlLoRa.Protocol.Security.ec_p256 import generate_private_key
 
 SOURCE_MAC = "a1a1a1a1"
 COLLECTOR_MAC = "b2b2b2b2"

@@ -28,18 +28,18 @@ target in a matrix inside Espressif's ESP-IDF container and attaches each one to
 `AlLoRa-<target>-firmware.bin`. No local toolchain. Each matrix row pins the MicroPython + ESP-IDF versions for that
 target (they're coupled — a MicroPython release supports specific ESP-IDF versions).
 
-The freeze copies the **live** `AlLoRa/` tree at build time — including `AlLoRa/Links/` (the
+The freeze copies the **live** `AlLoRa/` tree at build time, including `AlLoRa/Connectors/Split/` (the
 `Serial_link` / `WiFi_link` tunnel transports). A device that runs tunnel code (the Adapter
 bridge, whose `Adapter` moves frames over a real UART or WiFi socket) therefore only
 picks up a tunnel change on the next rebuild; a protocol-only push does not reach it. The current
-freeze additionally carries the `DataSources`/`DataSinks` application boundaries, Hub-commanded role
+freeze additionally carries the `Data/Sources` and `Data/Sinks` application boundaries, Hub-commanded role
 reversal, and the two-ended RF_CONFIG coordination, so the `Nodes` and config-actuation paths
 likewise only reach the device on a rebuild. It also carries the `backup_config` fix that makes a
 committed RF trial actually survive a reboot (the earlier freeze wrote the live RF back under keys
 the loader never read, so a committed sf7→sf9 came back as sf7 on the next boot); reboot-persistence
 therefore only works once the device runs a rebuild from this freeze.
 
-This freeze is the first to carry **`AlLoRa/DataSources/Serial_DataSource.py`**, which a board
+This freeze is the first to carry **`AlLoRa/Data/Sources/Serial_DataSource.py`**, which a board
 flashed before it simply does not have. It is the boundary the GNSS rig needs: a Raspberry Pi
 pushes whole files over UART and the board keeps the protocol, the outbox and the radio. The
 receive protocol itself has been frozen into both T3S3 targets since they were created, as
@@ -94,7 +94,7 @@ change brings `rssi` and `snr` home on the `listen` and `exchange` replies, whic
 measured and never sent, so a Hub on a USB adapter reported 0 dBm for hardware it heard perfectly.
 An un-numbered reply is still accepted, deliberately, because that is what a board flashed before
 this build sends and the fleet is reflashed one board at a time. Both halves are in
-`AlLoRa/tunnel_codec.py`, `AlLoRa/Adapters/Adapter.py` and `AlLoRa/Links/`, which only a bridge
+`AlLoRa/Connectors/Split/` (`tunnel_codec.py`, `Adapter.py` and the Links), which only a bridge
 board freezes and runs, and none of it reaches such a board any way but a rebuild. This paragraph
 is the trigger for one.
 
@@ -119,22 +119,22 @@ crypto backend is unavailable, the failure is silent on the wire — it just nev
 handshake. Known traps the frozen library must avoid (all fixed, listed so they stay fixed):
 
 - **`import ucryptolib`** — renamed to `cryptolib` in MicroPython v1.21 with no weak-link alias.
-  Import `cryptolib` first, fall back to `ucryptolib` for pre-1.21. (`AlLoRa/Security/AEAD.py`)
+  Import `cryptolib` first, fall back to `ucryptolib` for pre-1.21. (`AlLoRa/Protocol/Security/AEAD.py`)
 - **`hmac.compare_digest`** — CPython-only; micropython-lib's `hmac` has only `HMAC`/`new`. Use a
-  local constant-time compare instead. (`AlLoRa/Security/AEAD.py`)
+  local constant-time compare instead. (`AlLoRa/Protocol/Security/AEAD.py`)
 - **`hashlib.sha256().digest_size`** — MicroPython hash objects don't expose it. Hardcode `32`.
-  (`AlLoRa/Security/kdf.py`)
+  (`AlLoRa/Protocol/Security/kdf.py`)
 - **`int.bit_length()`** — not available on MicroPython. The P-256 scalar-mult ladders reduce the
   scalar mod N and then read a fixed 32 bytes of it, so they never need to ask how long it is.
   Reading it as bytes also keeps every digit a small integer rather than allocating a fresh
-  256-bit one per step. (`AlLoRa/Security/ec_p256.py`)
+  256-bit one per step. (`AlLoRa/Protocol/Security/ec_p256.py`)
 
 - **`del buf[:n]`** — slice deletion exists on CPython and not on MicroPython, which raises
   `TypeError: 'bytearray' object doesn't support item deletion`. Rebuild the tail instead
   (`buf = self._buf = bytearray(buf[n:])`). Deleting a dict *key* is fine and is used on-device;
   only the slice form is missing. This one sat in the tunnel's frame reader rather than the
   secure path, so the whole list above looked green while the first frame ever to reach a bridge
-  board raised. (`AlLoRa/Links/Serial_link.py`)
+  board raised. (`AlLoRa/Connectors/Split/Serial_link.py`)
 
 `tests/test_micropython_portability.py` scans the frozen secure path for these names so CI, not
 the ESP32, is what fails when a new one creeps in. It also walks the **whole** frozen tree for
@@ -252,7 +252,7 @@ corrupt one.
 wire.** Both only reach a device on a rebuild, and the USB tunnel needs the new `.bin` before
 its example will even import.
 
-`AlLoRa/Adapters/USB_adapter.py` is a module a board flashed before this freeze simply does not
+`AlLoRa/Connectors/Split/USB_adapter.py` is a module a board flashed before this freeze simply does not
 have. It is the Adapter for a board reached over native USB, where there is no `machine.UART`
 behind the socket and the console itself is the link. `Serial_link` gains the port that wraps
 that console, `bridge_usb()`, and the host end is unchanged: a CDC board is an ordinary serial

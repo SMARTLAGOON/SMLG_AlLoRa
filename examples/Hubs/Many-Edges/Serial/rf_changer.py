@@ -6,7 +6,7 @@ import time
 import  sys, gc
 
 from AlLoRa.Nodes.Hub import Hub
-from AlLoRa.Connectors.Serial_connector import Serial_connector
+from AlLoRa.Connectors.Split.Serial_connector import Serial_connector
 
 
 def reset_esp32():

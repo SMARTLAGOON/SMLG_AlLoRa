@@ -95,12 +95,24 @@ where your data comes **in** and goes **out**.
 </p>
 
 <details>
-<summary><b>What is inside:</b> Nodes, DataSources and DataSinks, Connectors, Control, and the core pieces.</summary>
+<summary><b>What is inside:</b> Nodes, Data, Connectors, Control, Management, and the core pieces.</summary>
 
-The modules at the top level are the core pieces every node uses. A folder holds a family of
-alternatives you pick from (`Nodes/`, `Connectors/`, `Links/`, `Adapters/`, `DataSources/`,
-`DataSinks/`), except `Security/` and `Control/`, which you use as a whole. A file named in
-lowercase holds functions and constants; a capitalised one is named after the class it provides.
+```
+AlLoRa/
+├── File.py, Digital_Endpoint.py, Status.py
+├── Nodes/          Edge, Hub
+├── Connectors/     the radios; Split/ holds a Connector split across a cable or a network
+├── Data/           Sources/ where files come from, Sinks/ where they go
+├── Control/        signed commands: the verify gate and the actuators
+├── Management/     status reports and logs
+├── Protocol/       Packet, Codec, Pacing, and Security/
+└── utils/
+```
+
+In `Nodes/`, `Connectors/`, `Data/` and `Management/`, a folder holds alternatives you pick from,
+with the base class beside them where there is one. `Control/` and `Protocol/` you use as a whole. A
+file named in lowercase holds functions and constants; a capitalised one is named after the class
+it provides.
 
 ### [Nodes](AlLoRa/Nodes)
 
@@ -227,7 +239,7 @@ different radio settings.
 
 </details>
 
-### [DataSources](AlLoRa/DataSources)
+### [DataSources](AlLoRa/Data/Sources)
 
 <img align="right" width="200" src="readme_assets/figures/toolbox-data.svg"
      alt="AlLoRa toolbox: data in and out (DataSource, AlLoRa_File, DataSink)">
@@ -247,17 +259,17 @@ message becomes a file. Hand one to a node, and the node sends whatever it queue
 
 | DataSource | Files come from |
 |---|---|
-| [`DataSource`](AlLoRa/DataSources/DataSource.py) | your own code, through a queue in memory |
-| [`Disk_DataSource`](AlLoRa/DataSources/Disk_DataSource.py) | a folder on flash, which survives a power cut |
-| [`MQTT_DataSource`](AlLoRa/DataSources/MQTT_DataSource.py) | an MQTT broker, one file per message |
-| [`Serial_DataSource`](AlLoRa/DataSources/Serial_DataSource.py) | another device on a serial cable |
+| [`DataSource`](AlLoRa/Data/Sources/DataSource.py) | your own code, through a queue in memory |
+| [`Disk_DataSource`](AlLoRa/Data/Sources/Disk_DataSource.py) | a folder on flash, which survives a power cut |
+| [`MQTT_DataSource`](AlLoRa/Data/Sources/MQTT_DataSource.py) | an MQTT broker, one file per message |
+| [`Serial_DataSource`](AlLoRa/Data/Sources/Serial_DataSource.py) | another device on a serial cable |
 
 `Disk_DataSource` deletes a file only once the other side confirms it arrived. After a reboot a
 file may be sent twice, but it is never lost.
 
 </details>
 
-### [DataSinks](AlLoRa/DataSinks)
+### [DataSinks](AlLoRa/Data/Sinks)
 
 A DataSink takes each finished file, together with a `Reception`: who sent it and how it arrived
 (RSSI, SNR, number of chunks, session). The default saves it to disk.
@@ -272,9 +284,9 @@ A DataSink takes each finished file, together with a `Reception`: who sent it an
 
 | DataSink | Each file goes to |
 |---|---|
-| [`Disk_DataSink`](AlLoRa/DataSinks/Disk_DataSink.py) | a folder named after the sender, under `Results/` (the default) |
-| [`MQTT_DataSink`](AlLoRa/DataSinks/MQTT_DataSink.py) | an MQTT broker |
-| [`HTTP_DataSink`](AlLoRa/DataSinks/HTTP_DataSink.py) | a web service, such as a control website |
+| [`Disk_DataSink`](AlLoRa/Data/Sinks/Disk_DataSink.py) | a folder named after the sender, under `Results/` (the default) |
+| [`MQTT_DataSink`](AlLoRa/Data/Sinks/MQTT_DataSink.py) | an MQTT broker |
+| [`HTTP_DataSink`](AlLoRa/Data/Sinks/HTTP_DataSink.py) | a web service, such as a control website |
 
 To write your own, subclass `DataSink` and implement `consume(file, reception)`.
 
@@ -314,7 +326,8 @@ Usually a node's Connector drives a radio on the same board, like the three Edge
 Raspberry Pi has no LoRa radio, so its Connector is **split in two halves**: the Hub holds the near
 half, and a small radio board holds the far half inside an **Adapter**. The two halves talk over a
 **Link** (WiFi, a serial cable, or USB). The Adapter is not a node: it holds no files and no keys,
-and only runs the radio on the Hub's orders.
+and only runs the radio on the Hub's orders. All three pieces of a split Connector live in
+[`Connectors/Split/`](AlLoRa/Connectors/Split).
 
 #### [Connectors](AlLoRa/Connectors)
 
@@ -327,24 +340,24 @@ Every Connector has the same methods (`transmit`, `listen`, `exchange`, plus the
 | [`SX1262_connector`](AlLoRa/Connectors/SX1262_connector.py) | Boards with an SX1262 (LilyGo T3S3) |
 | [`LoPy4_connector`](AlLoRa/Connectors/LoPy4_connector.py) | Pycom LoPy4, using its native LoRa library |
 | [`E5_connector`](AlLoRa/Connectors/E5_connector.py) | A Seeed E5 module driven over AT commands |
-| [`Serial_connector`](AlLoRa/Connectors/Serial_connector.py) | The near half, over a serial cable or USB |
-| [`WiFi_connector`](AlLoRa/Connectors/WiFi_connector.py) | The near half, over the network |
+| [`Serial_connector`](AlLoRa/Connectors/Split/Serial_connector.py) | The near half, over a serial cable or USB |
+| [`WiFi_connector`](AlLoRa/Connectors/Split/WiFi_connector.py) | The near half, over the network |
 | [`Loopback_connector`](AlLoRa/Connectors/Loopback_connector.py) | Two nodes in one process, for tests |
 
-#### [Links](AlLoRa/Links)
+#### [Links](AlLoRa/Connectors/Split)
 
 A Link only moves bytes. It knows nothing about packets or keys.
 
 | Link | Media |
 |---|---|
-| [`Serial_link`](AlLoRa/Links/Serial_link.py) | UART and USB |
-| [`WiFi_link`](AlLoRa/Links/WiFi_link.py) | HTTP over the network |
-| [`Loopback_link`](AlLoRa/Links/Loopback_link.py) | tests on a computer |
+| [`Serial_link`](AlLoRa/Connectors/Split/Serial_link.py) | UART and USB |
+| [`WiFi_link`](AlLoRa/Connectors/Split/WiFi_link.py) | HTTP over the network |
+| [`Loopback_link`](AlLoRa/Connectors/Split/Loopback_link.py) | tests on a computer |
 
 `Serial_link` takes any port object that can write, read and say how many bytes are waiting, so
 a direct USB cable already works with it.
 
-#### [Adapters](AlLoRa/Adapters)
+#### [Adapters](AlLoRa/Connectors/Split)
 
 The program a radio board runs to serve the far half. The medium is in the class name, and the
 radio is an argument:
@@ -377,7 +390,7 @@ operator, and the Edge acts on it only once the signature checks out.
 Every Edge holds the control root's public key from the day it is set up. On the Edge, two pieces
 do the work:
 
-- [`Control_Root_DataSink`](AlLoRa/DataSinks/Control_Root_DataSink.py) is the **verify gate**. It
+- [`Control_Root_DataSink`](AlLoRa/Control/Control_Root_DataSink.py) is the **verify gate**. It
   checks the signature and that the command is meant for this node, and passes on only what
   passes.
 - [`Control_Actuator`](AlLoRa/Control/Control_Actuator.py) carries out a verified command. The
@@ -430,7 +443,8 @@ a Pi.
 <img align="right" width="200" src="readme_assets/figures/toolbox-core.svg"
      alt="AlLoRa toolbox: core pieces (AlLoRa_File, Packets)">
 
-The modules at the top of `AlLoRa/`, which every node uses without you choosing them.
+`File.py` at the top of `AlLoRa/`, and the modules in [`Protocol/`](AlLoRa/Protocol), which every
+node uses without you choosing them.
 
 <details>
 <summary>File, Packet, Codec and Pacing.</summary>
@@ -441,18 +455,18 @@ The modules at the top of `AlLoRa/`, which every node uses without you choosing 
 served. Created **empty**, it is a container that receives the chunks and puts them back together.
 A chunk that arrives twice costs nothing, and the order of arrival does not matter.
 
-#### [Packet_v3.py](AlLoRa/Packet_v3.py) and [Packet.py](AlLoRa/Packet.py)
+#### [Packet.py](AlLoRa/Protocol/Packet.py) and [Packet_v2.py](AlLoRa/Protocol/Packet_v2.py)
 
-What a frame means: its kind, session, flags and payload. `Packet_v3` is the current format, and
-`Packet` is the v2 one, kept so a v3 node can still talk to an old one. See
+What a frame means: its kind, session, flags and payload. `Packet.py` is the current format, and
+`Packet_v2.py` is the v2 one, kept so a v3 node can still talk to an old one. See
 [Packet structure](#-packet-structure).
 
-#### [Codec.py](AlLoRa/Codec.py)
+#### [Codec.py](AlLoRa/Protocol/Codec.py)
 
 Turns a Packet into bytes on the air and back. There is one per protocol version and security mode
 (v2, v3 open, v3 secure).
 
-#### [Pacing.py](AlLoRa/Pacing.py)
+#### [Pacing.py](AlLoRa/Protocol/Pacing.py)
 
 Sets the timing: how long to wait for a reply, and how long to pause between requests. It finds
 the shortest pause the link can take by itself. To bound it, use
@@ -586,7 +600,7 @@ waiting, polls anyway, and tries the downlink again later.
 
 ## → Packet structure
 
-The format lives in [`Packet_v3.py`](AlLoRa/Packet_v3.py) (v2 in [`Packet.py`](AlLoRa/Packet.py)).
+The format lives in [`Packet.py`](AlLoRa/Protocol/Packet.py) (v2 in [`Packet_v2.py`](AlLoRa/Protocol/Packet_v2.py)).
 
 The Packet is the fundamental unit sent over LoRa. A LoRa frame carries at most 255 bytes (at SF7
 to SF10; less at SF11 and SF12), so every byte of header is a byte of data lost. It seems like a
@@ -888,7 +902,7 @@ destination of the request, and as we said before, they have priority.
 | `Gateway.check_digital_endpoints()` | **`Hub.run()`** | |
 | `CTP_File` | **`AlLoRa_File`** | |
 | `Interface` | **`Adapter`** | transport, not a node |
-| `DataSource` | `DataSource` | now under `AlLoRa.DataSources` |
+| `DataSource` | `DataSource` | now under `AlLoRa.Data.Sources` |
 
 A year-old `main.py` needs two edits: `Source` becomes `Edge`, and both `Requester` and `Gateway`
 become `Hub`. Pass the constructor arguments **by keyword**, since the order changed, and drop

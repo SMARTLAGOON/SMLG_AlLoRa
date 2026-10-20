@@ -7,7 +7,7 @@ import hashlib
 
 from AlLoRa.Control.control_envelope import (
     ENVELOPE_VERSION, MAX_COUNTER, TARGET_LEN, signed_region)
-from AlLoRa.Security.ec_p256 import (
+from AlLoRa.Protocol.Security.ec_p256 import (
     N, ecdsa_sign, generate_private_key, public_key_uncompressed)
 
 

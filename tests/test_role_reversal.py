@@ -24,7 +24,7 @@ from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
-from AlLoRa.DataSinks.DataSink import DataSink
+from AlLoRa.Data.Sinks.DataSink import DataSink
 from AlLoRa.File import AlLoRa_File
 
 EDGE_MAC = "a1a1a1a1"
@@ -441,13 +441,13 @@ def test_hub_authority_tie_break_edge_yields_to_poll(tmp_path):
     # a GRANT went out — it lost the delegation (empty queue, home role) and just polls —
     # while the Edge honors that GRANT and starts driving. Hub always wins: the Edge must
     # yield the instant its pull hears the poll, and answer it from home.
-    from AlLoRa.Packet_v3 import Packet_v3
+    from AlLoRa.Protocol.Packet import Packet
 
     edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
     edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn)
 
     # The stale GRANT, exactly as the pre-reboot Hub framed it.
-    grant = Packet_v3(addressing="sid")
+    grant = Packet(addressing="sid")
     grant.set_session(SESSION_ID)
     grant.set_grant(9)
     hub_conn.transmit(grant.get_content())
@@ -502,7 +502,7 @@ def test_edge_yields_to_the_hubs_metadata_poll_too(tmp_path):
     # endpoint polls it with METADATA, not OK. The request the Hub sends is an empty METADATA,
     # which a Hub serving a file never sends (its METADATA always carries the chunk size,
     # length and name), so it is the authority polling just as surely as an OK is.
-    from AlLoRa.Packet_v3 import Packet_v3
+    from AlLoRa.Protocol.Packet import Packet
 
     edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
     edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn)
@@ -514,7 +514,7 @@ def test_edge_yields_to_the_hubs_metadata_poll_too(tmp_path):
     hub.listen_to_endpoint(endpoint, listening_time=2, save_file=True)     # first contact
     assert endpoint.state == Digital_Endpoint.REQUEST_DATA_STATE
 
-    grant = Packet_v3(addressing="sid")
+    grant = Packet(addressing="sid")
     grant.set_session(SESSION_ID)
     grant.set_grant(9)
     hub_conn.transmit(grant.get_content())
@@ -532,13 +532,13 @@ def test_regrant_after_failed_pull_is_honored(tmp_path):
     # Only a COMPLETED pull retires a delegation id. An Edge whose granted pull died
     # (its Hub rebooted mid-delegation and never served it) must honor the same id
     # again — a rebooted Hub can legitimately re-grant with it.
-    from AlLoRa.Packet_v3 import Packet_v3
+    from AlLoRa.Protocol.Packet import Packet
 
     edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
     edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn)
     edge.downlink_window = 1     # a dead pull gives up quickly (test pacing)
 
-    grant = Packet_v3(addressing="sid")
+    grant = Packet(addressing="sid")
     grant.set_session(SESSION_ID)
     grant.set_grant(9)
     hub_conn.transmit(grant.get_content())
@@ -558,7 +558,7 @@ def test_regrant_after_failed_pull_is_honored(tmp_path):
 def test_duplicate_grant_after_completed_pull_is_ignored(tmp_path):
     # The counterpart pin: after a COMPLETED pull, a stray duplicate of the same
     # GRANT must be ignored — no second pull, no wasted drive window.
-    from AlLoRa.Packet_v3 import Packet_v3
+    from AlLoRa.Protocol.Packet import Packet
 
     payload = bytes((i * 29) % 256 for i in range(300))
     edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
@@ -577,7 +577,7 @@ def test_duplicate_grant_after_completed_pull_is_ignored(tmp_path):
     while not edge_conn.outbox.empty():
         edge_conn.outbox.get_nowait()
 
-    duplicate = Packet_v3(addressing="sid")
+    duplicate = Packet(addressing="sid")
     duplicate.set_session(SESSION_ID)
     duplicate.set_grant(hub._swap_id)         # the id the completed pull used
     hub_conn.transmit(duplicate.get_content())
@@ -590,7 +590,7 @@ def test_rebooted_hub_grants_do_not_resume_at_a_fixed_id(tmp_path, monkeypatch):
     # A reboot restarts the Hub's GRANT counter. If it always restarted at the same
     # value, an Edge remembering the pre-reboot id would silently drop the first
     # post-reboot GRANT — so the counter starts at a random byte.
-    from AlLoRa.Packet_v3 import Packet_v3
+    from AlLoRa.Protocol.Packet import Packet
     import AlLoRa.Nodes.Hub as hub_module
 
     monkeypatch.setattr(hub_module, "urandom", lambda n: bytes([0x2A]))
@@ -604,7 +604,7 @@ def test_rebooted_hub_grants_do_not_resume_at_a_fixed_id(tmp_path, monkeypatch):
 
     grant_frame = edge_conn.inbox.get_nowait()   # the Hub's first frame is the GRANT
     packet = hub.connector.codec.deframe(grant_frame)
-    assert packet.get_command() == Packet_v3.GRANT
+    assert packet.get_command() == Packet.GRANT
     assert packet.get_swap_id() == 0x2B          # seeded 0x2A, first grant is +1
 
 

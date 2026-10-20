@@ -16,7 +16,7 @@ import hmac
 import sys
 import types
 
-from AlLoRa.Security.AEAD import (detect_aead, Ctr_hmac_aead, _self_test,
+from AlLoRa.Protocol.Security.AEAD import (detect_aead, Ctr_hmac_aead, _self_test,
                                   _micropython_ctr, unavailable_reason, _ct_equal)
 
 ENC_KEY = bytes(range(16))          # AES-128 key

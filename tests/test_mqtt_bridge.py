@@ -13,9 +13,9 @@ from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
-from AlLoRa.DataSinks.DataSink import DataSink
-from AlLoRa.DataSources.MQTT_DataSource import MQTT_DataSource
-from AlLoRa.DataSources.mqtt_naming import decode_name
+from AlLoRa.Data.Sinks.DataSink import DataSink
+from AlLoRa.Data.Sources.MQTT_DataSource import MQTT_DataSource
+from AlLoRa.Data.mqtt_naming import decode_name
 
 EDGE_MAC = "a1a1a1a1"
 HUB_MAC = "b2b2b2b2"
@@ -152,8 +152,8 @@ def test_bidirectional_mqtt_round_trip_with_loop_guards(tmp_path):
     # forever without loop prevention: every republish echoes back into the local
     # subscription. The guards must keep each message to exactly one crossing while
     # both directions stay topic-preserving and byte-exact.
-    from AlLoRa.DataSinks.MQTT_DataSink import MQTT_DataSink
-    from AlLoRa.DataSources.Loop_guard import Loop_guard
+    from AlLoRa.Data.Sinks.MQTT_DataSink import MQTT_DataSink
+    from AlLoRa.Data.Loop_guard import Loop_guard
 
     edge_client, hub_client = Fake_client(), Fake_client()
     edge_guard, hub_guard = Loop_guard(), Loop_guard()

@@ -16,7 +16,7 @@ from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Packet import Packet
 
 SOURCE_MAC = "a1a1a1a1"
 COLLECTOR_MAC = "b2b2b2b2"
@@ -98,7 +98,7 @@ def test_source_adopts_a_reassigned_sid_from_the_welcome(tmp_path):
 
     # and the reassigned session actually works end to end
     aead = source.aead
-    p = Packet_v3(addressing="sid"); p.set_session(reassigned); p.set_data(b"reassigned reading")
-    got = Packet_v3(addressing="sid")
+    p = Packet(addressing="sid"); p.set_session(reassigned); p.set_data(b"reassigned reading")
+    got = Packet(addressing="sid")
     assert got.load_secure(p.get_secure_content(session_i, aead), session_r, aead) is True
     assert got.get_payload() == b"reassigned reading"

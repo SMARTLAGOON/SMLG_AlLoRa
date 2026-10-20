@@ -16,7 +16,7 @@ import sys
 
 import pytest
 
-from AlLoRa.DataSinks.DataSink import Reception
+from AlLoRa.Data.Sinks.DataSink import Reception
 from AlLoRa.File import AlLoRa_File
 
 _USB_EXAMPLE = os.path.join(
@@ -66,7 +66,7 @@ def test_the_documented_topic_is_the_one_the_sink_publishes():
     # deployment subscribes to that string, so a change to either side has to break here rather
     # than on a gateway.
     module = _load_example()
-    from AlLoRa.DataSinks.MQTT_DataSink import MQTT_DataSink
+    from AlLoRa.Data.Sinks.MQTT_DataSink import MQTT_DataSink
 
     client = _Recording_client()
     sink = MQTT_DataSink(client=client, topic_prefix=module.TOPIC_PREFIX)

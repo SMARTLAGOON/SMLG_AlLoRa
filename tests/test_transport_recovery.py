@@ -19,8 +19,8 @@ Everything here runs on CPython with fake ports; the hardware pass is a Pi with 
 """
 import pytest
 
-from AlLoRa.Links.Serial_link import Serial_link
-from AlLoRa.Connectors.Serial_connector import Serial_connector
+from AlLoRa.Connectors.Split.Serial_link import Serial_link
+from AlLoRa.Connectors.Split.Serial_connector import Serial_connector
 
 
 class _FakePort:
@@ -359,7 +359,7 @@ def test_a_different_board_on_the_path_fails_the_recovery():
 # --- the USB reset itself --------------------------------------------------------------------
 
 def test_usb_reset_issues_the_proven_esptool_call():
-    from AlLoRa.Connectors.Serial_connector import usb_reset
+    from AlLoRa.Connectors.Split.Serial_connector import usb_reset
 
     calls = []
 
@@ -382,7 +382,7 @@ def test_usb_reset_finds_esptool_under_either_of_its_names():
     # esptool ships as `esptool.py` and as `esptool` depending on the version installed. A
     # recovery path that insisted on one name would be dead on half the machines it runs on,
     # and the failure would only ever show up with a wedged board and no way back.
-    from AlLoRa.Connectors.Serial_connector import resolve_esptool
+    from AlLoRa.Connectors.Split.Serial_connector import resolve_esptool
 
     assert resolve_esptool(which=lambda n: n == "esptool") == "esptool"
     assert resolve_esptool(which=lambda n: n == "esptool.py") == "esptool.py"
@@ -394,7 +394,7 @@ def test_usb_reset_retries_a_board_that_was_not_ready():
     # a connection, so the first attempt lands in that window often enough that one try is a
     # coin flip rather than a reset. Benched on 2026-09-02: repeated calls at one board
     # alternated between working and failing to open the port at all.
-    from AlLoRa.Connectors.Serial_connector import usb_reset
+    from AlLoRa.Connectors.Split.Serial_connector import usb_reset
 
     codes = iter([1, 0])
 
@@ -409,7 +409,7 @@ def test_usb_reset_retries_a_board_that_was_not_ready():
 
 
 def test_usb_reset_gives_up_after_its_attempts():
-    from AlLoRa.Connectors.Serial_connector import usb_reset
+    from AlLoRa.Connectors.Split.Serial_connector import usb_reset
 
     calls = []
 
@@ -425,7 +425,7 @@ def test_usb_reset_gives_up_after_its_attempts():
 
 
 def test_usb_reset_reports_a_failed_call_rather_than_raising():
-    from AlLoRa.Connectors.Serial_connector import usb_reset
+    from AlLoRa.Connectors.Split.Serial_connector import usb_reset
 
     def runner(argv, **kwargs):
         raise OSError("esptool: command not found")

@@ -14,11 +14,11 @@ a frame sealed under the initiator's session opens under the responder's.
 import os
 import threading
 
-from AlLoRa.Security.handshake import initiator_hello, responder_accept, initiator_complete
-from AlLoRa.Security.ec_p256 import generate_private_key
-from AlLoRa.Security.kdf import ENC_KEY_LEN, MAC_KEY_LEN
-from AlLoRa.Security.AEAD import detect_aead
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Security.handshake import initiator_hello, responder_accept, initiator_complete
+from AlLoRa.Protocol.Security.ec_p256 import generate_private_key
+from AlLoRa.Protocol.Security.kdf import ENC_KEY_LEN, MAC_KEY_LEN
+from AlLoRa.Protocol.Security.AEAD import detect_aead
+from AlLoRa.Protocol.Packet import Packet
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 
 SID = 17
@@ -78,10 +78,10 @@ def test_two_handshakes_produce_different_sessions():
 
 def _send_ctrl(conn, src_mac, dst_mac, payload):
     # Frame a handshake payload as a MAC-addressed v3 CTRL packet (no session id exists yet).
-    p = Packet_v3(addressing="mac")
+    p = Packet(addressing="mac")
     p.set_source(src_mac)
     p.set_destination(dst_mac)
-    p.set_kind(Packet_v3.CTRL)
+    p.set_kind(Packet.CTRL)
     p.set_payload(payload)
     conn.send(p)
 
@@ -89,7 +89,7 @@ def _send_ctrl(conn, src_mac, dst_mac, payload):
 def _recv_ctrl(conn):
     raw = conn.recv(focus_time=5)
     assert raw is not None, "handshake frame never arrived"
-    p = Packet_v3(addressing="mac")
+    p = Packet(addressing="mac")
     assert p.load(raw) is True, "handshake frame failed to parse/verify"
     return p.get_payload()
 

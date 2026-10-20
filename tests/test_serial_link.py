@@ -9,10 +9,10 @@ The remaining unknowns (a physical UART's timing, wiring) are what the hardware 
 import json
 import threading
 
-from AlLoRa.Links.Serial_link import Serial_link
+from AlLoRa.Connectors.Split.Serial_link import Serial_link
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
-from AlLoRa.Adapters.Adapter import Adapter
+from AlLoRa.Connectors.Split.Tunnel_connector import Tunnel_connector
+from AlLoRa.Connectors.Split.Adapter import Adapter
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint

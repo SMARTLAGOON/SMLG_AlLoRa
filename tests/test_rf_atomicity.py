@@ -17,7 +17,7 @@ import json
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Nodes.Edge import Edge
-from AlLoRa.Packet import Packet
+from AlLoRa.Protocol.Packet_v2 import Packet_v2
 
 EDGE_MAC = "a1a1a1a1"
 HUB_MAC = "b2b2b2b2"
@@ -94,7 +94,7 @@ def _v2_edge_serving(tmp_path, chunk_size=100, content_bytes=500):
 
 
 def _rf_change_request(new_config):
-    request = Packet(mesh_mode=False, short_mac=True)
+    request = Packet_v2(mesh_mode=False, short_mac=True)
     request.set_source(HUB_MAC)
     request.set_destination(EDGE_MAC)
     request.set_change_rf(new_config)

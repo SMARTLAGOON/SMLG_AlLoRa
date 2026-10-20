@@ -18,7 +18,7 @@ would still hold if the MAC were replaced with something fast and wrong.
 """
 import hmac
 
-from AlLoRa.Security.kdf import (
+from AlLoRa.Protocol.Security.kdf import (
     derive_session_keys, derive_session_material, hkdf_sha256, ENC_KEY_LEN, MAC_KEY_LEN,
 )
 

@@ -11,15 +11,15 @@ real v2 frame without disturbing it, and (2) the decision table. Wiring the *run
 upgrade into the live transfer pairs with the secure handshake (increment 2), which is
 the upgrade target.
 """
-from AlLoRa.Packet import Packet
-from AlLoRa.negotiation import negotiate_version, V2, V3
+from AlLoRa.Protocol.Packet_v2 import Packet_v2
+from AlLoRa.Protocol.negotiation import negotiate_version, V2, V3
 
 SRC = "a1a1a1a1"
 DST = "b2b2b2b2"
 
 
 def _v2_ok(beacon):
-    p = Packet(mesh_mode=False, short_mac=True)
+    p = Packet_v2(mesh_mode=False, short_mac=True)
     p.set_source(SRC)
     p.set_destination(DST)
     p.set_ok()
@@ -33,7 +33,7 @@ def _v2_ok(beacon):
 def test_beacon_bit_does_not_disturb_a_v2_frame():
     wire = _v2_ok(beacon=True).get_content()
 
-    got = Packet(mesh_mode=False, short_mac=True)
+    got = Packet_v2(mesh_mode=False, short_mac=True)
     assert got.load(wire) is True
     # A v2 receiver still parses the command and every other flag exactly.
     assert got.get_command() == "OK"
@@ -45,7 +45,7 @@ def test_beacon_bit_does_not_disturb_a_v2_frame():
 
 
 def test_beacon_defaults_off():
-    got = Packet(mesh_mode=False, short_mac=True)
+    got = Packet_v2(mesh_mode=False, short_mac=True)
     assert got.load(_v2_ok(beacon=False).get_content()) is True
     assert got.get_v3_beacon() is False
 

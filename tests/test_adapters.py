@@ -14,10 +14,10 @@ import threading
 
 import pytest
 
-from AlLoRa.Adapters.Adapter import Adapter
+from AlLoRa.Connectors.Split.Adapter import Adapter
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
-from AlLoRa.Links.Loopback_link import Loopback_link
+from AlLoRa.Connectors.Split.Tunnel_connector import Tunnel_connector
+from AlLoRa.Connectors.Split.Loopback_link import Loopback_link
 
 CONNCFG = {"name": "bridge", "sf": 7, "freq": 868, "bandwidth": 125, "coding_rate": 1,
            "tx_power": 14, "protocol_version": 3, "addressing": "sid", "timeout_delta": 0.1}
@@ -155,8 +155,8 @@ def test_a_v2_bridge_keeps_mac_addressing(tmp_path):
 # ports themselves are proven on hardware.
 
 def test_serial_adapter_builds_its_link_from_the_uart_settings(tmp_path, monkeypatch):
-    from AlLoRa.Adapters.Serial_adapter import Serial_adapter
-    from AlLoRa.Links.Serial_link import Serial_link
+    from AlLoRa.Connectors.Split.Serial_adapter import Serial_adapter
+    from AlLoRa.Connectors.Split.Serial_link import Serial_link
 
     built = {}
     monkeypatch.setattr(Serial_link, "bridge",
@@ -171,8 +171,8 @@ def test_serial_adapter_builds_its_link_from_the_uart_settings(tmp_path, monkeyp
 
 
 def test_wifi_adapter_binds_its_link_to_the_configured_host_and_port(tmp_path, monkeypatch):
-    from AlLoRa.Adapters.WiFi_adapter import WiFi_adapter
-    from AlLoRa.Links.WiFi_link import WiFi_link
+    from AlLoRa.Connectors.Split.WiFi_adapter import WiFi_adapter
+    from AlLoRa.Connectors.Split.WiFi_link import WiFi_link
 
     built = {}
     monkeypatch.setattr(WiFi_link, "bridge",

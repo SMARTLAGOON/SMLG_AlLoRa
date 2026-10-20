@@ -7,14 +7,14 @@ import gc
 from os import urandom
 from json import loads, dumps
 from AlLoRa.Nodes.Node import Node
-from AlLoRa.Codec import build_codec
+from AlLoRa.Protocol.Codec import build_codec
 from AlLoRa.Digital_Endpoint import Digital_Endpoint, assign_session_ids, \
     label_for_config, with_current_keys, config_key_for, NO_ADDRESS, Version_conflict
-from AlLoRa.DataSources.DataSource import DataSource
+from AlLoRa.Data.Sources.DataSource import DataSource
 from AlLoRa.Control.control_types import RF_CONFIG, IN_BAND, KNOWN
 from AlLoRa.File import AlLoRa_File
-from AlLoRa.Packet_v3 import Packet_v3
-from AlLoRa.Pacing import Pacing
+from AlLoRa.Protocol.Packet import Packet
+from AlLoRa.Protocol.Pacing import Pacing
 from AlLoRa.utils.time_utils import current_time_ms as time, sleep, ticks_add, ticks_diff
 from AlLoRa.utils.debug_utils import print
 
@@ -1181,7 +1181,7 @@ class Hub(Node):
                                          digital_endpoint.get_mesh(),
                                          digital_endpoint.get_sleep(),
                                          digital_endpoint.session_id)
-            packet.set_kind(Packet_v3.CTRL)
+            packet.set_kind(Packet.CTRL)
             packet.set_payload(payload)
             if self._is_control_ack(self.send_request(packet), prefix):
                 # The peer accepted, so this end follows it onto the new configuration, exactly
@@ -1252,7 +1252,7 @@ class Hub(Node):
         Hub would then move itself onto a config the Edge never applied, which is the deaf
         endpoint the mirror exists to prevent.
         """
-        if reply is None or reply.get_command() != Packet_v3.CTRL:
+        if reply is None or reply.get_command() != Packet.CTRL:
             return False
         payload = reply.get_payload()
         return bool(payload) and payload[0] == prefix

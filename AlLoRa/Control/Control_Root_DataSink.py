@@ -1,0 +1,184 @@
+import hashlib
+
+from AlLoRa.Control.control_types import KNOWN
+from AlLoRa.Control.control_envelope import (
+    ENVELOPE_VERSION, HEADER_LEN as _HEADER_LEN, MIN_LEN as _MIN_LEN,
+    SIG_LEN as _SIG_LEN, TARGET_LEN as _TARGET_LEN)
+from AlLoRa.Data.Sinks.DataSink import DataSink
+from AlLoRa.Protocol.Security.ec_p256 import ecdsa_verify, decode_public_key
+from AlLoRa.utils.debug_utils import print
+from AlLoRa.utils.file_utils import commit_file
+from AlLoRa.utils.json_utils import json
+
+# The envelope layout (and the version that names it) is shared with the minting side, so the
+# two ends cannot drift; ENVELOPE_VERSION is re-exported here because this module was where
+# callers first found it.
+
+
+class Control_Root_DataSink(DataSink):
+    """The verify gate of the control path: a DataSink that only forwards what is authentic.
+
+    It takes a downlink file off the air like any other sink, checks the envelope and the
+    signature against the control root, and hands the verified artifact to a `Control_Actuator`,
+    which owns the effect and the timing of it. All the crypto lives here and no device
+    knowledge does, so the same gate is reused on any node with any actuator behind it.
+    """
+
+    def __init__(self, control_root, device_id, actuator, counter_file="control.counter"):
+        # Fail closed at construction: a mis-provisioned gate must refuse to start, never
+        # silently forward unverified commands.
+        if not control_root:
+            raise ValueError(
+                "verifying a control artifact requires a control_root public key: refusing to "
+                "run unverified (a registered node must never act on an unsigned command)")
+        if actuator is None:
+            raise ValueError("Control_Root_DataSink wraps an actuator; none was given")
+        if device_id is None or len(device_id) != _TARGET_LEN:
+            raise ValueError(
+                "device_id must be this node's 32-byte identity fingerprint (its device_id)")
+        self.control_root = self._load_control_root(control_root)
+        self.device_id = bytes(device_id)
+        self.actuator = actuator
+        # Forwarded: what the library knows and the actuator says it acts on. A signed artifact
+        # of any other type is dropped here, never forwarded and never re-pulled, so adding a
+        # command is a new actuator and never an edit to this check. Fixed at construction, the
+        # same as the root it verifies against.
+        self._forwarded = tuple(t for t in getattr(actuator, "handles", ()) if t in KNOWN)
+        if not self._forwarded:
+            # Started anyway, it would drop every command as "no actuator for control type N",
+            # which points a student away from the actuator they just wrote.
+            raise ValueError(
+                "this actuator handles no control type: list them in `handles`, "
+                "e.g. handles = (RF_CONFIG, RESET)")
+        # Named by default, under the same filename the authority that commands this node keeps
+        # its own number in. Passing None asks for the mark in RAM, which is a deliberate act at
+        # the call site rather than something a caller falls into by not knowing the argument
+        # exists; what that costs is in _load_counter.
+        self.counter_file = counter_file
+        self.counter = self._load_counter()
+
+    @staticmethod
+    def _root_fingerprint(root_key):
+        # digest().hex() rather than hexdigest(): MicroPython's hashlib has no hexdigest, so the
+        # latter runs everywhere the tests run and throws on every board. Same string either way.
+        return hashlib.sha256(root_key).digest().hex()
+
+    def _load_counter(self):
+        """Read back the highest counter this node has accepted, or 0 if it has none.
+
+        The mark is persisted because a RAM-only one resets on reboot and re-opens the whole
+        replay window, which is most of what the counter buys. It is keyed by the root that
+        accepted it, which is also how a reset happens without a command for it: a rotated
+        control root does not match the stored fingerprint, so the count starts over, and a
+        re-provisioned node has a new device_id that old artifacts no longer address.
+
+        It persists whether or not anyone named a file for it. Leaving that to configuration
+        assumed an Edge is always the radio board, and it is not: an Edge is just as often the
+        logic-holder on a host with a real filesystem, with the radio a dumb adapter beside it.
+        There RAM-only is not a hardware limit but a default nobody chose, and it costs a
+        security property rather than an outage: an attacker in radio range records a signed
+        artifact off the air, waits for a reboot, and sends it again, authentic and already
+        spent. The counter is the only thing that makes it un-reusable, so a mark that resets
+        hands back every artifact this node has ever accepted.
+
+        Given no file at all (`counter_file=None`, a board with nowhere to write) the mark is
+        RAM-only and the window does re-open at reboot: still available, now as a choice made
+        at the call site rather than one made by silence.
+        """
+        if not self.counter_file:
+            return 0
+        try:
+            with open(self.counter_file, "r") as f:
+                mark = json.loads(f.read())
+            if mark.get("root") != self._root_fingerprint(self.control_root):
+                return 0
+            counter = mark.get("counter", 0)
+        except (OSError, ValueError, AttributeError):
+            # No mark yet, or one we cannot read. Starting from 0 costs freshness, never
+            # authenticity: every artifact still has to verify against the control root.
+            return 0
+        return counter if isinstance(counter, int) and counter > 0 else 0
+
+    def _accept_counter(self, counter):
+        self.counter = counter
+        if not self.counter_file:
+            return
+        try:
+            # Committed through a rename rather than written in place, and the reason is the
+            # same one that keeps this composed before any file is touched: a mark that ends up
+            # half-written reads back as "no counter" and silently re-opens the replay window on
+            # the next boot. Whether the new number landed matters far less than whether the
+            # old one is still readable.
+            commit_file(self.counter_file,
+                        json.dumps({"root": self._root_fingerprint(self.control_root),
+                                    "counter": counter}))
+        except Exception as e:
+            # Persisting is best-effort and must never turn an accepted command into a failed
+            # transfer: the caller treats a raise here as a delivery failure, so the peer never
+            # hears the final OK and the two ends can end up on different configurations. The
+            # RAM mark still holds for this boot. Deliberately broader than OSError, which let
+            # a missing-attribute slip escape as an aborted reception.
+            print("Control_Root_DataSink: could not persist the control counter ({})".format(e))
+
+    @staticmethod
+    def _load_control_root(control_root):
+        # SEC1 hex (a config string) or a raw 65-byte key. Decode + validate once here so a bad
+        # or off-curve key is a loud provisioning error now, not a silent per-artifact failure.
+        key = bytes.fromhex(control_root) if isinstance(control_root, str) else bytes(control_root)
+        decode_public_key(key)   # raises ValueError on a wrong-length / off-curve key
+        return key
+
+    def consume(self, file, reception=None):
+        content = file.get_content()
+        # The artifact is now in RAM (a control artifact is executed, not stored): free the
+        # reassembly temp on every path. A later re-pull, if apply() fails below, starts a fresh
+        # buffer regardless, and File.discard is a safe no-op if the drive loop discards too.
+        try:
+            file.discard()
+        except Exception:
+            pass
+        verified = self._verify(content)
+        if verified is None:
+            return   # rejected: dropped. NEVER raise here -> the transfer still completes (the
+                     # final-OK is sent) and the identical bytes are not re-pulled forever.
+        control_type, payload, counter = verified
+        # Authentic and for us. An actuation failure inside apply() is transient and is allowed
+        # to propagate: the drive loop rewinds and re-pulls, giving at-least-once delivery.
+        self.actuator.apply(control_type, payload)
+        # Only once the command has actually been actuated. Marking the counter first would
+        # make the re-pull that follows a failed apply() look like a replay, and the retry the
+        # line above exists for would be refused.
+        self._accept_counter(counter)
+
+    def _verify(self, content):
+        # Cheap structural checks first, the one expensive ECDSA last (on-device CPU is sacred):
+        # length -> version -> type -> target -> counter -> signature.
+        if len(content) < _MIN_LEN:
+            return self._reject("truncated envelope: {} B < {}".format(len(content), _MIN_LEN))
+        mv = memoryview(content)
+        version = mv[0]
+        if version != ENVELOPE_VERSION:
+            return self._reject("unsupported envelope version {}".format(version))
+        control_type = mv[1]
+        if control_type not in self._forwarded:
+            return self._reject("no actuator for control type {}".format(control_type))
+        if bytes(mv[2:2 + _TARGET_LEN]) != self.device_id:
+            return self._reject("artifact addressed to another node")
+        # Freshness, and deliberately ahead of the signature: a replay is then refused without
+        # paying the seconds an ECDSA verify costs on-device. A forged high counter still costs
+        # one verify, which is no worse than having no counter at all.
+        counter = int.from_bytes(bytes(mv[2 + _TARGET_LEN:_HEADER_LEN]), "big")
+        if counter <= self.counter:
+            return self._reject(
+                "stale counter {} (already accepted {})".format(counter, self.counter))
+        region = mv[:-_SIG_LEN]
+        sig = mv[-_SIG_LEN:]
+        if not ecdsa_verify(self.control_root, hashlib.sha256(region).digest(), sig):
+            return self._reject("signature does not verify against the control root")
+        return control_type, bytes(mv[_HEADER_LEN:-_SIG_LEN]), counter
+
+    def _reject(self, reason):
+        # A rejected control artifact is a rare, security-relevant event: always log it. Returning
+        # None tells consume() to drop the artifact (never raise -> no re-pull loop).
+        print("Control_Root_DataSink: rejected control artifact ({})".format(reason))
+        return None

@@ -19,7 +19,7 @@ material.
 """
 import pytest
 
-from AlLoRa.Security.Session import Session, SessionExhausted
+from AlLoRa.Protocol.Security.Session import Session, SessionExhausted
 
 
 KEY = bytes(range(16))              # opaque 16-byte AES key stand-in

@@ -88,5 +88,5 @@ directory used to be called `utils/`, which collided with `AlLoRa/utils/` and bl
 line worth keeping sharp. `board/` is where a pin is allowed to appear.
 
 The log is the exception, and it proves the rule: it names no pin, so it moved the other way,
-into the library as `AlLoRa/Subscribers/Logger.py`, and it ships on every board including the
+into the library as `AlLoRa/Management/Logger.py`, and it ships on every board including the
 ones with nothing soldered to them.

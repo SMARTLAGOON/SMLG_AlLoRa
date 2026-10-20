@@ -9,8 +9,8 @@ attack vector).
 """
 import os
 
-from AlLoRa.Security import ec_p256
-from AlLoRa.Security.ec_p256 import (
+from AlLoRa.Protocol.Security import ec_p256
+from AlLoRa.Protocol.Security.ec_p256 import (
     generate_private_key, public_key_uncompressed, ecdh_shared_secret,
     is_on_curve, decode_public_key, scalar_mult, point_add, ecdsa_verify,
     ecdsa_sign, G, N, P, INF,

@@ -14,11 +14,11 @@ from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
-from AlLoRa.Packet_v3 import Packet_v3
-from AlLoRa.Security.handshake import (
+from AlLoRa.Protocol.Packet import Packet
+from AlLoRa.Protocol.Security.handshake import (
     initiator_hello, responder_accept, initiator_complete, _PUB_LEN,
 )
-from AlLoRa.Security.ec_p256 import generate_private_key
+from AlLoRa.Protocol.Security.ec_p256 import generate_private_key
 
 SOURCE_MAC = "a1a1a1a1"
 COLLECTOR_MAC = "b2b2b2b2"
@@ -104,9 +104,9 @@ def test_did_registered_handshake_yields_matching_sessions(tmp_path):
 
     # a frame the Source seals opens at the Collector under those handshake sessions
     aead = source.aead
-    p = Packet_v3(addressing="sid")
+    p = Packet(addressing="sid")
     p.set_session(source.device_id[0])
     p.set_data(b"post-handshake reading")
-    got = Packet_v3(addressing="sid")
+    got = Packet(addressing="sid")
     assert got.load_secure(p.get_secure_content(session_i, aead), session_r, aead) is True
     assert got.get_payload() == b"post-handshake reading"

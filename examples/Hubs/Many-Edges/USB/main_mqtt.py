@@ -5,8 +5,8 @@
 # Needs a broker this host can reach and `pip install paho-mqtt` (see ../README.md).
 
 from AlLoRa.Nodes.Hub import Hub
-from AlLoRa.Connectors.Serial_connector import Serial_connector
-from AlLoRa.DataSinks.MQTT_DataSink import MQTT_DataSink
+from AlLoRa.Connectors.Split.Serial_connector import Serial_connector
+from AlLoRa.Data.Sinks.MQTT_DataSink import MQTT_DataSink
 
 # Same adapter lookup and same reset as the disk example next door: nothing about the radio
 # changes because the files go somewhere else.

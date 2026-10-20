@@ -4,7 +4,7 @@ import network
 from sx1262 import SX1262
 from _sx126x import ERR_NONE, ERR_CRC_MISMATCH
 
-from AlLoRa.Packet import Packet
+from AlLoRa.Protocol.Packet_v2 import Packet_v2
 from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.utils.debug_utils import print
 from AlLoRa.utils.time_utils import current_time_ms, ticks_add, ticks_diff, sleep_ms

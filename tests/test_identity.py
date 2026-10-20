@@ -7,8 +7,8 @@ first 4 bytes address first contact on the wire; the first byte seeds the sessio
 """
 import hashlib
 
-from AlLoRa.Security.ec_p256 import generate_private_key, public_key_uncompressed
-from AlLoRa.Security.identity import device_id_from_pubkey, load_or_create_identity
+from AlLoRa.Protocol.Security.ec_p256 import generate_private_key, public_key_uncompressed
+from AlLoRa.Protocol.Security.identity import device_id_from_pubkey, load_or_create_identity
 from test_config_persistence import _dying_open
 
 

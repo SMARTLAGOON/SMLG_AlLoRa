@@ -252,7 +252,7 @@ def test_a_log_file_registers_a_logger_that_writes_where_it_was_told(board, tmp_
 
 
 def test_the_logger_writes_the_topics_it_was_given(tmp_path):
-    from AlLoRa.Subscribers.Logger import Logger
+    from AlLoRa.Management.Logger import Logger
 
     log_file = str(tmp_path / "logs" / "log.log")
     logger = Logger(log_file=log_file, always_log_topics=["RSSI"], change_log_topics=["SF"])

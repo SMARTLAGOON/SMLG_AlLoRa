@@ -28,12 +28,12 @@ from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Control.Control_Root import Control_Root
 from AlLoRa.Control.control_envelope import TARGET_LEN
 from AlLoRa.Control.control_types import IN_BAND, RF_CONFIG, RESET
-from AlLoRa.DataSinks.Control_Root_DataSink import Control_Root_DataSink
+from AlLoRa.Control.Control_Root_DataSink import Control_Root_DataSink
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
-from AlLoRa.Packet_v3 import Packet_v3
-from AlLoRa.Security.ec_p256 import public_key_uncompressed
+from AlLoRa.Protocol.Packet import Packet
+from AlLoRa.Protocol.Security.ec_p256 import public_key_uncompressed
 from test_config_persistence import _dying_open
 from test_hub_ask_change_rf import _Capturing_downlink
 
@@ -112,9 +112,9 @@ def _minted_counter(hub):
 
 
 def _in_band_frame(node, prefix, body=b""):
-    packet = Packet_v3(addressing="sid")
+    packet = Packet(addressing="sid")
     packet.set_session(SESSION_ID)
-    packet.set_kind(Packet_v3.CTRL)
+    packet.set_kind(Packet.CTRL)
     packet.set_payload(bytes([prefix]) + body)
     return node.connector.codec.frame(packet)
 
@@ -248,7 +248,7 @@ def test_an_edge_told_nothing_keeps_its_mark_beside_the_key(tmp_path):
 def test_the_configured_mark_file_is_where_the_verify_gate_writes(tmp_path, monkeypatch):
     # The config line is only worth reading if it reaches the file the gate actually writes.
     # This is the example's own wiring, minus the example: build the gate off the node.
-    from AlLoRa.DataSinks.DataSink import Reception
+    from AlLoRa.Data.Sinks.DataSink import Reception
     from test_control_root_sink import (CONTROL_ROOT_HEX, ENV_RF_CONFIG_VALID,
                                         TARGET_DEVICE_ID, _artifact)
 

@@ -21,7 +21,7 @@ is that it reads its config the same way a node does. Seam B covers that.
 """
 import json
 
-from AlLoRa.Adapters.Adapter import Adapter
+from AlLoRa.Connectors.Split.Adapter import Adapter
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.utils import file_utils

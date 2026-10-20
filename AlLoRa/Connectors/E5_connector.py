@@ -5,7 +5,7 @@ import ubinascii
 import re
 from math import ceil
 
-from AlLoRa.Packet import Packet
+from AlLoRa.Protocol.Packet_v2 import Packet_v2
 from AlLoRa.Connectors.Connector import Connector
 from AlLoRa.utils.debug_utils import print
 

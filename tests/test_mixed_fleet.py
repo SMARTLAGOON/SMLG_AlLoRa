@@ -15,12 +15,12 @@ import threading
 import pytest
 
 from v2_tag import V2Peer, extract_v2_tree
-from AlLoRa.Adapters.Adapter import Adapter
-from AlLoRa.Codec import V2Codec
+from AlLoRa.Connectors.Split.Adapter import Adapter
+from AlLoRa.Protocol.Codec import V2Codec
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
+from AlLoRa.Connectors.Split.Tunnel_connector import Tunnel_connector
 from AlLoRa.Digital_Endpoint import Digital_Endpoint, Version_conflict
-from AlLoRa.Links.Loopback_link import Loopback_link
+from AlLoRa.Connectors.Split.Loopback_link import Loopback_link
 from AlLoRa.File import AlLoRa_File
 from AlLoRa.Nodes import Hub as hub_module
 from AlLoRa.Nodes import Node as node_module

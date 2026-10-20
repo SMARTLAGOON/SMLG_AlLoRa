@@ -1,7 +1,7 @@
 # Main for the Adapter on the Collector side of AlLoRa
 # HW: TTGO LoRa 32
 
-from AlLoRa.Adapters.Serial_adapter import Serial_adapter
+from AlLoRa.Connectors.Split.Serial_adapter import Serial_adapter
 from AlLoRa.Connectors.SX127x_connector import SX127x_connector
 
 if __name__ == "__main__":

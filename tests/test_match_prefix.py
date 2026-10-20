@@ -8,7 +8,7 @@ serialization; a plain prefix compare on the bridge must reproduce the spec's ow
 """
 import struct
 
-from AlLoRa.Codec import _MacMatchSpec, _SidMatchSpec, _DidMatchSpec
+from AlLoRa.Protocol.Codec import _MacMatchSpec, _SidMatchSpec, _DidMatchSpec
 
 
 def _prefix_matches(prefix, wire):

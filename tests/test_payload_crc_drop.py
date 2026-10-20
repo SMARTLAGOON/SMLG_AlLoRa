@@ -31,7 +31,7 @@ import fake_sx127x
 from fake_sx127x import PAYLOAD_CRC_ERROR, RX_DONE, build_pylora
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Packet import Packet
 from PyLora_SX127x_extensions.board_config import BOARD
 
 FRAME = bytes([0x2A, 0x32, 0x02, 0xAB, 0xCD, 0xEF]) + b"the body of an ordinary chunk"
@@ -132,7 +132,7 @@ def _pair():
 
 
 def _packet(sid=7):
-    p = Packet_v3(addressing="sid")
+    p = Packet(addressing="sid")
     p.set_session(sid)
     p.ask_metadata()
     return p

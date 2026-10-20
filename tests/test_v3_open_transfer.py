@@ -19,7 +19,7 @@ from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint
 from AlLoRa.File import AlLoRa_File
-from AlLoRa.Packet_v3 import Packet_v3
+from AlLoRa.Protocol.Packet import Packet
 
 SOURCE_MAC = "a1a1a1a1"
 COLLECTOR_MAC = "b2b2b2b2"
@@ -118,7 +118,7 @@ class _ResettingEdge(Edge):
         self._swapped = False
 
     def response(self, packet):
-        if (not self._swapped and packet.get_command() == Packet_v3.CHUNK
+        if (not self._swapped and packet.get_command() == Packet.CHUNK
                 and packet.get_chunk_index() == self._swap_at):
             self._swapped = True
             self.set_file(self._replacement)

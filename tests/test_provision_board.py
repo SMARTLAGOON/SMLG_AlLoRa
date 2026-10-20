@@ -111,7 +111,7 @@ def test_the_identity_is_made_on_the_board_by_the_library_itself():
     assert _board(runner).ensure_identity() == DEVICE_ID
     snippet = runner.commands()[0]
     assert "load_or_create_identity" in snippet
-    assert "AlLoRa.Security.identity" in snippet
+    assert "AlLoRa.Protocol.Security.identity" in snippet
 
 
 def test_a_board_that_reports_no_device_id_points_at_the_firmware():

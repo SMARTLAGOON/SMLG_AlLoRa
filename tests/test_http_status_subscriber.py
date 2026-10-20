@@ -19,7 +19,7 @@ Two properties are load-bearing and are pinned harder than the payload:
 """
 import json
 
-from AlLoRa.Subscribers.HTTP_Status_Subscriber import HTTP_Status_Subscriber
+from AlLoRa.Management.HTTP_Status_Subscriber import HTTP_Status_Subscriber
 
 SITE_URL = "https://control.example/api/hub/status"
 TOKEN = "bench-token"

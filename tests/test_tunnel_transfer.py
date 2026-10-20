@@ -16,9 +16,9 @@ import json
 import threading
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.Connectors.Tunnel_connector import Tunnel_connector
-from AlLoRa.Adapters.Adapter import Adapter
-from AlLoRa.Links.Loopback_link import Loopback_link
+from AlLoRa.Connectors.Split.Tunnel_connector import Tunnel_connector
+from AlLoRa.Connectors.Split.Adapter import Adapter
+from AlLoRa.Connectors.Split.Loopback_link import Loopback_link
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 from AlLoRa.Digital_Endpoint import Digital_Endpoint

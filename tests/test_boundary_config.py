@@ -27,11 +27,11 @@ import os
 import pytest
 
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
-from AlLoRa.DataSinks.HTTP_DataSink import HTTP_DataSink
-from AlLoRa.DataSinks.MQTT_DataSink import MQTT_DataSink
-from AlLoRa.DataSources.Disk_DataSource import Disk_DataSource
-from AlLoRa.DataSources.MQTT_DataSource import MQTT_DataSource
-from AlLoRa.DataSources.Serial_DataSource import Serial_DataSource
+from AlLoRa.Data.Sinks.HTTP_DataSink import HTTP_DataSink
+from AlLoRa.Data.Sinks.MQTT_DataSink import MQTT_DataSink
+from AlLoRa.Data.Sources.Disk_DataSource import Disk_DataSource
+from AlLoRa.Data.Sources.MQTT_DataSource import MQTT_DataSource
+from AlLoRa.Data.Sources.Serial_DataSource import Serial_DataSource
 from AlLoRa.Nodes.Edge import Edge
 from AlLoRa.Nodes.Hub import Hub
 
