@@ -1,7 +1,7 @@
 import gc
 from math import ceil
 from AlLoRa.utils.debug_utils import print
-from AlLoRa.utils.os_utils import os
+from AlLoRa.utils.os_utils import os, make_dir
 from AlLoRa.utils.time_utils import current_time_ms as time
 
 # try:
@@ -11,6 +11,12 @@ from AlLoRa.utils.time_utils import current_time_ms as time
 #     from time import time
 #     import os
 gc.enable()
+
+
+def _make_folder(path, what):
+    error = make_dir(path)
+    if error is not None:
+        print("Error creating {} folder: ".format(what), error)
 
 class OnDemandFileWriter:
     def __init__(self, filename):
@@ -148,15 +154,10 @@ class AlLoRa_File:
             # None on a v2 link, whose METADATA carries no byte count at all.
             self.total_len = total_len
             self.path = path
-            # Check if Temp folder exists
-            try:
-                os.mkdir(self.path)
-            except Exception as e:
-                print("Error creating base folder: ", e)
-            try:
-                os.mkdir("{}/Temp".format(self.path))
-            except Exception as e:
-                print("Error creating Temp folder: ", e)
+            # Every reception after the first finds both folders there, so that one error is
+            # the normal case and says nothing. Any other failure is still printed.
+            _make_folder(self.path, "base")
+            _make_folder("{}/Temp".format(self.path), "Temp")
             self.temp_file_path = "{}/Temp/{}.tmp".format(self.path, name)
             self.file_writer = OnDemandFileWriter(self.temp_file_path)
             self.received_chunks = 0

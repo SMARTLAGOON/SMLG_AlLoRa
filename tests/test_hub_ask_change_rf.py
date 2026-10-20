@@ -255,6 +255,29 @@ def test_an_edge_that_heard_the_command_and_declined_is_reported_as_a_refusal(tm
         "a peer that answers the connection poll heard the command and declined it"
 
 
+def test_the_refusal_line_names_the_edge_the_way_every_other_hub_line_does(tmp_path, capsys):
+    # Seen on the bench, 2026-10-20: "Endpoint 68 answered a poll after refusing the command",
+    # where every other line said `src (44dad5ed)`. A session number is not a name anybody
+    # gave the node, and it is the one line an operator has to match to a board.
+    hub, endpoint, source = _hub(tmp_path)
+    hub.debug = True
+
+    def _declines_control_but_is_alive(packet):
+        if packet.get_command() == Packet_v3.CTRL:
+            return None
+        reply = hub.new_packet()
+        reply.set_ok()
+        return reply
+
+    hub.send_request = _declines_control_but_is_alive
+    capsys.readouterr()
+    hub.ask_change_rf(endpoint, NEW_CONFIG)
+
+    shown = capsys.readouterr().out
+    line = next(l for l in shown.splitlines() if "refusing the command" in l)
+    assert "{} ({})".format(endpoint.get_name(), endpoint.get_label()) in line, line
+
+
 def test_a_queued_artifact_is_pending_and_not_a_success(tmp_path):
     # The other direction of the same defect. On the signed route all this Hub can observe is
     # that a file was handed over, and the Edge reaches its verdict afterwards, alone, with the

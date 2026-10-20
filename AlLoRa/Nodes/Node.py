@@ -18,7 +18,7 @@ from AlLoRa.Pacing import Pacing
 from AlLoRa.utils.time_utils import get_time, current_time_ms as time, sleep, \
     ticks_add, ticks_diff
 from AlLoRa.utils.debug_utils import print
-from AlLoRa.utils.os_utils import os
+from AlLoRa.utils.os_utils import os, make_dir
 from AlLoRa.utils.file_utils import commit_file, resolve_config_file
 from AlLoRa.utils.json_utils import json
 
@@ -773,11 +773,9 @@ class Node:
         # temp file under it, and a node with no injected sink gets the disk default.
         if self._drive_ready:
             return
-        try:
-            os.mkdir(self.result_path)
-        except Exception as e:
-            if self.debug:
-                print("Error creating result path: {}".format(e))
+        error = make_dir(self.result_path)
+        if error is not None and self.debug:
+            print("Error creating result path: {}".format(error))
         if self.data_sink is None:
             from AlLoRa.DataSinks.Disk_DataSink import Disk_DataSink
             self.data_sink = Disk_DataSink(self.result_path)

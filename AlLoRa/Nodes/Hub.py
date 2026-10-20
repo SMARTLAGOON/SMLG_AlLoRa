@@ -1216,13 +1216,14 @@ class Hub(Node):
         """
         if self._answers_poll(digital_endpoint):
             if self.debug:
-                print("Endpoint {} answered a poll after refusing the command: it declined "
+                print("Node {} ({}) answered a poll after refusing the command: it declined "
                       "rather than went missing (check its signed provisioning)".format(
-                          digital_endpoint.session_id))
+                          digital_endpoint.get_name(), digital_endpoint.get_label()))
             return self.REFUSED
         if self.debug:
-            print("Endpoint {} answered neither the command nor a poll: report the link, "
-                  "not a refusal".format(digital_endpoint.session_id))
+            print("Node {} ({}) answered neither the command nor a poll: report the link, "
+                  "not a refusal".format(digital_endpoint.get_name(),
+                                         digital_endpoint.get_label()))
         return self.UNREACHABLE
 
     def _answers_poll(self, digital_endpoint):
