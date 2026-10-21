@@ -198,8 +198,8 @@ def test_reconverges_on_old_when_the_new_config_is_unreachable(tmp_path):
     edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn,
                                            reclaim_timeout=2, probe_swap_after=1,
                                            probe_give_up_after=12)
-    edge.datasource = _Uplink_source(edge.get_chunk_size(), "up.bin",
-                                     bytes((i * 3) % 256 for i in range(300)))
+    edge.data_source = _Uplink_source(edge.get_chunk_size(), "up.bin",
+                                      bytes((i * 3) % 256 for i in range(300)))
 
     hub.queue_downlink(endpoint, _rf_config_file({"sf": 9, "trial": 1}, hub),
                        mirror_config={"sf": 9, "trial": 1})
@@ -234,7 +234,7 @@ def test_reconverges_when_the_new_config_uplink_is_one_way_broken(tmp_path):
                                            reclaim_timeout=2, data_sink=hub_sink,
                                            probe_swap_after=1, probe_give_up_after=20)
     up = bytes((i * 5) % 256 for i in range(300))
-    edge.datasource = _Uplink_source(edge.get_chunk_size(), "up.bin", up)
+    edge.data_source = _Uplink_source(edge.get_chunk_size(), "up.bin", up)
 
     hub.queue_downlink(endpoint, _rf_config_file({"sf": 9, "trial": 1}, hub),
                        mirror_config={"sf": 9, "trial": 1})
@@ -267,7 +267,7 @@ def test_new_config_commits_on_both_ends_when_it_works(tmp_path):
                                            reclaim_timeout=2, data_sink=hub_sink,
                                            probe_swap_after=2, probe_give_up_after=20)
     up = bytes((i * 9) % 256 for i in range(400))
-    edge.datasource = _Uplink_source(edge.get_chunk_size(), "up.bin", up)
+    edge.data_source = _Uplink_source(edge.get_chunk_size(), "up.bin", up)
 
     # A long trial window: the working config must NOT self-restore before it commits.
     hub.queue_downlink(endpoint, _rf_config_file({"sf": 9, "trial": 30}, hub),
@@ -298,7 +298,7 @@ def test_the_hub_follows_the_edge_in_the_same_visit_the_change_lands(tmp_path):
     edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn,
                                            reclaim_timeout=2, data_sink=hub_sink)
     up = bytes((i * 7) % 256 for i in range(300))
-    edge.datasource = _Uplink_source(edge.get_chunk_size(), "up.bin", up)
+    edge.data_source = _Uplink_source(edge.get_chunk_size(), "up.bin", up)
     hub.queue_downlink(endpoint, _rf_config_file({"sf": 9, "trial": 30}, hub),
                        mirror_config={"sf": 9, "trial": 30})
 
@@ -362,7 +362,7 @@ def test_a_file_pulled_on_the_old_config_does_not_commit_the_new_one(tmp_path):
     hub_sink = Capture_sink()
     edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn,
                                            reclaim_timeout=2, data_sink=hub_sink)
-    edge.datasource = _Uplink_source(edge.get_chunk_size(), "up.bin", bytes(300))
+    edge.data_source = _Uplink_source(edge.get_chunk_size(), "up.bin", bytes(300))
     hub.queue_downlink(endpoint, _rf_config_file({"sf": 9, "trial": 30}, hub),
                        mirror_config={"sf": 9, "trial": 30})
     sid = endpoint.session_id
@@ -568,7 +568,7 @@ def test_an_in_band_retune_commits_on_both_ends_when_the_new_config_works(tmp_pa
                                         reclaim_timeout=2, data_sink=hub_sink,
                                         probe_swap_after=2, probe_give_up_after=20)
     up = bytes((i * 9) % 256 for i in range(400))
-    edge.datasource = _Uplink_source(edge.get_chunk_size(), "up.bin", up)
+    edge.data_source = _Uplink_source(edge.get_chunk_size(), "up.bin", up)
 
     server = threading.Thread(target=edge.serve, kwargs={"timeout": 30},
                               name="edge-serve", daemon=True)
@@ -601,8 +601,8 @@ def test_an_in_band_retune_reconverges_on_old_when_the_new_config_is_a_dead_link
     edge, hub, endpoint = _in_band_pair(tmp_path, edge_conn, hub_conn,
                                         reclaim_timeout=2, probe_swap_after=1,
                                         probe_give_up_after=12)
-    edge.datasource = _Uplink_source(edge.get_chunk_size(), "up.bin",
-                                     bytes((i * 3) % 256 for i in range(300)))
+    edge.data_source = _Uplink_source(edge.get_chunk_size(), "up.bin",
+                                      bytes((i * 3) % 256 for i in range(300)))
 
     server = threading.Thread(target=edge.serve, kwargs={"timeout": 30},
                               name="edge-serve", daemon=True)

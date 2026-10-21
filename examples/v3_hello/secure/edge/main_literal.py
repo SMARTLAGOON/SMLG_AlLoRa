@@ -27,9 +27,9 @@ def halt(reason, interval=10):
 connector = SX127x_connector()
 
 # The Edge serves the files in this folder; empty means nothing to send yet.
-datasource = Disk_DataSource(queue_path="Outbox")
+data_source = Disk_DataSource(queue_path="Outbox")
 
-edge = Edge(connector, config_file="AlLoRa.json", datasource=datasource)
+edge = Edge(connector, config_file="AlLoRa.json", data_source=data_source)
 print("EDGE ready | MAC:", edge.MAC, "| mode:", edge.security_mode, "| session:", edge.session_id)
 
 # This file is the secure setup: an identity, and no control root.
@@ -41,7 +41,7 @@ if edge.control_root is not None:
 
 # Register this on the Hub. It stays the same across reboots while identity_file is set.
 print("EDGE device_id (register this on the Hub):", edge.device_id.hex())
-print("EDGE serving from:", datasource.queue_path)
+print("EDGE serving from:", data_source.queue_path)
 
 # Acts on commands from the Hub that completed the handshake, after acknowledging them. For
 # signed commands, see ../../control.

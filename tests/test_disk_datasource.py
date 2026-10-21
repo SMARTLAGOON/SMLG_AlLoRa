@@ -24,7 +24,7 @@ def _queue(tmp_path, name="outbox", **kwargs):
     return ds
 
 
-def _make_edge(tmp_path, datasource=None):
+def _make_edge(tmp_path, **node_kwargs):
     config_path = str(tmp_path / "edge.json")
     config = {
         "name": "queued",
@@ -42,7 +42,7 @@ def _make_edge(tmp_path, datasource=None):
     with open(config_path, "w") as f:
         json.dump(config, f)
     conn, _ = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
-    return Edge(conn, config_file=config_path, datasource=datasource)
+    return Edge(conn, config_file=config_path, **node_kwargs)
 
 
 # -- the queue on its own -------------------------------------------------------------------
@@ -242,7 +242,7 @@ def test_the_disk_queue_vouches_that_it_survives_a_restart(tmp_path):
 def test_the_serve_loop_borrows_the_head_without_dequeuing_it(tmp_path):
     ds = _queue(tmp_path)
     ds.enqueue("a.bin", b"aaa")
-    edge = _make_edge(tmp_path, datasource=ds)
+    edge = _make_edge(tmp_path, data_source=ds)
 
     edge._pump_datasource()
     assert edge.file.get_name() == "a.bin"
@@ -252,7 +252,7 @@ def test_the_serve_loop_borrows_the_head_without_dequeuing_it(tmp_path):
 def test_a_transfer_that_never_completed_leaves_the_file_queued(tmp_path):
     ds = _queue(tmp_path)
     ds.enqueue("a.bin", b"aaa")
-    edge = _make_edge(tmp_path, datasource=ds)
+    edge = _make_edge(tmp_path, data_source=ds)
     edge._pump_datasource()
 
     edge._retire_file(False)        # timed out, link died, node rebooted
@@ -266,7 +266,7 @@ def test_a_transfer_that_never_completed_leaves_the_file_queued(tmp_path):
 def test_only_the_peers_confirmation_drops_the_file(tmp_path):
     ds = _queue(tmp_path)
     ds.enqueue("a.bin", b"aaa")
-    edge = _make_edge(tmp_path, datasource=ds)
+    edge = _make_edge(tmp_path, data_source=ds)
     edge._pump_datasource()
 
     edge._retire_file(True)
@@ -279,7 +279,7 @@ def test_a_file_installed_by_hand_is_not_the_queues_business(tmp_path):
     # or an example that mixes the two would silently eat a queued reading per send.
     ds = _queue(tmp_path)
     ds.enqueue("queued.bin", b"aaa")
-    edge = _make_edge(tmp_path, datasource=ds)
+    edge = _make_edge(tmp_path, data_source=ds)
 
     edge.set_file(AlLoRa_File(name="own.bin", content=bytearray(b"mine"), chunk_size=8))
     edge._retire_file(True)
@@ -291,7 +291,7 @@ def test_the_queue_is_drained_in_order_across_rounds(tmp_path):
     ds = _queue(tmp_path)
     ds.enqueue("001.bin", b"a")
     ds.enqueue("002.bin", b"b")
-    edge = _make_edge(tmp_path, datasource=ds)
+    edge = _make_edge(tmp_path, data_source=ds)
 
     edge._pump_datasource()
     assert edge.file.get_name() == "001.bin"
@@ -433,3 +433,23 @@ def test_a_repeat_of_an_archived_name_replaces_the_copy(tmp_path):
     with open(str(tmp_path / "outbox-sent" / "a.bin"), "rb") as f:
         assert f.read() == b"second"
     assert ds._archive_bytes == 6
+
+
+# -- the keyword's old spelling ---------------------------------------------------------------
+
+
+def test_the_old_datasource_keyword_still_builds_the_edge(tmp_path):
+    # A main.py staged before the rename still sits on boards; it must keep serving.
+    ds = _queue(tmp_path)
+    edge = _make_edge(tmp_path, datasource=ds)
+    assert edge.data_source is ds
+    assert edge.datasource is ds
+    other = _queue(tmp_path, "other")
+    edge.datasource = other
+    assert edge.data_source is other
+
+
+def test_both_spellings_at_once_are_refused(tmp_path):
+    import pytest
+    with pytest.raises(ValueError, match="data_source"):
+        _make_edge(tmp_path, data_source=_queue(tmp_path), datasource=_queue(tmp_path, "b"))

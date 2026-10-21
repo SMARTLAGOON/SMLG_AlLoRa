@@ -61,9 +61,10 @@ class Node:
                  max_sleep_time=3,
                  successful_interactions_required=5,
                  data_sink=None,
-                 datasource=None,
+                 data_source=None,
                  control_actuator=None,
-                 home_role="source"):
+                 home_role="source",
+                 datasource=None):
         # None means "whichever config file this board has": the current name, or the
         # historical one still sitting on boards in the field. A caller that names a file gets
         # that file, and every write goes back to whichever name was read.
@@ -191,10 +192,14 @@ class Node:
         self._publish_frame_size()
         self.file = None
 
-        # The serve side's input boundary, the mirror of data_sink: with a datasource
+        # The serve side's input boundary, the mirror of data_sink: with a data_source
         # attached, the serve loop pumps it (non-blocking) and installs its next pending
         # file whenever the node is idle. Without one, files arrive via set_file as ever.
-        self.datasource = datasource
+        # `datasource` is the older spelling, used by 3.0 programs up to its release and still
+        # read, as the config key is.
+        if data_source is not None and datasource is not None:
+            raise ValueError("data_source and datasource are the same argument; pass data_source")
+        self.data_source = data_source if data_source is not None else datasource
         self._datasource_ready = False
         # Whether the file currently installed came from that boundary, which decides
         # whether finishing with it is also the datasource's business. A file handed in
@@ -791,6 +796,15 @@ class Node:
     def NEXT_ACTION_TIME_SLEEP(self, value):
         self.pacing.sleep = value
 
+    # The older spelling, kept for programs already on boards; data_source is the name.
+    @property
+    def datasource(self):
+        return self.data_source
+
+    @datasource.setter
+    def datasource(self, value):
+        self.data_source = value
+
     # =====================================================================================
     # Serve side. The responder loop: hold a file, answer each request for it.
     # =====================================================================================
@@ -890,16 +904,16 @@ class Node:
         # erase it before a single chunk of it reached the air. Serving from the head is
         # also how the same node already serves a downlink it was delegated, so both
         # directions retire a queued file on the same evidence: the peer confirmed it.
-        if self.datasource is None:
+        if self.data_source is None:
             return
         if not self._datasource_ready:
-            self.datasource.prepare()
+            self.data_source.prepare()
             self._datasource_ready = True
-        self.datasource.check()
-        if self.file is None and self.datasource.has_pending():
-            file = self.datasource.peek_file()
+        self.data_source.check()
+        if self.file is None and self.data_source.has_pending():
+            file = self.data_source.peek_file()
             self._serve_from_boundary(file)
-            if self.datasource.is_durable():
+            if self.data_source.is_durable():
                 # The queue vouches that this name is still the same bytes, so a transfer
                 # the reboot interrupted can be continued rather than started over: the
                 # collector drives, and it asks for its own missing indexes. Installing the
@@ -925,8 +939,8 @@ class Node:
         """
         if self._file_from_datasource:
             self._file_from_datasource = False
-            if delivered and self.datasource is not None:
-                self.datasource.confirm_file()
+            if delivered and self.data_source is not None:
+                self.data_source.confirm_file()
         self.file = None
 
     def establish_connection(self, try_for=None):

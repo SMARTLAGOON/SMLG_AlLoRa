@@ -145,16 +145,16 @@ def flash(board, fleet, result, firmware, label, allow_identity_loss=False,
 
 
 def refuse_an_older_library(board, result):
-    """Stop before writing anything to a board whose firmware predates the program we push.
+    """Stop before writing the program to a board whose firmware predates it.
 
-    The library is frozen into the firmware, and the generic program imports the 3.0 folders.
-    On an older build it would stop at boot with an ImportError, after every step reported ok.
+    The library is frozen into the firmware, and the generic program needs the 3.0.0 release of
+    it. On an older build it would stop at boot, after every step reported ok.
     """
     if not board.has_current_library():
         raise BoardError(
-            "the firmware on {} carries no AlLoRa 3.0 library (it is older, or has none), so "
-            "the program this wizard installs would stop at boot. Flash the 3.0 firmware build "
-            "first; nothing has been written to this board.".format(board.port))
+            "the firmware on {} carries an AlLoRa older than 3.0.0, or none, so the program "
+            "this wizard installs would stop at boot. Flash a firmware build of 3.0.0 or later; "
+            "the program has not been written to this board.".format(board.port))
     result.step("library", "3.0, the program will boot on it")
 
 

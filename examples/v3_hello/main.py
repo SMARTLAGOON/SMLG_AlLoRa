@@ -344,10 +344,10 @@ def build_node(config, config_file, connector):
     if node_type == "edge":
         from AlLoRa.Nodes.Edge import Edge
         # By default the Edge serves the files in its outbox folder; empty means nothing to send.
-        datasource = build_datasource(source_block(config, config_file) or {"kind": "disk"},
-                                      key_name=source_key(config),
-                                      queue_path=config.get("queue_path", "Outbox"),
-                                      reserved=("queue_path",))
+        data_source = build_datasource(source_block(config, config_file) or {"kind": "disk"},
+                                       key_name=source_key(config),
+                                       queue_path=config.get("queue_path", "Outbox"),
+                                       reserved=("queue_path",))
 
         sink_block = config.get("data_sink", None)
         if sink_block and config.get("control_root_file", None):
@@ -359,7 +359,7 @@ def build_node(config, config_file, connector):
                 "have it. Remove the data_sink block, or remove control_root_file if this node "
                 "is not meant to answer to a control root.")
 
-        return Edge(connector, config_file=config_file, datasource=datasource,
+        return Edge(connector, config_file=config_file, data_source=data_source,
                     data_sink=build_data_sink(sink_block) if sink_block else None)
 
     if node_type == "hub":
@@ -408,7 +408,7 @@ def main():
             # Register this on the Hub. It stays the same across reboots while identity_file is set.
             print("EDGE device_id (register this on the Hub):", node.device_id.hex())
         # An MQTT source has no folder to name, so say what it is rather than reach for one.
-        print("EDGE serving from:", getattr(node.datasource, "queue_path", node.datasource))
+        print("EDGE serving from:", getattr(node.data_source, "queue_path", node.data_source))
         print("control:", wire_control(node))
         node.run()
         return

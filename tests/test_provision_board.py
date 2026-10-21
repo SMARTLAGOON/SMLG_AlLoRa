@@ -104,12 +104,51 @@ def test_a_busy_port_is_reported_as_a_busy_port(monkeypatch):
 
 # --- the library the firmware carries ----------------------------------------------------
 
-def test_the_layout_probe_names_a_module_the_library_really_has():
-    """Moved without the probe, the check would refuse every board, current ones included."""
-    import importlib
+def test_this_library_passes_its_own_probe():
+    """Run against the library in this tree, the probe must say current, or every board fails."""
+    import contextlib
+    import io
     from tools.allora_provision.board import _LAYOUT_SNIPPET
-    module = _LAYOUT_SNIPPET.split("\n")[0].split()[1]
-    importlib.import_module(module)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        exec(_LAYOUT_SNIPPET, {})
+    assert _board(FakeRunner(default=(0, out.getvalue(), ""))).has_current_library() is True
+
+
+def test_the_probe_refuses_the_library_as_built_before_data_source(tmp_path):
+    """d768b21 has the 3.0 folders, but its Edge takes no data_source=, which the program passes."""
+    import os
+    import subprocess
+    import sys
+    from tools.allora_provision.board import _LAYOUT_SNIPPET
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    archive = subprocess.run(["git", "-C", root, "archive", "d768b21", "AlLoRa"],
+                             capture_output=True)
+    if archive.returncode != 0:
+        pytest.skip("this checkout does not hold d768b21")
+    subprocess.run(["tar", "-x", "-C", str(tmp_path)], input=archive.stdout, check=True)
+    # The old tree goes first on the path, so the probe cannot reach the live library instead.
+    first = "import sys\nsys.path.insert(0, {!r})\n".format(str(tmp_path))
+    probe = subprocess.run([sys.executable, "-I", "-c", first + _LAYOUT_SNIPPET],
+                           capture_output=True, text=True)
+    runner = FakeRunner(default=(probe.returncode, probe.stdout, probe.stderr))
+    assert _board(runner).has_current_library() is False
+
+
+def test_a_board_built_before_the_version_constant_does_not_have_the_current_library():
+    """Builds up to the 3.0.0 release lack __version__, and their Edge takes no data_source=."""
+    runner = FakeRunner(default=(1, "", "ImportError: can't import name __version__"))
+    assert _board(runner).has_current_library() is False
+
+
+def test_a_board_on_an_older_major_version_does_not_have_the_current_library():
+    runner = FakeRunner(default=(0, "ALLORA_VERSION:2.9.0\n", ""))
+    assert _board(runner).has_current_library() is False
+
+
+def test_a_patch_release_counts_as_current():
+    runner = FakeRunner(default=(0, "ALLORA_VERSION:3.0.1\n", ""))
+    assert _board(runner).has_current_library() is True
 
 
 def test_a_board_whose_import_fails_does_not_have_the_current_library():

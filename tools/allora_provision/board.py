@@ -65,12 +65,14 @@ _IDENTITY_SNIPPET = (
 )
 
 
-# Imports a module that exists only in the 3.0 layout. The library is frozen into the firmware,
-# so this is the question "will the program we are about to push boot on this build".
+# Asks the library its version. The library is frozen into the firmware, so this is the question
+# "will the program we are about to push boot on this build". Builds made before the 3.0.0
+# release carry no version, and their Edge takes no data_source=, which the program passes.
 _LAYOUT_SNIPPET = (
-    "import AlLoRa.Data.Sources.Disk_DataSource\n"
-    "print('ALLORA_LAYOUT:3')\n"
+    "from AlLoRa import __version__\n"
+    "print('ALLORA_VERSION:' + __version__)\n"
 )
+_OLDEST_LIBRARY = (3, 0, 0)
 
 
 class BoardError(RuntimeError):
@@ -308,7 +310,7 @@ class Board:
             "only reaches the board through a fresh build.".format(self.port))
 
     def has_current_library(self, timeout=60):
-        """Whether the AlLoRa this board carries has the 3.0 folders the pushed program imports."""
+        """Whether the AlLoRa this board carries is at least the release the pushed program needs."""
         try:
             out = self.exec(_LAYOUT_SNIPPET, timeout=timeout)
         except BoardError as e:
@@ -317,7 +319,14 @@ class Board:
             if "ImportError" in str(e):
                 return False
             raise
-        return "ALLORA_LAYOUT:3" in out
+        for line in out.splitlines():
+            if line.strip().startswith("ALLORA_VERSION:"):
+                parts = line.strip()[len("ALLORA_VERSION:"):].split(".")
+                try:
+                    return tuple(int(p) for p in parts) >= _OLDEST_LIBRARY
+                except ValueError:
+                    return False
+        return False
 
     # --- flashing -----------------------------------------------------------------------
 

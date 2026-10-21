@@ -140,7 +140,7 @@ file sent down has somewhere to land.
 
    - `connector`: the [Connector](#connectors-links-and-adapters) this node reaches LoRa through.
    - `config_file`: the node's [`AlLoRa.json`](#-the-config-file).
-   - `datasource` (optional): where the files to send come from. Without one, you hand files over
+   - `data_source` (optional): where the files to send come from. Without one, you hand files over
      yourself with `set_file`.
    - `data_sink` (optional): where a file the Hub sends ends up.
    - `control_actuator` (optional): what carries out a verified command. See [Control](#control).
@@ -152,7 +152,7 @@ file sent down has somewhere to land.
 
 ```python
 edge = Edge(connector=connector, config_file="AlLoRa.json",
-            datasource=Disk_DataSource(queue_path="Outbox"))
+            data_source=Disk_DataSource(queue_path="Outbox"))
 edge.run()
 ```
 
@@ -908,7 +908,7 @@ destination of the request, and as we said before, they have priority.
 
 A year-old `main.py` needs two edits: `Source` becomes `Edge`, and both `Requester` and `Gateway`
 become `Hub`. Pass the constructor arguments **by keyword**, since the order changed, and drop
-`NEXT_ACTION_TIME_SLEEP`: the v3 nodes refuse it (the timing adapts by itself now, see
-[Pacing](#core-pieces)). To run old code unchanged, use the `v2.0.0` tag.
+`NEXT_ACTION_TIME_SLEEP`: the node constructors no longer take it (the timing adapts by itself
+now, see [Pacing](#core-pieces)). To run old code unchanged, use the `v2.0.0` tag.
 
 </details>

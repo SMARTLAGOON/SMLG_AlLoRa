@@ -1,6 +1,6 @@
 """A boundary is named in the config, the way a radio is.
 
-`Node` has taken `datasource=` and `data_sink=` since v3 began, and until now no `.json` in the
+`Node` has taken a source and a `data_sink=` since v3 began, and until now no `.json` in the
 repository named either one. So a deployment wanting its received files on a broker instead of a
 card had to fork the program, which is why `MQTT_DataSink` sat built and tested from July to
 September with no example: not a decision, just no way to select it without writing Python.
@@ -104,8 +104,8 @@ def test_naming_the_disk_sink_explicitly_is_the_same_as_not_naming_it(tmp_path, 
 
 def test_an_edge_with_no_source_block_still_serves_from_its_outbox(tmp_path, monkeypatch):
     node = _build(tmp_path, monkeypatch, _config("edge", queue_path="Queue"))
-    assert isinstance(node.datasource, Disk_DataSource)
-    assert node.datasource.queue_path == "Queue"
+    assert isinstance(node.data_source, Disk_DataSource)
+    assert node.data_source.queue_path == "Queue"
 
 
 def test_naming_the_disk_source_explicitly_still_uses_the_top_level_queue_path(
@@ -114,8 +114,8 @@ def test_naming_the_disk_source_explicitly_still_uses_the_top_level_queue_path(
     the existing key says where it reads, so there is never a second place to look."""
     node = _build(tmp_path, monkeypatch,
                   _config("edge", queue_path="Queue", data_source={"kind": "disk"}))
-    assert isinstance(node.datasource, Disk_DataSource)
-    assert node.datasource.queue_path == "Queue"
+    assert isinstance(node.data_source, Disk_DataSource)
+    assert node.data_source.queue_path == "Queue"
 
 
 def test_an_edge_can_be_fed_over_a_cable_by_naming_it(tmp_path, monkeypatch):
@@ -125,9 +125,9 @@ def test_an_edge_can_be_fed_over_a_cable_by_naming_it(tmp_path, monkeypatch):
     node = _build(tmp_path, monkeypatch,
                   _config("edge", queue_path="/sd/Outbox",
                           data_source={"kind": "serial", "baudrate": 9600, "tx": 43, "rx": 44}))
-    assert isinstance(node.datasource, Serial_DataSource)
-    assert node.datasource.baudrate == 9600
-    assert (node.datasource.tx, node.datasource.rx) == (43, 44)
+    assert isinstance(node.data_source, Serial_DataSource)
+    assert node.data_source.baudrate == 9600
+    assert (node.data_source.tx, node.data_source.rx) == (43, 44)
 
 
 def test_a_serial_source_reads_the_same_outbox_key_as_a_disk_one(tmp_path, monkeypatch):
@@ -135,8 +135,8 @@ def test_a_serial_source_reads_the_same_outbox_key_as_a_disk_one(tmp_path, monke
     the one place the outbox folder is written."""
     node = _build(tmp_path, monkeypatch,
                   _config("edge", queue_path="/sd/Outbox", data_source={"kind": "serial"}))
-    assert node.datasource.queue_path == "/sd/Outbox"
-    assert isinstance(node.datasource, Disk_DataSource)   # order and durability come with it
+    assert node.data_source.queue_path == "/sd/Outbox"
+    assert isinstance(node.data_source, Disk_DataSource)   # order and durability come with it
 
 
 def test_a_mistyped_serial_key_stops_the_boot(tmp_path, monkeypatch):
@@ -153,7 +153,7 @@ def test_the_source_key_is_spelled_like_the_sink_key(tmp_path, monkeypatch):
     node = _build(tmp_path, monkeypatch,
                   _config("edge", queue_path="/sd/Outbox",
                           data_source={"kind": "serial", "baudrate": 9600}))
-    assert isinstance(node.datasource, Serial_DataSource)
+    assert isinstance(node.data_source, Serial_DataSource)
 
 
 def test_the_old_spelling_still_names_the_source(tmp_path, monkeypatch):
@@ -162,7 +162,7 @@ def test_the_old_spelling_still_names_the_source(tmp_path, monkeypatch):
     node = _build(tmp_path, monkeypatch,
                   _config("edge", queue_path="/sd/Outbox",
                           datasource={"kind": "serial", "baudrate": 9600}))
-    assert isinstance(node.datasource, Serial_DataSource)
+    assert isinstance(node.data_source, Serial_DataSource)
 
 
 def test_a_mistake_in_the_old_spelling_is_reported_under_the_name_the_file_uses(
@@ -266,9 +266,9 @@ def test_keys_left_out_of_a_block_keep_the_classs_own_defaults(tmp_path, monkeyp
 def test_an_edge_can_serve_from_a_broker_instead_of_a_folder(tmp_path, monkeypatch):
     node = _build(tmp_path, monkeypatch,
                   _config("edge", data_source={"kind": "mqtt", "topics": ["sensors/#"]}))
-    assert isinstance(node.datasource, MQTT_DataSource)
+    assert isinstance(node.data_source, MQTT_DataSource)
     # JSON has no tuples and the source keeps one.
-    assert node.datasource.topics == ("sensors/#",)
+    assert node.data_source.topics == ("sensors/#",)
 
 
 # --- a mistake stops the boot ------------------------------------------------------------

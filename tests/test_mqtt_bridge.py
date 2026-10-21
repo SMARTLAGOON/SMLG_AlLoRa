@@ -86,14 +86,14 @@ def test_edge_serves_a_broker_message_to_the_hub(tmp_path):
     # Uplink half: a PUBLISH on the edge-side broker becomes the next file the Edge
     # serves; it lands in the Hub's sink envelope-named, payload byte-exact. The Edge
     # prepares its datasource itself (first serve round), so the deployment loop is
-    # just Edge(datasource=...).serve().
+    # just Edge(data_source=...).serve().
     edge_client = Fake_client()
     datasource = MQTT_DataSource(topics=("sensors/#",),
                                  client=edge_client)
     hub_sink = Capture_sink()
     edge, hub, endpoint = _make_pair(
         tmp_path,
-        edge_kwargs={"datasource": datasource},
+        edge_kwargs={"data_source": datasource},
         hub_kwargs={"data_sink": hub_sink},
     )
     edge_client.pending.append((b"sensors/greenhouse/temp", b"21.5"))
@@ -160,8 +160,8 @@ def test_bidirectional_mqtt_round_trip_with_loop_guards(tmp_path):
     edge, hub, endpoint = _make_pair(
         tmp_path,
         edge_kwargs={
-            "datasource": MQTT_DataSource(topics=("#",),
-                                          client=edge_client, loop_guard=edge_guard),
+            "data_source": MQTT_DataSource(topics=("#",),
+                                           client=edge_client, loop_guard=edge_guard),
             "data_sink": MQTT_DataSink(client=edge_client, loop_guard=edge_guard),
         },
         hub_kwargs={

@@ -56,7 +56,7 @@ def _make_edge(tmp_path, datasource=None, chunk_size=243):
     with open(config_path, "w") as f:
         json.dump(config, f)
     conn, _ = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
-    return Edge(conn, config_file=config_path, datasource=datasource)
+    return Edge(conn, config_file=config_path, data_source=datasource)
 
 
 def _all_chunks(f):

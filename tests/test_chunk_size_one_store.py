@@ -63,7 +63,7 @@ def _write_config(path, security_mode="open", chunk_size=CONFIGURED):
 def _edge(tmp_path, name="edge.json", datasource=None, **config):
     path = _write_config(str(tmp_path / name), **config)
     conn, _ = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
-    return Edge(conn, config_file=path, datasource=datasource)
+    return Edge(conn, config_file=path, data_source=datasource)
 
 
 def _disk_queue(tmp_path, name="Outbox"):

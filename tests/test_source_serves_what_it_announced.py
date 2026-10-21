@@ -53,7 +53,7 @@ def _make_source(tmp_path, datasource=None):
     config_path = str(tmp_path / "edge.json")
     _write_config(config_path)
     conn, _ = Loopback_connector.create_pair(SOURCE_MAC, COLLECTOR_MAC)
-    return Edge(conn, config_file=config_path, datasource=datasource)
+    return Edge(conn, config_file=config_path, data_source=datasource)
 
 
 def _file(name, payload):
@@ -144,7 +144,7 @@ def test_a_ram_queue_restarts_the_transfer_after_a_restart(tmp_path):
     # The base queue lived in RAM and lost the file, so whatever it hands back now is a
     # different file wearing the position: announce it and let the collector start over.
     source = _make_source(tmp_path, datasource=DataSource())
-    source.datasource.add_to_queue(_file("hello.bin", PAYLOAD))
+    source.data_source.add_to_queue(_file("hello.bin", PAYLOAD))
 
     source._pump_datasource()
     reply, _ = source.response(_chunk_request(2))

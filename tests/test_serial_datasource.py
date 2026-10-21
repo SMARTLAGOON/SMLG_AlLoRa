@@ -538,7 +538,7 @@ def _make_edge(tmp_path, datasource):
     with open(config_path, "w") as f:
         json.dump(config, f)
     conn, _ = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
-    return Edge(conn, config_file=config_path, datasource=datasource)
+    return Edge(conn, config_file=config_path, data_source=datasource)
 
 
 def test_the_edge_serves_what_came_down_the_cable(tmp_path):

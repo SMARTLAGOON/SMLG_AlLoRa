@@ -47,8 +47,8 @@ class FakeWire:
             return 0, "", ""
         if "ALLORA_PROBE" in joined:
             return 0, "ALLORA_PROBE\n", ""
-        if "ALLORA_LAYOUT" in joined:
-            return 0, "ALLORA_LAYOUT:3\n", ""
+        if "ALLORA_VERSION" in joined:
+            return 0, "ALLORA_VERSION:3.0.0\n", ""
         if "load_or_create_identity" in joined:
             return 0, "DEVID:{}\n".format(self.identities[port]), ""
         if "fs" in argv:

@@ -128,15 +128,15 @@ def test_the_wizard_writes_the_radio_it_was_asked_for_into_the_config():
 def test_an_edge_config_builds_an_edge_serving_from_the_folder_it_names(tmp_path, monkeypatch):
     node = _build(tmp_path, monkeypatch, _config("edge", queue_path="Queue"))
     assert isinstance(node, Edge)
-    assert isinstance(node.datasource, Disk_DataSource)
-    assert node.datasource.queue_path == "Queue"
+    assert isinstance(node.data_source, Disk_DataSource)
+    assert node.data_source.queue_path == "Queue"
 
 
 def test_an_edge_with_no_queue_path_falls_back_to_internal_flash(tmp_path, monkeypatch):
     config = _config("edge")
     del config["queue_path"]
     node = _build(tmp_path, monkeypatch, config)
-    assert node.datasource.queue_path == "Outbox"
+    assert node.data_source.queue_path == "Outbox"
 
 
 def test_a_hub_config_builds_a_hub(tmp_path, monkeypatch):
@@ -299,8 +299,8 @@ def test_the_literal_example_builds_the_same_node_as_the_dispatch(tmp_path, monk
     generic.wire_control(dispatched)
 
     assert type(literal) is type(dispatched)
-    assert type(literal.datasource) is type(dispatched.datasource)
-    assert literal.datasource.queue_path == dispatched.datasource.queue_path
+    assert type(literal.data_source) is type(dispatched.data_source)
+    assert literal.data_source.queue_path == dispatched.data_source.queue_path
     assert literal.config_file == dispatched.config_file
     assert literal.security_mode == dispatched.security_mode
     assert type(literal.control_actuator) is type(dispatched.control_actuator)

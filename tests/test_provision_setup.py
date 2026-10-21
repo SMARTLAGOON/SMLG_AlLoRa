@@ -62,8 +62,8 @@ class FakeWire:
             return 0, "", ""
         if "ALLORA_PROBE" in joined:
             return 0, "ALLORA_PROBE\n", ""
-        if "ALLORA_LAYOUT" in joined:
-            return 0, "ALLORA_LAYOUT:3\n", ""
+        if "ALLORA_VERSION" in joined:
+            return 0, "ALLORA_VERSION:3.0.0\n", ""
         if "network" in joined:
             return 0, "MAC:{}\n".format(
                 "unknown" if port in self.unreadable else MACS[port]), ""
@@ -637,7 +637,7 @@ class _OldLibraryWire(FakeWire):
         self.old_port = old_port
 
     def run(self, argv, timeout=120, capture=True):
-        if self.old_port in argv and "ALLORA_LAYOUT" in " ".join(argv):
+        if self.old_port in argv and "ALLORA_VERSION" in " ".join(argv):
             self.calls.append(list(argv))
             return 1, "", "ImportError: no module named 'AlLoRa.Data'"
         return FakeWire.run(self, argv, timeout=timeout, capture=capture)
