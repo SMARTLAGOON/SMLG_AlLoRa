@@ -11,8 +11,8 @@ and ships even to boards with nothing soldered to them.
 **Secure mode is enabled in this target:** `mpconfigboard.h` sets `MICROPY_PY_CRYPTOLIB_CTR`
 (native AES-CTR — renamed from `MICROPY_PY_UCRYPTOLIB_CTR` in MicroPython v1.21; we define both)
 and `manifest.py` does `require("hmac")` (the security layer needs `hmac`, which isn't a
-built-in). Without a working CTR mode, `detect_aead()` returns None and a secure node silently
-degrades to open — which then can't parse the MAC-addressed handshake at all.
+built-in). Without a working CTR mode, `detect_aead()` returns None and a secure node stops at
+startup with an error that names the cause.
 
 **Runtime:** the device's own `AlLoRa.json` selects the connector, through `connector.driver` — here `SX127x_connector`,
 which drives the `PyLora_SX127x_extensions` chip driver frozen above.

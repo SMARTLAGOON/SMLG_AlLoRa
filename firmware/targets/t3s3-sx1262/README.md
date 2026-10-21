@@ -62,8 +62,8 @@ radio on this board does not spend an afternoon on it.
 
 Enabled, same as the SX127x target: `mpconfigboard.h` defines `MICROPY_PY_CRYPTOLIB_CTR` (and
 the pre-1.21 `MICROPY_PY_UCRYPTOLIB_CTR`) for native AES-CTR, and `manifest.py` does
-`require("hmac")`. Without a working CTR mode a secure node degrades to open and cannot parse
-the MAC-addressed handshake at all.
+`require("hmac")`. Without a working CTR mode a secure node stops at startup with an error that
+names the cause.
 
 ## What has been proven, and what has not
 
