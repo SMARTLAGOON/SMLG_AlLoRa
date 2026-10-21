@@ -475,8 +475,12 @@ def test_a_run_that_stops_halfway_still_starts_the_boards_it_finished(tmp_path, 
 
     assert code == 1, tail
     assert [c for c in wire.calls if EDGE_PORT in c][-1][-1] == "reset"
-    assert all(c[-1] != "reset" for c in wire.calls if HUB_PORT in c), \
-        "the Hub was never provisioned, so it is not restarted into whatever it held"
+    # The run never reached the Hub, so it holds exactly what it ran before discovery read its
+    # MAC and stopped it. Left at the prompt, a fleet's running Hub would be off the air.
+    assert [c for c in wire.calls if HUB_PORT in c][-1][-1] == "reset", \
+        "a board the run never reached was left stopped"
+    # Edge 2's own phase failed partway, so it is not started into half its files.
+    assert all(c[-1] != "reset" for c in wire.calls if THIRD_PORT in c)
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
@@ -518,6 +522,50 @@ def test_a_board_with_no_build_for_its_target_keeps_what_it_runs(tmp_path, monke
     said = capsys.readouterr().out
     assert "no t3s3-sx1262 build on this machine" in said
     assert "keeps what it runs" in said
+
+
+def test_a_run_stopped_at_the_first_question_leaves_every_board_running(
+        tmp_path, monkeypatch, capsys):
+    """Found on the bench, 2026-10-21: reading each board's MAC stops its program, and a run
+    stopped at the first question left all three boards at the prompt, off the air."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT, THIRD_PORT)
+    wire = FakeWire(ports=(EDGE_PORT, HUB_PORT, THIRD_PORT))
+
+    def gone(_prompt=""):
+        raise EOFError      # `printf '' | provision.py setup`, as on the bench
+
+    out = io.StringIO()
+    code = main(["setup", "--fleet", str(tmp_path / "fleet")], runner=wire, out=out,
+                sleep=lambda _s: None, ask=gone)
+
+    assert code == 1, out.getvalue()
+    assert "Nothing was changed on any board" in out.getvalue()
+    for port in (EDGE_PORT, HUB_PORT, THIRD_PORT):
+        assert [c for c in wire.calls if port in c][-1][-1] == "reset", port
+
+
+def test_a_board_left_out_of_the_plan_is_left_running(tmp_path, monkeypatch, capsys):
+    """The full run on two of three boards: the third was only asked its MAC, and it stayed
+    at the prompt while the other two were restarted."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT, THIRD_PORT)
+    wire = FakeWire(ports=(EDGE_PORT, HUB_PORT, THIRD_PORT))
+    # posture, one Edge, the first board, its hardware, the Hub (the second board), its
+    # hardware, firmware, sf, freq, bandwidth, proceed
+    code, tail = _run(("", "", "", "", "", "", "", "", "", "", ""), tmp_path / "fleet", wire)
+
+    assert code == 0, capsys.readouterr().out + tail
+    assert [c for c in wire.calls if THIRD_PORT in c][-1][-1] == "reset"
+
+
+def test_ports_leaves_every_board_it_read_running(tmp_path, monkeypatch):
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    wire = FakeWire()
+    out = io.StringIO()
+    code = main(["ports"], runner=wire, out=out, sleep=lambda _s: None)
+
+    assert code == 0, out.getvalue()
+    for port in (EDGE_PORT, HUB_PORT):
+        assert [c for c in wire.calls if port in c][-1][-1] == "reset", port
 
 
 def test_walking_away_from_the_keyboard_is_an_answer_and_not_a_traceback(tmp_path, monkeypatch):

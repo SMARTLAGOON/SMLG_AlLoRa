@@ -164,10 +164,11 @@ block the radio loop while it runs, so keep the handshake receive window comfort
 single scalar multiplication.
 
 **Session recovery after a peer reboot.** A session lives in RAM, so an endpoint that reboots comes
-back with none, and only the authority can offer a new one. The authority now notices by itself: a
-run of silent visits re-arms the connection poll (the one request an endpoint always replies to),
-and an endpoint that stays silent through that poll has its session dropped so the next visit
-re-handshakes. Silence alone is deliberately not enough, since an endpoint with no file answers a
+back with none, and only the authority can offer a new one. The authority now notices by itself:
+a silent visit asks the connection poll (the one request an endpoint always replies to), and an
+endpoint that stays silent through that poll on the last visit of the budget has its session
+dropped so the next visit re-handshakes. A visit cut off mid-file never asked it, so it re-arms
+the poll for the next visit instead. Silence alone is deliberately not enough, since an endpoint with no file answers a
 metadata poll with nothing at all and would otherwise be re-keyed while merely idle. The budget is
 `session_recovery_after` (default 3 visits) on the Hub ctor. This matters most for the RESET control
 artifact, which reboots an endpoint on purpose: rebuild to reach it.

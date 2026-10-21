@@ -795,6 +795,8 @@ def test_secure_hub_keeps_the_session_of_an_idle_but_answering_edge(tmp_path):
 def test_secure_hub_polls_before_spending_a_session_and_drops_when_unanswered(tmp_path):
     # And the other half: nothing is on the other end at all, so the re-armed poll goes
     # unanswered too. That is the signal worth acting on, and only then is the session spent.
+    # This endpoint was never contacted, so no visit ends with the closing poll and the budget
+    # re-arms it for the next visit (the faster path, after contact, is the reboot test below).
     edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
     _, hub, endpoint, _ = _make_pair(tmp_path, edge_conn, hub_conn,
                                      session_recovery_after=2)
@@ -813,6 +815,57 @@ def test_secure_hub_polls_before_spending_a_session_and_drops_when_unanswered(tm
     hub.listen_to_endpoint(endpoint, listening_time=2, save_file=True)
     assert hub.session_store.get(SESSION_ID) is None, \
         "an unanswered connection poll must drop the session so the next visit re-handshakes"
+
+
+def test_a_visit_spent_on_a_grant_is_not_an_unanswered_poll(tmp_path):
+    # Only a poll that was asked can go unanswered. A visit before first contact that the
+    # Hub spends entirely serving a GRANT's reclaim window sends no connection poll at all, so
+    # its silence answers nothing and must not spend the session.
+    edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
+    _, hub, endpoint, _ = _make_pair(tmp_path, edge_conn, hub_conn,
+                                     session_recovery_after=1, reclaim_timeout=3)
+    hub.queue_downlink(endpoint, AlLoRa_File(name="queued.bin", content=bytearray(bytes(60)),
+                                             chunk_size=hub.get_chunk_size()))
+    endpoint.state = Digital_Endpoint.OK
+    polls = []
+    real_ask_ok = hub.ask_ok
+    hub.ask_ok = lambda packet: polls.append(packet) or real_ask_ok(packet)
+
+    hub.listen_to_endpoint(endpoint, listening_time=2, save_file=True)
+
+    assert polls == [], "the visit sent a poll after all, so it does not test this"
+    assert hub.session_store.get(SESSION_ID) is not None, \
+        "a visit that asked no poll dropped the session as if one had gone unanswered"
+
+
+def test_secure_hub_drops_a_rebooted_edges_session_on_the_budget_visit(tmp_path):
+    # The case the timing is for. An Edge that rebooted lost its half of the session and
+    # cannot open the sealed poll, so every visit ends with that poll unanswered. Recovery
+    # has to land on the visit the budget is reached, not one visit later: on a field Hub a
+    # visit is minutes, and the Edge's queued file waits all of them.
+    edge_conn, hub_conn = Loopback_connector.create_pair(EDGE_MAC, HUB_MAC)
+    edge, hub, endpoint, _ = _make_pair(tmp_path, edge_conn, hub_conn,
+                                        session_recovery_after=2)
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 20},
+                              name="edge-serve", daemon=True)
+    server.start()
+
+    hub.listen_to_endpoint(endpoint, listening_time=3, save_file=True)
+    assert hub.session_store.get(SESSION_ID) is not None
+
+    edge.session_store.drop(SESSION_ID)          # the reboot: RAM-held session gone
+    hub.listen_to_endpoint(endpoint, listening_time=3, save_file=True)
+    assert hub.session_store.get(SESSION_ID) is not None, \
+        "one silent visit must not spend the session"
+    hub.listen_to_endpoint(endpoint, listening_time=3, save_file=True)
+    server.join(timeout=25)
+
+    assert hub.session_store.get(SESSION_ID) is None, \
+        "the rebooted Edge's session survived the visit that reached the budget"
+    # And the drop leaves the endpoint as one never contacted, so the next visit opens with
+    # the handshake and the connection poll, exactly as a first contact does.
+    assert endpoint.state == Digital_Endpoint.OK, \
+        "the drop left the endpoint mid-conversation instead of before first contact"
 
 
 def test_secure_edge_that_lost_its_session_reads_unreachable_not_idle(tmp_path):

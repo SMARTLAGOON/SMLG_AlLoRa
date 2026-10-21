@@ -589,6 +589,139 @@ def test_a_hub_whose_roster_copy_failed_is_left_stopped(tmp_path, monkeypatch):
     assert [a for a in wire.calls if THIRD_PORT in a][-1][-1] == "reset"
 
 
+def _three_boards_hub_first(monkeypatch, fleet_dir):
+    """The bench on 2026-10-21: the fleet's Hub enumerated first, the new board last."""
+    _ports(monkeypatch, HUB_PORT, EDGE_PORT, THIRD_PORT)
+    wire = FakeWire(ports=(THIRD_PORT, HUB_PORT, EDGE_PORT), edge_port=THIRD_PORT)
+    wire.place(HUB_PORT, "Nodes.json", _hub_roster(fleet_dir))
+    return wire
+
+
+def test_extending_offers_the_board_the_fleet_does_not_hold_as_the_new_edge(
+        tmp_path, monkeypatch, capsys):
+    """Found on the bench, 2026-10-21: the new-Edge question defaulted to the fleet's own Hub,
+    and Enter at every question turned the running Hub into an Edge and replaced its record."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    fleet_dir = tmp_path / "fleet"
+    _setup(_FIRST_RUN, fleet_dir, FakeWire())
+    wire = _three_boards_hub_first(monkeypatch, fleet_dir)
+    capsys.readouterr()
+
+    code, tail = _setup(("",) * 12, fleet_dir, wire)
+
+    assert code == 0, capsys.readouterr().out + tail
+    assert [e["mac"] for e in _plan(fleet_dir)["edges"]] == [MACS[THIRD_PORT]]
+    assert wire.on(HUB_PORT, "AlLoRa.json") is None, "the Hub was provisioned as an Edge"
+    roles = [(e["role"], e["mac"]) for e in _registry(fleet_dir)]
+    assert ("hub", MACS[HUB_PORT]) in roles
+
+
+def test_picking_the_fleet_s_hub_as_the_new_edge_asks_again(tmp_path, monkeypatch, capsys):
+    """Refused outright rather than asked "anyway?": an extend run writes its roster to the
+    fleet's Hub, so with that board taken as an Edge the Hub question could only stop the run,
+    after every answer had been given."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    fleet_dir = tmp_path / "fleet"
+    _setup(_FIRST_RUN, fleet_dir, FakeWire())
+    wire = _three_boards_hub_first(monkeypatch, fleet_dir)
+    capsys.readouterr()
+
+    # extend, posture, one Edge, the Hub's board (refused), then the third board and every
+    # default from there.
+    code, tail = _setup(("", "", "", "1", "3") + ("",) * 8, fleet_dir, wire)
+
+    said = capsys.readouterr().out
+    assert code == 0, said + tail
+    assert "stays this fleet's Hub" in said
+    assert "Use it as the new Edge anyway?" not in said
+    assert [e["mac"] for e in _plan(fleet_dir)["edges"]] == [MACS[THIRD_PORT]]
+    assert wire.on(HUB_PORT, "AlLoRa.json") is None
+
+
+def test_extending_through_a_board_that_is_not_the_fleet_s_hub_stops(
+        tmp_path, monkeypatch, capsys):
+    """It used to warn and carry on, writing the extended roster to a board that is not the
+    deployment's Hub."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    fleet_dir = tmp_path / "fleet"
+    _setup(_FIRST_RUN, fleet_dir, FakeWire())
+    wire = _three_boards_hub_first(monkeypatch, fleet_dir)
+    before = _registry(fleet_dir)
+
+    # extend, posture, one Edge, the third board, a new node, its hardware, then the Edge S
+    # board as the Hub.
+    code, tail = _setup(("", "", "", "3", "", "", "2"), fleet_dir, wire)
+
+    assert code != 0, tail
+    said = capsys.readouterr().out + tail
+    assert "not the Hub this fleet registered" in said
+    # A dead Hub is replaced inside the same fleet, not by starting a new deployment, which
+    # would throw away the control root and every node set up under it.
+    assert "provision.py hub" in said
+    assert "or start a new deployment" not in said
+    assert wire.on(THIRD_PORT, "AlLoRa.json") is None, "a board was touched"
+    assert _registry(fleet_dir) == before
+
+
+def test_extending_without_the_fleet_s_hub_plugged_in_stops_before_the_questions(
+        tmp_path, monkeypatch, capsys):
+    """Extending writes onto the fleet's Hub, so a run without it can only fail. It used to
+    fail at the Hub question, after every Edge answer had been given."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    fleet_dir = tmp_path / "fleet"
+    _setup(_FIRST_RUN, fleet_dir, FakeWire())
+
+    _ports(monkeypatch, EDGE_PORT, THIRD_PORT)
+    wire = FakeWire(ports=(THIRD_PORT, EDGE_PORT), edge_port=THIRD_PORT)
+    capsys.readouterr()
+    code, tail = _setup(("",) * 12, fleet_dir, wire)      # extend, then whatever is asked
+
+    said = capsys.readouterr().out + tail
+    assert code != 0, said
+    assert "is not plugged in" in said
+    assert "How many Edge nodes" not in said and "Which board is the new Edge?" not in said
+
+
+def test_the_default_new_edge_is_never_the_fleet_s_hub():
+    """With every board already in the fleet the default fell back to the first, the Hub, which
+    is always refused: Enter at that question looped forever."""
+    from tools.allora_provision.setup import Prompt, ask_edges
+    hub = {"port": HUB_PORT, "mac": MACS[HUB_PORT]}
+    edge = {"port": EDGE_PORT, "mac": MACS[EDGE_PORT]}
+    entries = [{"name": "S", "role": "edge", "mac": MACS[EDGE_PORT]},
+               {"name": "R", "role": "hub", "mac": MACS[HUB_PORT]}]
+    # Enter for the default board, then yes to re-provisioning the registered Edge S.
+    prompt = Prompt(read=_answers("", "y"), out=io.StringIO())
+
+    chosen, remaining = ask_edges(prompt, [hub, edge], True, entries)
+
+    assert chosen == [edge] and remaining == [hub]
+
+
+def test_a_planned_board_the_run_never_reached_is_restarted(tmp_path, monkeypatch):
+    """Reading a MAC stops the board's program. A run that fails on its Edge never reaches the
+    Hub phase, and the Hub, read at discovery and named by the plan, was left at the prompt:
+    the deployment's Hub off the air until somebody pressed RESET."""
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT)
+    fleet_dir = tmp_path / "fleet"
+    _setup(_FIRST_RUN, fleet_dir, FakeWire())
+
+    import tools.allora_provision.setup as setup_module
+    from tools.allora_provision.board import BoardError
+
+    def fails(*_a, **_k):
+        raise BoardError("the Edge phase failed")
+    monkeypatch.setattr(setup_module, "provision_edge", fails)
+    _ports(monkeypatch, EDGE_PORT, HUB_PORT, THIRD_PORT)
+    wire = FakeWire(ports=(THIRD_PORT, HUB_PORT, EDGE_PORT), edge_port=THIRD_PORT)
+    wire.place(HUB_PORT, "Nodes.json", _hub_roster(fleet_dir))
+    code, tail = _setup(_EXTEND_RUN, fleet_dir, wire)
+
+    assert code != 0, tail
+    assert [a for a in wire.calls if HUB_PORT in a][-1][-1] == "reset", \
+        "the fleet's Hub was left stopped by a run that never reached it"
+
+
 def test_a_posture_change_warns_and_guides_rather_than_refusing(tmp_path, monkeypatch, capsys):
     """Refusing would send the operator to reflash every board by hand, one at a time."""
     _ports(monkeypatch, EDGE_PORT, HUB_PORT)

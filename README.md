@@ -776,8 +776,10 @@ at every boot, which is only useful for tests.
 [`examples/v3_hello/secure`](examples/v3_hello/secure) walks through it on two boards.
 
 **After a reboot.** Sessions live in RAM, so a rebooted Edge has none. The Hub notices once the
-Edge has been silent for `session_recovery_after` visits (3 by default): it polls again, and if
-that goes unanswered too, it drops the session and handshakes from scratch on the next visit. A
+Edge has been silent for `session_recovery_after` visits (3 by default). A silent visit asks the
+connection poll, the one request an Edge always answers, and when it goes unanswered on that last
+visit too, the Hub drops the session and handshakes from scratch on the next visit. A visit cut
+off mid-file asks it on the next visit instead, so recovery takes one visit longer there. A
 few visits of data are lost; nothing has to be done by hand.
 
 **Commands.** With a [control root](#control) provisioned, the Hub signs every command and the

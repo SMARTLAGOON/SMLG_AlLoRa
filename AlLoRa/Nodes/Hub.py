@@ -1496,20 +1496,27 @@ class Hub(Node):
         # to a cut cable leave the same lines here. So a visit that brought no file says which
         # it met, in the live status and in one line a reader can grep by the node's name.
         # Mid-file is neither: an Edge serving a file answers every chunk request it hears.
+        #
+        # Returns whether this visit asked the connection poll here and got no answer, which
+        # the session check reads next. Only this poll counts: a visit before first contact
+        # may have been spent on a GRANT's reclaim window and asked nothing.
         if completed or digital_endpoint.state == Digital_Endpoint.PROCESS_CHUNK_STATE:
-            return
+            return False
+        asked = False
         # Before first contact every request of the visit already was the connection poll, so
         # its silence is the answer and there is nothing left to ask.
         if not self._peer_alive_this_visit \
                 and digital_endpoint.state == Digital_Endpoint.REQUEST_DATA_STATE:
             # Nothing answered all visit, so ask. The session check reads this next, and an
             # answer is exactly what it is asking for.
+            asked = True
             if self._answers_poll(digital_endpoint):
                 self._peer_alive_this_visit = True
         self._report_liveness(digital_endpoint, self.IDLE if self._peer_alive_this_visit
                               else self.UNREACHABLE)
+        return asked and not self._peer_alive_this_visit
 
-    def _session_visit_end(self, digital_endpoint):
+    def _session_visit_end(self, digital_endpoint, poll_unanswered=False):
         # Decide whether the session held for this endpoint is still usable, and tear it down
         # if it is not, so the next visit handshakes from scratch. That puts a rebooted
         # endpoint back in exactly the state of one never contacted, which the drive loop
@@ -1523,9 +1530,11 @@ class Hub(Node):
         # ECDH is the most expensive thing either end ever does.
         #
         # So a run of silence only raises the question, and the answer comes from the one
-        # request an Edge always replies to: the connection poll. Re-arm it, and let the next
-        # visit ask. Answered means the endpoint was merely idle. Silent again means it is not
-        # answering anything it can hear, which is the signal worth spending a session on.
+        # request an Edge always replies to: the connection poll. Answered means the endpoint
+        # was merely idle. Silent means it is not answering anything it can hear, which is the
+        # signal worth spending a session on. A silent visit after contact ends by asking that
+        # poll already (the liveness check does), and then its silence is the answer. A visit
+        # that did not ask it (cut off mid-file, or still before first contact) re-arms it.
         if self.security_mode != 'secure' or self.session_store is None:
             return
         sid = digital_endpoint.session_id
@@ -1536,10 +1545,14 @@ class Hub(Node):
             return          # nothing held, so nothing to tear down
         silent, polled = self._session_silent_visits.get(sid, (0, False))
         silent += 1
-        if polled:
+        if polled or (silent >= self.session_recovery_after
+                      and poll_unanswered):
             # The connection poll went unanswered too: not idle, out of step.
             self._session_silent_visits.pop(sid, None)
             self.session_store.drop(sid)
+            # Back to the state of one never contacted, as promised above. A re-armed poll
+            # already put it there; a drop on this visit's own poll has to do it here.
+            self._rearm_connection_poll(digital_endpoint)
             # Every delegation that failed while the session was dead failed for that one
             # reason, so the skip they earned is now measuring a condition that no longer
             # exists. Left in place it outlives the repair and keeps deferring the very
@@ -1552,7 +1565,7 @@ class Hub(Node):
         if silent < self.session_recovery_after:
             self._session_silent_visits[sid] = (silent, False)
             return
-        # Budget reached: ask the question rather than assume the answer.
+        # Budget reached without the poll asked: ask the question rather than assume the answer.
         self._session_silent_visits[sid] = (silent, True)
         self._rearm_connection_poll(digital_endpoint)
         if self.debug:
@@ -1621,6 +1634,13 @@ class Hub(Node):
             mirror = self._pending_mirror.pop(sid, None)
             if mirror is not None:
                 self._mirror_endpoint_config(digital_endpoint, mirror)
+                # Follow the Edge now, as v2 did on the Edge's OK, rather than at the next
+                # visit: left on the old config, the Hub spent the rest of this visit polling
+                # a radio that had already moved (about 60 s on the bench, 2026-10-21). The
+                # probe still skips this visit: what it heard before the retune proves the old
+                # config, and what is left after it can be too short to prove anything, so a
+                # miss counted there would swap the Hub off the config the Edge is trialling.
+                self.prepare_connector(digital_endpoint)
         else:
             failures = (backoff[0] if backoff else 0) + 1
             # Cap the skip so a healed Edge is retried within a bounded number of

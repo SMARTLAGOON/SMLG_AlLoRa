@@ -1147,8 +1147,9 @@ class Node:
 
     def _liveness_visit_end(self, digital_endpoint, completed):
         # Base: nothing to report. The Hub preset overrides this to say whether a visit that
-        # brought no file met an idle endpoint or an unreachable one.
-        pass
+        # brought no file met an idle endpoint or an unreachable one, and returns whether the
+        # connection poll went unanswered.
+        return False
 
     def _report_liveness(self, digital_endpoint, verdict):
         # One line a reader can grep by the node's name, and the same word in the live status.
@@ -1160,10 +1161,11 @@ class Node:
             self.status['Status'] = verdict
             self.status.notify()
 
-    def _session_visit_end(self, digital_endpoint):
+    def _session_visit_end(self, digital_endpoint, poll_unanswered=False):
         # Base: nothing to check. The Hub preset overrides this to tear down a secure session
         # its endpoint has stopped being able to use, so the next visit re-handshakes. Reads
-        # `_peer_alive_this_visit`, which is any evidence the peer answered during the visit.
+        # `_peer_alive_this_visit`, which is any evidence the peer answered during the visit,
+        # and `poll_unanswered`, what `_liveness_visit_end` returned for the same visit.
         pass
 
     def queue_control_action(self, action):
@@ -1957,11 +1959,11 @@ class Node:
 
         # Did a visit that brought no file meet an idle endpoint or a missing one? Before the
         # session check, because the poll it may send is evidence that check reads.
-        self._liveness_visit_end(digital_endpoint, probe_completed)
+        poll_unanswered = self._liveness_visit_end(digital_endpoint, probe_completed)
 
         # Also visit-scoped: is the secure session we hold for this endpoint still usable? A
         # peer that rebooted lost its half and cannot tell us, so the authority has to notice.
-        self._session_visit_end(digital_endpoint)
+        self._session_visit_end(digital_endpoint, poll_unanswered)
 
         # True only when a one_file drive completed (its file reached the sink):
         # a granted pull uses this to tell a delivered delegation from a dead one.

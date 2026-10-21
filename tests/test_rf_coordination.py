@@ -288,6 +288,98 @@ def test_new_config_commits_on_both_ends_when_it_works(tmp_path):
         "the uplink that proved the new config never reached the Hub"
 
 
+def test_the_hub_follows_the_edge_in_the_same_visit_the_change_lands(tmp_path):
+    # Found on the bench, 2026-10-21: after the Edge confirmed a signed sf7 to sf9 change, the
+    # Hub polled the rest of that visit on sf7, about 60 s of timeouts, and found the Edge only
+    # on the next visit. v2 retuned the moment the Edge said OK. So does this: the uplink the
+    # Edge serves on sf9 arrives inside the visit that delivered the change.
+    edge_conn, hub_conn = _make_gated_pair()
+    hub_sink = Capture_sink()
+    edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn,
+                                           reclaim_timeout=2, data_sink=hub_sink)
+    up = bytes((i * 7) % 256 for i in range(300))
+    edge.datasource = _Uplink_source(edge.get_chunk_size(), "up.bin", up)
+    hub.queue_downlink(endpoint, _rf_config_file({"sf": 9, "trial": 30}, hub),
+                       mirror_config={"sf": 9, "trial": 30})
+
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 14},
+                              name="edge-serve", daemon=True)
+    server.start()
+    hub.listen_to_endpoint(endpoint, listening_time=8, save_file=True)
+    server.join(timeout=16)
+    assert not server.is_alive()
+
+    assert hub.connector.get_rf_config()[1] == 9, "the Hub stayed on the old config"
+    assert ("up.bin", up) in [(n, c) for n, c, _ in hub_sink.received], \
+        "the uplink on the new config waited for the next visit"
+
+
+def test_an_idle_edge_does_not_swap_the_hub_back_in_the_visit_the_change_lands(tmp_path):
+    # The other side of following at once. What is left of the visit after the retune can be
+    # too short for any exchange, and that silence is not a trial of the new config: counted
+    # as a miss, it swapped the Hub's entry back to the old config while the Edge sat on the
+    # new one inside its trial. The probe judges the new config from the next full visit.
+    edge_conn, hub_conn = _make_gated_pair()
+    edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn, reclaim_timeout=2)
+    hub.queue_downlink(endpoint, _rf_config_file({"sf": 9, "trial": 30}, hub),
+                       mirror_config={"sf": 9, "trial": 30})
+
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 8},
+                              name="edge-serve", daemon=True)
+    server.start()
+    # Short enough that the delegation takes nearly all of it (1 or 2 s showed the swap).
+    hub.listen_to_endpoint(endpoint, listening_time=2, save_file=True)
+    server.join(timeout=10)
+    assert not server.is_alive()
+
+    assert edge.connector.get_rf_config()[1] == 9, "the change never reached the Edge"
+    assert hub.connector.get_rf_config()[1] == 9, "the Hub did not follow in the same visit"
+    assert endpoint.sf == 9, \
+        "the Hub swapped back to the old config on the silent rest of the visit"
+
+
+class _Pending_after_first_uplink:
+    """A downlink queue that opens only once the Hub holds an uplink, so a full file completes
+    on the old config inside the same visit as the reconfig, as it did on the bench."""
+
+    def __init__(self, inner, hub_sink):
+        self.inner, self.hub_sink = inner, hub_sink
+
+    def has_pending(self):
+        return bool(self.hub_sink.received) and self.inner.has_pending()
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+def test_a_file_pulled_on_the_old_config_does_not_commit_the_new_one(tmp_path):
+    # The guard on following at once. A file that completed on sf7 earlier in the visit proves
+    # sf7, not sf9: counted after the retune, it would commit sf9 on a dead link and leave the
+    # Hub there while the Edge rolls back.
+    edge_conn, hub_conn = _make_gated_pair()
+    edge_conn.set_dead_rf(sf=9)
+    hub_conn.set_dead_rf(sf=9)
+    hub_sink = Capture_sink()
+    edge, hub, endpoint, sink = _make_pair(tmp_path, edge_conn, hub_conn,
+                                           reclaim_timeout=2, data_sink=hub_sink)
+    edge.datasource = _Uplink_source(edge.get_chunk_size(), "up.bin", bytes(300))
+    hub.queue_downlink(endpoint, _rf_config_file({"sf": 9, "trial": 30}, hub),
+                       mirror_config={"sf": 9, "trial": 30})
+    sid = endpoint.session_id
+    hub._downlink[sid] = _Pending_after_first_uplink(hub._downlink[sid], hub_sink)
+
+    server = threading.Thread(target=edge.serve, kwargs={"timeout": 14},
+                              name="edge-serve", daemon=True)
+    server.start()
+    hub.listen_to_endpoint(endpoint, listening_time=8, save_file=True)
+    server.join(timeout=16)
+
+    assert [n for n, _, _ in hub_sink.received] == ["up.bin"], "the old-config file came first"
+    assert not hub.downlink_pending(endpoint), "the reconfig was delivered in the same visit"
+    assert hub.endpoint_trial_old(endpoint) is not None, \
+        "the trial settled on a file the new config never carried"
+
+
 # --- Slice H1: the Hub mirrors the endpoint config after the reconfig downlink lands -------
 
 def test_hub_mirrors_endpoint_config_after_the_reconfig_downlink_is_delivered(tmp_path):

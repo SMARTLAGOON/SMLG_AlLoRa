@@ -168,6 +168,9 @@ def cmd_ports(args, result, runner=None, sleep=None, **_):
         mac = Board(port, runner=runner).mac()
         boards.append({"port": port, "mac": mac})
         result.note("  {}  MAC {}".format(port, mac or "unknown"))
+    # Reading the MAC stopped each program, and listing the boards is no reason to leave a
+    # deployment off the air.
+    start_programs([Board(port, runner=runner) for port in answering], result)
     if not answering:
         result.note("  (none; other USB serial devices do not count and are not listed)")
     else:

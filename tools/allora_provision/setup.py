@@ -237,11 +237,27 @@ def ask_hardware(prompt, board, default=None):
 
 
 def look_for_boards(runner=None):
-    """Every board answering right now, with the MAC that says which one it is."""
+    """Every board answering right now, with the MAC that says which one it is.
+
+    Reading a MAC stops the board's program, so whoever calls this owes each board a restart:
+    `restart_the_rest` pays it for every board a plan did not take over.
+    """
     boards = []
     for port in discover_boards(runner=runner):
         boards.append({"port": port, "mac": Board(port, runner=runner).mac()})
     return boards
+
+
+def restart_the_rest(boards, owned, result, runner=None):
+    """Restart every board that was only looked at, however the command ends.
+
+    Found on the bench, 2026-10-21: a run stopped at its first question left three boards at
+    the prompt, a deployment off the air until each was reset. The boards a plan names are not
+    restarted here: `run_plan` starts the ones it finished and leaves stopped the ones it may
+    have left half written.
+    """
+    start_programs([Board(board["port"], runner=runner) for board in boards
+                    if board["mac"] is None or board["mac"] not in owned], result)
 
 
 def _label(board):
@@ -397,19 +413,66 @@ def ask_posture(prompt, known, entries, extending):
     return posture
 
 
-def ask_edges(prompt, boards, extending):
-    """How many Edges this run provisions and which boards they are, and what is left over."""
+def _registered_as(entries, mac):
+    """The newest record this fleet holds for the board with this MAC, or None."""
+    return next((e for e in reversed(entries) if mac and e.get("mac") == mac), None)
+
+
+def _registered_hub_mac(entries):
+    return next((e.get("mac") for e in reversed(entries)
+                 if e.get("role") == "hub" and e.get("mac")), None)
+
+
+def ask_edges(prompt, boards, extending, entries=()):
+    """How many Edges this run provisions and which boards they are, and what is left over.
+
+    On an extend run the boards the fleet already holds are marked, the default is one it does
+    not, and picking a registered Edge is asked twice. Found on the bench, 2026-10-21: the first
+    port was the fleet's own Hub, and Enter at every question turned it into an Edge. The Hub
+    itself is refused outright: extending writes the roster onto that board, so with it taken
+    as an Edge the Hub question could only stop the run after every answer was given.
+    """
     most = len(boards) - 1
     edges = 1 if most <= 1 else prompt.number(
         "How many Edge nodes {}?".format(
             "are you adding" if extending else "in this deployment"),
         default=1, low=1, high=most)
+    hub_mac = _registered_hub_mac(entries)
+
+    def label(board):
+        entry = _registered_as(entries, board["mac"]) if extending else None
+        if entry is None:
+            return _label(board)
+        return "{}   (this fleet's {} {})".format(
+            _label(board), "Hub" if entry.get("role") == "hub" else "Edge", entry.get("name"))
+
+    def confirmed(board):
+        entry = _registered_as(entries, board["mac"]) if extending else None
+        if entry is None:
+            return True
+        prompt.say("")
+        if board["mac"] == hub_mac:
+            prompt.bullet("{} stays this fleet's Hub {}: adding nodes writes their rows onto "
+                          "it. Pick another board.".format(board["mac"], entry.get("name")))
+            return False
+        prompt.bullet("{} is already this fleet's Edge {}, and it keeps running if you "
+                      "leave it out.".format(board["mac"], entry.get("name")))
+        return prompt.yes("Use it as the new Edge anyway?", default=False)
 
     remaining, chosen = list(boards), []
     for index in range(edges):
         question = "Which board is the {}Edge?".format("new " if extending else "") \
             if edges == 1 else "Which board is Edge {} of {}?".format(index + 1, edges)
-        board = prompt.choose(question, [(b, _label(b)) for b in remaining], default=0)
+        fresh = [i for i, b in enumerate(remaining)
+                 if not (extending and _registered_as(entries, b["mac"]))]
+        # Never the Hub: it is always refused, so Enter would ask the same question forever.
+        not_hub = [i for i, b in enumerate(remaining) if not (extending and b["mac"] == hub_mac)]
+        default = (fresh or not_hub or [0])[0]
+        while True:
+            board = prompt.choose(question, [(b, label(b)) for b in remaining],
+                                  default=default)
+            if confirmed(board):
+                break
         remaining.remove(board)
         chosen.append(board)
     return chosen, remaining
@@ -418,12 +481,13 @@ def ask_edges(prompt, boards, extending):
 def ask_hub(prompt, remaining, entries, extending):
     """Which of the boards left over is the Hub.
 
-    The Hub this fleet already registered is offered first rather than merely allowed, because
-    in an extend run picking the wrong one writes a roster onto a board that is not the
-    deployment's Hub.
+    The Hub this fleet already registered is offered first rather than merely allowed, and on
+    an extend run any other answer stops the run: extending writes the roster onto the board
+    picked here, and a board that is not the deployment's Hub is the wrong place for it. A new
+    board replacing a dead Hub has no roster to extend; the `hub` command gives it the full Hub
+    phase inside the same fleet, which is what the refusal points to.
     """
-    registered = next((e.get("mac") for e in reversed(entries)
-                       if e.get("role") == "hub" and e.get("mac")), None)
+    registered = _registered_hub_mac(entries)
     if len(remaining) == 1:
         hub = remaining[0]
         prompt.bullet("the Hub is {}, the board left over.".format(_label(hub)))
@@ -435,8 +499,14 @@ def ask_hub(prompt, remaining, entries, extending):
                                if b["mac"] == registered else ""))
              for b in known_first], default=0)
     if extending and registered and hub["mac"] != registered:
-        prompt.bullet("{} is not the Hub this fleet registered ({}). Its roster is the one "
-                      "that will be extended.".format(hub["mac"], registered))
+        old = _registered_as(entries, registered) or {}
+        raise BoardError(
+            "{} is not the Hub this fleet registered ({}). Nothing was changed. Plug the "
+            "fleet's Hub in and run `{} setup` again. If that Hub is gone and this board "
+            "replaces it, `{} hub --fleet <this fleet> --port {} --name {}` sets it up as the "
+            "Hub of the same fleet; tools/README.md, \"Replacing a dead Hub\", says which "
+            "settings to repeat and what the old Hub took with it.".format(
+                hub["mac"], registered, CLI, CLI, hub["port"], old.get("name") or "<its name>"))
     return hub
 
 
@@ -517,7 +587,7 @@ def ask_plan(prompt, boards, images, fleet_path, mode="scratch", entries=()):
     extending = mode == "extend"
 
     posture = ask_posture(prompt, known, entries, extending)
-    chosen, remaining = ask_edges(prompt, boards, extending)
+    chosen, remaining = ask_edges(prompt, boards, extending, entries)
     names = ask_names(prompt, chosen, entries, extending)
     edge_hardware = ask_each_board(
         prompt, chosen,
@@ -651,11 +721,14 @@ def run_plan(plan, boards, result, prompt=None, runner=None, sleep=None):
     # Every board whose phase finished, in order. Started at the end however the run ends: a
     # run that fails on its second Edge has a first Edge that is a finished node, and leaving
     # it at the prompt is a node doing nothing until somebody presses RESET. A board whose own
-    # phase failed is not started into whatever half of the files it holds.
-    finished = []
+    # phase failed is not started into whatever half of the files it holds. A board the run
+    # never reached was only read, at discovery, which stopped its program all the same, so it
+    # is started too: holding exactly the files it ran on, it is safe to.
+    finished, reached = [], set()
     try:
         for index, edge in enumerate(plan["edges"], start=1):
             port = ports[edge["mac"]]
+            reached.add(edge["mac"])
             stage(index, "Edge {} on {}".format(index, port))
             board = Board(port, runner=runner, sleep=sleep)
             provision_edge(board, fleet, result, name=edge["name"],
@@ -663,6 +736,7 @@ def run_plan(plan, boards, result, prompt=None, runner=None, sleep=None):
             finished.append(board)
 
         hub_port = ports[plan["hub"]["mac"]]
+        reached.add(plan["hub"]["mac"])
         hub_board = Board(hub_port, runner=runner, sleep=sleep)
         if extending:
             # The whole reason extend is its own mode. Adding a node changes one row in one
@@ -697,7 +771,9 @@ def run_plan(plan, boards, result, prompt=None, runner=None, sleep=None):
         # written it: a mixed pair needs two different board-side scripts.
         verify_pair(finished[0], hub_board, fleet, result, posture=plan["posture"])
     finally:
-        start_programs(finished, result)
+        start_programs(finished + [Board(port, runner=runner, sleep=sleep)
+                                   for mac, port in ports.items() if mac not in reached],
+                       result)
     return fleet
 
 
@@ -844,10 +920,20 @@ def run(args, result, runner=None, sleep=None, ask=None, out=None):
     Fleet(args.fleet).refuse_if_git_would_commit_keys()
 
     prompt.say("\n  Looking for boards")
-    boards = look_for_boards(runner=runner)
-    for board in boards:
+    found = look_for_boards(runner=runner)
+    owned = set()
+    try:
+        return _converse_and_run(prompt, args, result, found, owned, runner, sleep)
+    finally:
+        restart_the_rest(found, owned, result, runner=runner)
+
+
+def _converse_and_run(prompt, args, result, found, owned, runner, sleep):
+    """The questions, the plan and the run. `owned` is filled with the MACs the run takes over
+    the moment it starts, so the caller restarts every other board it looked at."""
+    for board in found:
         prompt.bullet(_label(board))
-    boards = _with_a_mac(prompt, boards)
+    boards = _with_a_mac(prompt, found)
     if len(boards) < 2:
         # Both ends are provisioned in one run because the Hub is registered against the
         # Edge's fingerprint: one board is half a deployment, and the half it is missing is
@@ -866,6 +952,14 @@ def run(args, result, runner=None, sleep=None, ask=None, out=None):
         # Asked of the folder the run will actually write, for the same reason as above.
         Fleet(fleet_path).refuse_if_git_would_commit_keys()
         entries = []
+    hub_mac = _registered_hub_mac(entries)
+    if mode == "extend" and hub_mac and all(b["mac"] != hub_mac for b in boards):
+        # Extending writes onto this board, so without it the run can only fail, and asked at
+        # the Hub question it fails after every Edge answer has been given.
+        raise BoardError(
+            "this fleet's Hub ({}) is not plugged in, and extending writes the new nodes onto "
+            "it. Nothing was changed. Plug it in and run `{} setup` again; to replace a Hub "
+            "that is gone, see tools/README.md, \"Replacing a dead Hub\".".format(hub_mac, CLI))
 
     plan = ask_plan(prompt, boards, firmware_images(), fleet_path, mode=mode, entries=entries)
     describe_plan(prompt, plan, boards)
@@ -881,6 +975,7 @@ def run(args, result, runner=None, sleep=None, ask=None, out=None):
     plan_path = plan_module.write(fleet.plan_path, plan)
     prompt.bullet("plan written to {}".format(plan_path))
 
+    owned.update(plan_module.macs(plan))
     try:
         fleet = run_plan(plan, boards, result, prompt, runner=runner, sleep=sleep)
     except BoardError:
@@ -911,6 +1006,14 @@ def apply(doc, result, runner=None, sleep=None):
     result.step("plan", "{} mode, {} edge(s), fleet {}".format(
         doc["mode"], len(doc["edges"]), doc["fleet"]))
     boards = look_for_boards(runner=runner)
-    fleet = run_plan(doc, boards, result, prompt=None, runner=runner, sleep=sleep)
+    owned = set()
+    try:
+        # Refused here when a named board is missing, before any is touched, so every board
+        # read so far is still only looked at and gets its restart.
+        plan_module.ports_for(doc, boards)
+        owned.update(plan_module.macs(doc))
+        fleet = run_plan(doc, boards, result, prompt=None, runner=runner, sleep=sleep)
+    finally:
+        restart_the_rest(boards, owned, result, runner=runner)
     result.set(plan=doc, fleet=fleet.path)
     return result

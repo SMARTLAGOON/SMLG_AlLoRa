@@ -258,8 +258,10 @@ fleet already holds nodes, because on an empty one there is nothing to extend.
 | `scratch` | provisions both ends and builds the Hub from nothing | the deployment is new; a fleet directory is never written over, so starting a second one asks for its own |
 | `extend` | provisions the new nodes and **updates the Hub's roster only** | the Hub is not reflashed, not reconfigured, and keeps its identity: adding a node changes one row in one file |
 
-Extend is adding an Edge, replacing a broken node, or swapping a Hub into a deployment that is
-already running. It is what a `setup` run into a non-empty fleet used to do by accident, which
+Extend is adding an Edge or replacing a broken one in a deployment that is already running. It
+writes onto the fleet's own Hub, so it cannot replace that Hub: a new board has no roster to
+extend; see [Replacing a dead Hub](#replacing-a-dead-hub). Extend is what a `setup` run into a
+non-empty fleet used to do by accident, which
 orphaned a record and appended a phantom the Hub then spent a listening window polling every
 cycle.
 
@@ -307,3 +309,30 @@ it cannot settle a trial into the copy being replaced between the read and the w
 *intent*), `fleet.json` (your machine, *record*), `Nodes.json` (on the Hub board, *live*, and
 mutated by the Hub itself). Each is allowed to disagree with the one before it, because each
 answers a different question.
+
+## Replacing a dead Hub
+
+Extend writes onto the fleet's own Hub, so it cannot put a new board in that Hub's place. The
+`hub` command can: it gives a board the full Hub setup inside the same fleet, so the Edges keep
+their keys and the fleet keeps its control root.
+
+```
+python3 tools/provision.py hub --fleet <the fleet> --port <new board> --name <the old Hub's name>
+```
+
+Repeat everything the old Hub was set up with: `--posture`, `--radio`, `--board`, the radio
+settings (`--sf`, `--freq`, `--bandwidth`, `--coding-rate`, `--tx-power`), `--on-site-root` if it
+had one, and `--firmware` for a blank board. Leave out `--name` and the fleet gains a second Hub
+record instead of replacing the first.
+
+Two things a dead Hub takes with it:
+
+- **The settings its Edges moved to.** The new Hub's roster is rebuilt from `fleet.json`, the
+  settings each Edge was given at setup. An Edge that accepted a retune since then is listening
+  somewhere else, and the new Hub will not find it. Re-provision that Edge with an extend run
+  under its own name.
+- **The command counter, with an on-site root.** That Hub signed commands, and its Edges accept
+  only numbers higher than the last they saw. The new board starts again from zero, so its
+  commands are refused as replays.
+
+Both are read from the code and have not been tried on boards.
