@@ -59,6 +59,8 @@ A transfer needs two nodes and something between them. The tests replace the rad
   tests can check that the current library still talks to a v2 node.
 - `delegation_drive.py` runs a downlink until it finishes, instead of for a fixed number of
   seconds, so a slow machine takes longer rather than failing.
+- `no_aes.py` takes AES away for one test, the way a missing or broken install fails, so the
+  tests can check the error a secure node gives when it has none.
 
 Some tests check things a board would only show much later:
 

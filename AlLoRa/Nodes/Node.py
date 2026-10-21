@@ -282,10 +282,15 @@ class Node:
             print("WARNING: secure mode requested but no AEAD backend, running OPEN (insecure),",
                   "because allow_insecure_fallback is set:", reason)
             return
+        # On a computer the reason names its own fix (a pip command); any board failure, a
+        # missing module or CTR not compiled in, is fixed by the AlLoRa firmware.
+        import sys
+        fix = ("Flash the AlLoRa firmware (native CTR), or set"
+               if sys.implementation.name == "micropython" else "For a test, set")
         raise RuntimeError(
-            "secure mode requires a crypto (AEAD) backend, none available: {}. Flash the AlLoRa "
-            "firmware (native CTR), or set allow_insecure_fallback for an explicit insecure run "
-            "(tests/bring-up only).".format(reason))
+            "secure mode requires a crypto (AEAD) backend, none available: {}. {} "
+            "allow_insecure_fallback for an explicit insecure run "
+            "(tests/bring-up only).".format(reason, fix))
 
     def _ensure_identity(self):
         # Load (or, on first boot, generate + persist) this node's long-term identity keypair

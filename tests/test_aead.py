@@ -16,6 +16,8 @@ import hmac
 import sys
 import types
 
+import no_aes
+import AlLoRa.Protocol.Security.AEAD as AEAD
 from AlLoRa.Protocol.Security.AEAD import (detect_aead, Ctr_hmac_aead, _self_test,
                                   _micropython_ctr, unavailable_reason, _ct_equal)
 
@@ -235,6 +237,30 @@ def test_micropython_ctr_returns_none_when_no_native_aes(monkeypatch):
     # Neither name importable (e.g. CPython, or a build without cryptolib) -> no backend.
     monkeypatch.setattr("builtins.__import__", _blocking_import({"cryptolib", "ucryptolib"}))
     assert _micropython_ctr() is None
+
+
+def test_a_computer_without_cryptography_is_told_what_to_install(monkeypatch):
+    # A secure node started on a computer with no cryptography (a checkout run without pip, or an
+    # environment where it was removed) stops with this reason: the command, not a board module.
+    no_aes.block(monkeypatch, no_aes.absent)
+    assert detect_aead() is None
+    assert "pip install cryptography" in unavailable_reason()
+
+
+def test_a_broken_cryptography_install_reports_its_own_error(monkeypatch):
+    # Installed but failing to load (a binding or OpenSSL mismatch): installing it again is not
+    # the fix, so the reason carries the real error instead of a pip command.
+    no_aes.block(monkeypatch, lambda: ImportError("libssl.so.1.1: cannot open shared object file"))
+    reason = unavailable_reason()
+    assert "libssl" in reason and "pip" not in reason
+
+
+def test_a_board_without_native_aes_is_told_about_cryptolib(monkeypatch):
+    no_aes.block(monkeypatch, lambda: ImportError("no module named 'cryptography'"))
+    no_aes.as_micropython(monkeypatch)
+    reason = unavailable_reason()
+    assert "cryptolib" in reason and "pip" not in reason
+    assert AEAD._cryptography_error is None      # a board keeps no exception on its heap
 
 
 def _blocking_import(blocked):

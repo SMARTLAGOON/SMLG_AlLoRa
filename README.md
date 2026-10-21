@@ -755,7 +755,8 @@ one-time public key, the Hub answers with a key of its own, made fresh each time
 and both work out the same session key from the two. The handshake runs once per session, never
 per frame. The curve math is pure Python, so it runs on any board. The per-frame AES on a board
 needs the AlLoRa firmware, which uses the ESP32's hardware AES; on a computer it comes from the
-`cryptography` package. A node set to `secure` with no AES available stops at startup with an error, rather than
+`cryptography` package, which pip installs with AlLoRa. A node set to `secure` with no AES
+available stops at startup with an error that says what is missing, rather than
 running unprotected without telling you. For tests only, `allow_insecure_fallback` lets it run
 `open` instead.
 

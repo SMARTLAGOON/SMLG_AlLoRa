@@ -14,6 +14,7 @@ import json
 
 import pytest
 
+import no_aes
 import AlLoRa.Protocol.Security.AEAD as AEAD
 from AlLoRa.Connectors.Loopback_connector import Loopback_connector
 from AlLoRa.Nodes.Edge import Edge
@@ -45,6 +46,29 @@ def test_secure_node_refuses_to_run_without_a_backend(tmp_path, monkeypatch):
     monkeypatch.setattr(AEAD, "detect_aead", lambda: None)   # simulate firmware with no AEAD
     with pytest.raises(Exception):
         _make_source(tmp_path)   # secure + no backend + no opt-in -> halt
+
+
+def test_a_secure_node_on_a_computer_without_aes_names_the_pip_command(tmp_path, monkeypatch):
+    # The error a student sees on a Pi has to say what to install, and must not tell them to
+    # flash firmware onto a computer.
+    no_aes.block(monkeypatch, no_aes.absent)
+    with pytest.raises(RuntimeError) as e:
+        _make_source(tmp_path)
+    assert "pip install cryptography" in str(e.value)
+    assert "flash" not in str(e.value).lower()
+
+
+def test_a_board_with_aes_but_no_ctr_is_told_to_flash_the_firmware(tmp_path, monkeypatch):
+    # Stock MicroPython has cryptolib without CTR compiled in: the module imports, the first
+    # use raises. The fix is the AlLoRa firmware, and the error has to say so.
+    def ctr_not_compiled(key, nonce, data):
+        raise ValueError("mode")
+    monkeypatch.setattr(AEAD, "_detect_ctr", lambda: ctr_not_compiled)
+    no_aes.as_micropython(monkeypatch)
+    with pytest.raises(RuntimeError) as e:
+        _make_source(tmp_path)
+    assert "CTR not compiled" in str(e.value)
+    assert "Flash the AlLoRa firmware" in str(e.value)
 
 
 def test_secure_node_runs_open_only_with_the_explicit_opt_in(tmp_path, monkeypatch):

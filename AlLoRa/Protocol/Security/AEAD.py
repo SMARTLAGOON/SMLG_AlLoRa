@@ -2,9 +2,12 @@
 
 Not GCM: this needs no GHASH module on the board, and a reused nonce does less damage. Still, never
 reuse a nonce with the same key. `open()` checks the tag first and returns None on any failure.
-Without native AES, `detect_aead()` returns None and secure mode is off.
+Without AES (a board's native module, or the cryptography package on a computer),
+`detect_aead()` returns None and a node set to secure stops at startup, naming the cause from
+`unavailable_reason()`, unless its config sets `allow_insecure_fallback` (tests and bring-up).
 """
 import hashlib
+import sys
 
 from AlLoRa.Protocol.Security.hmac_sha256 import hmac_sha256
 
@@ -76,10 +79,19 @@ def _ctr_block(nonce):
     return (bytes(nonce) + b"\x00" * 16)[:16]
 
 
+# Why cryptography did not load on a computer, from the latest attempt, so unavailable_reason()
+# names that failure. A board never has the package and never keeps the error on its heap.
+_cryptography_error = None
+
+
 def _cryptography_ctr():
+    global _cryptography_error
+    _cryptography_error = None
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    except Exception:
+    except Exception as e:
+        if sys.implementation.name != "micropython":
+            _cryptography_error = e
         return None
 
     def ctr(key, nonce, data):
@@ -146,15 +158,25 @@ def detect_aead():
 
 
 def unavailable_reason():
-    """A precise explanation of why ``detect_aead()`` returned None, for the degraded-mode log
-    line. Best-effort and only meant for the degrade path (it re-runs the cheap detection). It
-    exercises each stage of the seal/open self-test in isolation and reports the actual
-    exception, so a degrade on real hardware names its own cause on the boot log, no REPL
-    needed, which matters because the radio loop is hard to interrupt for one.
+    """A precise explanation of why ``detect_aead()`` returned None, for the startup error.
+    Best-effort and only meant for that path (it re-runs the cheap detection). It exercises each
+    stage of the seal/open self-test in isolation and reports the actual exception, so a failure
+    on real hardware names its own cause on the boot log, no REPL needed, which matters because
+    the radio loop is hard to interrupt for one. On a computer it names the fix too; on a board
+    the caller adds the firmware.
     """
     ctr = _detect_ctr()
     if ctr is None:
-        return "native AES module did not import (need 'cryptolib'; v1.21+ dropped 'ucryptolib')"
+        if sys.implementation.name == "micropython":
+            return "native AES module did not import (need 'cryptolib'; v1.21+ dropped 'ucryptolib')"
+        # On a computer the AES comes from cryptography, which pip installs with AlLoRa. Absent,
+        # it is one command; installed but broken, the error itself is what to go on.
+        e = _cryptography_error
+        if e is None:
+            return "no AES backend found"
+        if isinstance(e, ModuleNotFoundError) and e.name == "cryptography":
+            return "the cryptography package is not installed: pip install cryptography"
+        return "the cryptography package is installed but did not load: {!r}".format(e)
     # Stage 1: AES-CTR (mode 6) in isolation, a real encrypt+decrypt round-trip.
     try:
         pt = b"sixteen bytes!!!"

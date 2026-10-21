@@ -27,7 +27,8 @@ setup(
     long_description=long_description,
     # Only the library: examples/ are programs to copy onto a board, not modules to import.
     packages=find_packages(include=["AlLoRa", "AlLoRa.*"]),
-    # AES on a computer or a Pi; without it secure mode is off there (a board uses its own AES).
+    # AES on a computer or a Pi, for secure mode, the posture the tools default to (a board uses
+    # its own AES).
     install_requires=["cryptography"],
     keywords=['Python', 'Micropython', 'LoRa', 'mesh', 'IoT', 'Environmental Intelligence'],
     classifiers=[
