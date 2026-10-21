@@ -2,9 +2,7 @@
 
 Not GCM: this needs no GHASH module on the board, and a reused nonce does less damage. Still, never
 reuse a nonce with the same key. `open()` checks the tag first and returns None on any failure.
-Without AES (a board's native module, or the cryptography package on a computer),
-`detect_aead()` returns None and a node set to secure stops at startup, naming the cause from
-`unavailable_reason()`, unless its config sets `allow_insecure_fallback` (tests and bring-up).
+With no working AES, `detect_aead()` is None, a secure node stops, `unavailable_reason()` says why.
 """
 import hashlib
 import sys
@@ -190,7 +188,7 @@ def unavailable_reason():
         hmac_sha256(bytes(16), b"probe")
     except Exception as e:
         return "HMAC-SHA256 raised: {} (hashlib backend?)".format(repr(e))
-    # Stage 3: the full seal/open (catches assembly issues like a missing compare_digest).
+    # Stage 3: the full seal/open (catches a fault in how the two are put together).
     if not _self_test(Ctr_hmac_aead(ctr)):
         return "AES-CTR + HMAC both work in isolation but seal/open round-trip failed"
     return "AEAD available"
