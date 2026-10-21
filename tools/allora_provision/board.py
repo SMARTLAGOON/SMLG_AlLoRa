@@ -72,6 +72,9 @@ _LAYOUT_SNIPPET = (
     "from AlLoRa import __version__\n"
     "print('ALLORA_VERSION:' + __version__)\n"
 )
+# Raise this, and AlLoRa.__version__, whenever examples/v3_hello/main.py starts using a name an
+# older library lacks, along with the version refuse_an_older_library names in steps.py: the
+# wizard installs that program onto whatever firmware the board carries, so boards need a rebuild.
 _OLDEST_LIBRARY = (3, 0, 0)
 
 
