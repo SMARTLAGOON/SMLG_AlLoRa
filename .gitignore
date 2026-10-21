@@ -4,6 +4,10 @@
 __pycache__/
 .pytest_cache/
 .vscode/
+# What `python -m build` leaves behind; the release workflow builds its own.
+/*.egg-info/
+/build/
+/dist/
 manifest.py
 # the firmware build recipe's board manifests must be tracked
 !firmware/**/manifest.py

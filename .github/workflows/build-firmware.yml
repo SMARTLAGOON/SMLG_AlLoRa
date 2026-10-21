@@ -1,9 +1,10 @@
-# Freeze AlLoRa into per-target MicroPython firmware and attach the .bin files to the release.
+# Freeze AlLoRa into per-target MicroPython firmware, one .bin per target as a workflow artifact.
+# release.yml calls this and attaches the .bin files to the release once PyPI has the package.
 # Runs in Espressif's ESP-IDF container, so no toolchain is installed by hand — a target is one
 # matrix row + one folder under firmware/targets/ (see firmware/README.md).
 #
-# TESTING NOW: workflow_dispatch + release only fire when this file is on the DEFAULT branch,
-# so while it lives on v3 we validate via `push` to v3 (a push runs the workflow from the pushed
+# workflow_dispatch only offers a manual run when this file is on the DEFAULT branch, so while it
+# lives on v3 we validate via `push` to v3 (a push runs the workflow from the pushed
 # branch). The version pins below are best-effort (a MicroPython release supports specific
 # ESP-IDF versions; bump the two together). The original hand-build used ESP-IDF v5.1.2 + the
 # network_common.c WIFI_AUTH patch; this defaults to a newer pair with the patch off. If a build
@@ -12,17 +13,18 @@
 name: Build AlLoRa firmware
 
 on:
-  # Pre-merge validation on v3 (dispatch/release need the default branch). Scoped to the
+  # Pre-merge validation on v3 (dispatch needs the default branch). Scoped to the
   # firmware recipe + this workflow so protocol commits don't each kick off a ~15-min build.
-  # Remove this push block once v3 merges to main; dispatch + release take over there.
+  # Remove this push block once v3 merges to main; dispatch + release.yml take over there.
   push:
     branches: [v3]
     paths:
       - "firmware/**"
       - ".github/workflows/build-firmware.yml"
   workflow_dispatch:          # manual — available once this is on the default branch
-  release:
-    types: [published]        # fires from the default branch
+  # A published release runs this through release.yml, after the version check and the tests,
+  # so a release never carries firmware from a tree whose suite is red.
+  workflow_call:
 
 jobs:
   build:
@@ -151,9 +153,3 @@ jobs:
         with:
           name: AlLoRa-${{ matrix.target }}-firmware
           path: AlLoRa-${{ matrix.target }}-firmware.bin
-
-      - name: Attach to the release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: AlLoRa-${{ matrix.target }}-firmware.bin

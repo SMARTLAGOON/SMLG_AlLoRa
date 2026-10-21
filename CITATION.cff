@@ -1,7 +1,7 @@
 # This CITATION.cff file was generated with cffinit.
 # Visit https://bit.ly/cffinit to generate yours today!
 
-cff-version: 2.0.0
+cff-version: 1.2.0
 title: AlLoRa
 message: >-
   Modular, mesh and multi-device Advanced LoRa Content
@@ -30,6 +30,5 @@ keywords:
   - LPWAN
   - Micropython
 license: GPL-3.0
-commit: 731e9f3ddb2e221fee87fd7370a5a0db121f3558
-version: 2.0.0
-date-released: '2025-02-05'
+version: 3.0.0
+date-released: '2026-10-23'

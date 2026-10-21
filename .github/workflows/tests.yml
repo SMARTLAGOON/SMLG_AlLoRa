@@ -12,6 +12,7 @@ on:
     branches: [main, v3]
   pull_request:
     branches: [main, v3]
+  workflow_call:              # release.yml runs the suite before it publishes anything
 
 jobs:
   pytest:

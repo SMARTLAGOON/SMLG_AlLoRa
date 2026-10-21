@@ -1,0 +1,104 @@
+# Publishing a GitHub release is the whole release: this checks the tag names the library's own
+# version, builds the package, runs the host suite, builds the firmware, publishes the package to
+# PyPI, and only then attaches the firmware and the package to the release, so AlLoRa can be
+# `pip install`ed on a Raspberry Pi or a computer. It writes no commits and makes no tags: the
+# release's tag is the one a person chose, on a commit already pushed.
+#
+# PyPI takes the upload through trusted publishing, with no token in the repo. It has to be set
+# up once on pypi.org (the AlLoRa project's Publishing settings): owner SMARTLAGOON, repository
+# SMLG_AlLoRa, workflow release.yml, environment pypi.
+#
+# A release runs the copy of this file at the tagged commit.
+#
+# Nothing is attached until PyPI has the package, so a failed job leaves the release with no
+# files rather than half of them, and "Re-run failed jobs" finishes it. The package is built once,
+# in the first job, and that same build is what PyPI receives. The two third-party actions that
+# hold write access are pinned to a commit, with the release it is noted beside it.
+
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: The tag, the library and the citation name one version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -eu
+          LIB=$(python -c "import AlLoRa; print(AlLoRa.__version__)")
+          CFF=$(grep -m1 '^version:' CITATION.cff | awk '{print $2}' | tr -d "'\"")
+          echo "tag $TAG, AlLoRa.__version__ $LIB, CITATION.cff $CFF"
+          if [ "$TAG" != "v$LIB" ] || [ "$CFF" != "$LIB" ]; then
+            echo "::error::the release tag must be v<AlLoRa.__version__>, and CITATION.cff must say the same version"
+            exit 1
+          fi
+
+      - name: The package builds, and names the same version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -eu
+          python -m pip install build twine
+          python -m build
+          twine check --strict dist/*
+          ls dist/allora-"${TAG#v}"-py3-none-any.whl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: dist/
+
+  tests:
+    needs: version
+    uses: ./.github/workflows/tests.yml
+
+  firmware:
+    needs: tests
+    uses: ./.github/workflows/build-firmware.yml
+
+  pypi:
+    needs: firmware
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/AlLoRa
+    permissions:
+      id-token: write         # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
+
+  attach:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write         # attaches the files to the release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets/
+          merge-multiple: true
+
+      - name: Attach the firmware and the package to the release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
+        with:
+          files: assets/*
