@@ -173,6 +173,11 @@ metadata poll with nothing at all and would otherwise be re-keyed while merely i
 `session_recovery_after` (default 3 visits) on the Hub ctor. This matters most for the RESET control
 artifact, which reboots an endpoint on purpose: rebuild to reach it.
 
+**The library says its version, and the Edge takes `data_source=`.** This freeze is the first to
+carry `AlLoRa.__version__` (3.0.0). The program the wizard installs passes `data_source=` to the
+Edge, which a build from before this does not take, so the wizard asks the board for its version
+and refuses one that has none. Every board needs a `.bin` built from this freeze or later.
+
 **The bridge no longer pauses between back-to-back verbs.** The adapter loop's 100 ms pause now
 fires only when there was nothing to serve, or when the link raised. Any tunnel timing measured
 against a `.bin` built before this is not comparable: the old build spent 100 ms per transport
