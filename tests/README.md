@@ -73,7 +73,7 @@ Some tests check things a board would only show much later:
 
 ## When they run
 
-GitHub runs the suite on every push and pull request to `main` and `v3`
+GitHub runs the suite on every push and pull request to `main`
 (`.github/workflows/tests.yml`), and again before a release is published
 (`.github/workflows/release.yml`).
 
