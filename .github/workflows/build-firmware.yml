@@ -3,25 +3,23 @@
 # Runs in Espressif's ESP-IDF container, so no toolchain is installed by hand — a target is one
 # matrix row + one folder under firmware/targets/ (see firmware/README.md).
 #
-# workflow_dispatch only offers a manual run when this file is on the DEFAULT branch, so while it
-# lives on v3 we validate via `push` to v3 (a push runs the workflow from the pushed
-# branch). The version pins below are best-effort (a MicroPython release supports specific
-# ESP-IDF versions; bump the two together). The original hand-build used ESP-IDF v5.1.2 + the
+# A manual run (workflow_dispatch) builds both targets from the branch picked. The version pins
+# below are best-effort (a MicroPython release supports specific ESP-IDF versions; bump the two
+# together). The original hand-build used ESP-IDF v5.1.2 + the
 # network_common.c WIFI_AUTH patch; this defaults to a newer pair with the patch off. If a build
 # fails on the IDF version or the WIFI_AUTH assert, adjust the matrix row (flip apply_wifi_auth_patch).
 
 name: Build AlLoRa firmware
 
 on:
-  # Pre-merge validation on v3 (dispatch needs the default branch). Scoped to the
-  # firmware recipe + this workflow so protocol commits don't each kick off a ~15-min build.
-  # Remove this push block once v3 merges to main; dispatch + release.yml take over there.
+  # A push to main that touches the firmware recipe or this workflow builds both targets, so a
+  # broken recipe shows before release day. Scoped so protocol commits don't each start a build.
   push:
-    branches: [v3]
+    branches: [main]
     paths:
       - "firmware/**"
       - ".github/workflows/build-firmware.yml"
-  workflow_dispatch:          # manual — available once this is on the default branch
+  workflow_dispatch:          # manual
   # A published release runs this through release.yml, after the version check and the tests,
   # so a release never carries firmware from a tree whose suite is red.
   workflow_call:

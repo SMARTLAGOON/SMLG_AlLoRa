@@ -16,7 +16,7 @@ authors:
 identifiers:
   - type: doi
     value: 10.5281/zenodo.7741245
-repository-code: 'https://github.com/SMARTLAGOON/AlLoRa'
+repository-code: 'https://github.com/SMARTLAGOON/SMLG_AlLoRa'
 abstract: >-
   A modular, low-power, long-range communication protocol
   based on LoRa that allows monitoring of remote natural
