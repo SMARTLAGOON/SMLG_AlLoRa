@@ -1,6 +1,27 @@
 from AlLoRa.Data.Sinks.DataSink import DataSink
 
 
+class PostFailed(OSError):
+    """The post got no 2xx. Carries the `status` (None when the reply had none) and `refused`.
+
+    Refused is any other 4xx, which usually means the site will not take this file (an unknown
+    node, a file too large), so sending it again unchanged gets the same answer, while other
+    files may still go through. Usually, not always: a wrong url answers 404 (or 405, 410) to
+    every file alike, and a status alone cannot tell the two apart. Not refused means nothing
+    would go through just now: a 5xx, no status, 408 timeout, 429 slow down, or 401, 403 and
+    407, which are about the caller's credentials rather than the file. A caller with a queue
+    skips a refused file and stops on the other kind.
+
+    An OSError, so code that already catches the sink's failure as one keeps working.
+    """
+
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+        self.refused = (status is not None and 400 <= status < 500
+                        and status not in (401, 403, 407, 408, 429))
+
+
 class HTTP_DataSink(DataSink):
     """POST each received file to a web service instead of saving it to disk.
 
@@ -110,10 +131,11 @@ class HTTP_DataSink(DataSink):
                 # file was not delivered": it discards the temp, rewinds the endpoint and pulls
                 # the file again next round. Swallowing the failure here would turn a site
                 # outage into silent data loss, which is the one thing a sink must never do.
-                raise OSError(
+                raise PostFailed(
                     "posting {} to {} returned {}".format(
                         headers.get("X-AlLoRa-Filename", "a file"), self.url,
-                        status if status is not None else "no status"))
+                        status if status is not None else "no status"),
+                    status)
         finally:
             # urequests holds the socket until the response is closed, and a Hub that leaked one
             # per file would run out within a day of ordinary collection.

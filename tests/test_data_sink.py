@@ -407,6 +407,31 @@ def test_http_sink_raises_and_keeps_the_temp_when_the_site_refuses(tmp_path):
     assert os.path.exists(temp), "a refused post threw the reassembly temp away"
 
 
+def test_http_sink_says_whether_the_site_refused_the_file_or_could_not_take_it(tmp_path):
+    """A caller holding a queue needs the difference. A 404 for a replaced board is about that
+    one file, and every other file should still go out; a 503 is about the site, and the next
+    request would fail the same way. So the error carries the status and that verdict."""
+    from AlLoRa.Data.Sinks.HTTP_DataSink import PostFailed
+
+    verdicts = {}
+    for status in (400, 401, 403, 404, 407, 408, 409, 413, 429, 500, 503, None):
+        f = _received_file(str(tmp_path / "recv{}".format(status)), "x.bin", b"y", chunk_size=4)
+        sink = HTTP_DataSink(url=SITE_URL, client=_FakeHTTPClient(status_code=status))
+        try:
+            sink.consume(f, None)
+        except PostFailed as e:
+            assert isinstance(e, OSError), "callers that catch OSError must keep working"
+            assert e.status == status
+            verdicts[status] = e.refused
+        else:
+            raise AssertionError("a {} must raise".format(status))
+
+    # 401, 403 and 407 are about the caller's credentials, so every other file gets the same
+    # answer: not this file's fault, and not worth skipping past.
+    assert verdicts == {400: True, 401: False, 403: False, 404: True, 407: False, 408: False,
+                        409: True, 413: True, 429: False, 500: False, 503: False, None: False}
+
+
 def test_http_sink_cleans_up_the_temp_only_after_a_confirmed_post(tmp_path):
     payload = b"posted then discarded"
     f = _received_file(str(tmp_path / "recv"), "x.bin", payload, chunk_size=4)
